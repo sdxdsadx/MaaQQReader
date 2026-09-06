@@ -1,0 +1,8 @@
+LICENCE
+README.md
+pyproject.toml
+setup.py
+src/mumu_python_api.egg-info/PKG-INFO
+src/mumu_python_api.egg-info/SOURCES.txt
+src/mumu_python_api.egg-info/dependency_links.txt
+src/mumu_python_api.egg-info/top_level.txt

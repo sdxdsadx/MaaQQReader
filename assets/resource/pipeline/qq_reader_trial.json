@@ -1,0 +1,2394 @@
+{
+    "LaunchQQReader": {
+        "action": "StartApp",
+        "package": "com.qq.reader",
+        "post_delay": 4000,
+        "next": [
+            "LaunchDismissIKnow",
+            "LaunchDismissCancel",
+            "LaunchDismissLater",
+            "LaunchDismissSkip",
+            "LaunchReady"
+        ],
+        "on_error": "LaunchUnknown"
+    },
+    "LaunchDismissIKnow": {
+        "recognition": "OCR",
+        "expected": "我知道了",
+        "action": "Click",
+        "post_delay": 1200,
+        "max_hit": 3,
+        "next": "LaunchCheckAgain"
+    },
+    "LaunchDismissCancel": {
+        "recognition": "OCR",
+        "expected": "^(取消|暂不开启)$",
+        "action": "Click",
+        "post_delay": 1000,
+        "max_hit": 3,
+        "next": "LaunchCheckAgain"
+    },
+    "LaunchDismissLater": {
+        "recognition": "OCR",
+        "expected": "^(稍后再说|以后再说|下次再说|暂不升级)$",
+        "action": "Click",
+        "post_delay": 1000,
+        "max_hit": 3,
+        "next": "LaunchCheckAgain"
+    },
+    "LaunchDismissSkip": {
+        "recognition": "OCR",
+        "expected": "^跳过.*$",
+        "roi": [
+            500,
+            0,
+            220,
+            260
+        ],
+        "action": "Click",
+        "post_delay": 1200,
+        "max_hit": 3,
+        "next": "LaunchCheckAgain"
+    },
+    "LaunchCheckAgain": {
+        "post_delay": 800,
+        "next": [
+            "LaunchDismissIKnow",
+            "LaunchDismissCancel",
+            "LaunchDismissLater",
+            "LaunchDismissSkip",
+            "LaunchReady"
+        ],
+        "on_error": "LaunchUnknown"
+    },
+    "LaunchReady": {
+        "recognition": "OCR",
+        "expected": "书架|书城|发现|我的|今日已获赠币|看小视频领好礼|设置|自动阅读",
+        "focus": "QQ 阅读已启动，已处理已知开屏弹窗"
+    },
+    "LaunchUnknown": {
+        "focus": "QQ 阅读已启动；当前页面未发现可安全关闭的已知弹窗"
+    },
+    "SmokeTest": {
+        "action": "StartApp",
+        "package": "com.qq.reader",
+        "post_delay": 3000,
+        "next": [
+            "SmokeRewardPage",
+            "SmokeShelfPage",
+            "SmokeReaderPage",
+            "SmokeGamePage",
+            "SmokeUnknownPage"
+        ]
+    },
+    "SmokeRewardPage": {
+        "recognition": "OCR",
+        "expected": "今日已获赠币|看小视频领好礼|玩游戏领赠币",
+        "focus": "识别到奖励页"
+    },
+    "SmokeShelfPage": {
+        "recognition": "OCR",
+        "expected": "书架|本周未开始阅读|签到领赠币",
+        "focus": "识别到书架页"
+    },
+    "SmokeReaderPage": {
+        "recognition": "OCR",
+        "expected": "设置|自动阅读|听书",
+        "focus": "识别到阅读器"
+    },
+    "SmokeGamePage": {
+        "recognition": "OCR",
+        "expected": "游戏大厅|最近在玩|热门游戏",
+        "focus": "识别到游戏大厅"
+    },
+    "SmokeUnknownPage": {
+        "focus": "未识别页面，但 ADB 与启动动作正常"
+    },
+    "ReadingTrial": {
+        "next": "DailyReadingFlow"
+    },
+    "DirectReadingFlow": {
+        "action": "StartApp",
+        "package": "com.qq.reader",
+        "post_delay": 2500,
+        "next": [
+            "ReadingFindBookTerminal",
+            "ReadingFindBookByTitleTerminal",
+            "ReadingOpenFirstShelfBookTerminal"
+        ]
+    },
+    "ReadingFindBookTerminal": {
+        "recognition": "TemplateMatch",
+        "template": "reading_target_uchiha_cover.png",
+        "threshold": 0.82,
+        "roi": [0, 220, 720, 960],
+        "order_by": "Vertical",
+        "index": 0,
+        "action": "Click",
+        "post_delay": 1200,
+        "focus": "通过封面模板识别并点击目标书；正文页由 GUI 使用 ADB 接管"
+    },
+    "ReadingFindBookByTitleTerminal": {
+        "recognition": "OCR",
+        "expected": "宇智波.*扉间人柱力|宇智波：从扉间人柱力开始",
+        "roi": [90, 180, 620, 900],
+        "order_by": "Vertical",
+        "index": 0,
+        "action": "Click",
+        "post_delay": 1200,
+        "focus": "通过书名 OCR 点击目标书；正文页由 GUI 使用 ADB 接管"
+    },
+    "ReadingOpenFirstShelfBookTerminal": {
+        "recognition": "OCR",
+        "expected": "^书架$",
+        "roi": [0, 0, 180, 120],
+        "action": "Click",
+        "target": [75, 480],
+        "post_delay": 1200,
+        "focus": "目标书暂不可见时点击当前书架第一本；正文页由 GUI 使用 ADB 接管"
+    },
+    "DailyReadingFlow": {
+        "action": "StartApp",
+        "package": "com.qq.reader",
+        "post_delay": 2500,
+        "next": "ReadingFindBook"
+    },
+    "ReadingDismissDownloadedUpdate": {
+        "recognition": "OCR",
+        "expected": "^取消$",
+        "roi": [
+            430,
+            1160,
+            250,
+            120
+        ],
+        "action": "Click",
+        "post_delay": 1200,
+        "max_hit": 2,
+        "next": [
+            "ReadingFindBook",
+            "ReadingBackUntilShelf"
+        ]
+    },
+    "ReadingLeaveRewardPage": {
+        "recognition": "OCR",
+        "expected": "今日已获赠币|看小视频领好礼|玩游戏领赠币",
+        "action": "Click",
+        "target": [
+            55,
+            84
+        ],
+        "post_delay": 1500,
+        "next": "ReadingFindBook"
+    },
+    "ReadingBackUntilShelf": {
+        "action": "ClickKey",
+        "key": 4,
+        "post_delay": 1200,
+        "max_hit": 8,
+        "next": [
+            "ReadingDismissDownloadedUpdate",
+            "ReadingFindBook",
+            "ReadingBackUntilShelf"
+        ]
+    },
+    "ReadingOpenFirstShelfBook": {
+        "recognition": "OCR",
+        "expected": "^书架$",
+        "roi": [
+            0,
+            0,
+            180,
+            120
+        ],
+        "action": "Click",
+        "target": [
+            290,
+            180
+        ],
+        "post_delay": 2500,
+        "focus": "固定目标书不在书架时，打开当前书架第一本可见书籍完成阅读测试",
+        "next": "ReadingOpenMenu"
+    },
+    "ReadingFindBook": {
+        "recognition": "TemplateMatch",
+        "template": "reading_target_uchiha_cover.png",
+        "threshold": 0.82,
+        "roi": [
+            0,
+            220,
+            720,
+            960
+        ],
+        "order_by": "Vertical",
+        "index": 0,
+        "action": "Click",
+        "post_delay": 2500,
+        "next": "ReadingOpenMenu",
+        "focus": "已通过目标书封面模板识别并点击《宇智波：从扉间人柱力开始》"
+    },
+    "ReadingDismissProgressSync": {
+        "recognition": "OCR",
+        "expected": "^取消$",
+        "roi": [
+            360,
+            1120,
+            360,
+            160
+        ],
+        "action": "Click",
+        "post_delay": 800,
+        "next": "ReadingOpenMenu"
+    },
+    "ReadingOpenMenu": {
+        "action": "Click",
+        "target": [
+            360,
+            640
+        ],
+        "post_delay": 800,
+        "next": "ReadingClickSettingsFixed"
+    },
+    "ReadingClickSettingsFixed": {
+        "action": "Click",
+        "target": [
+            450,
+            1214
+        ],
+        "post_delay": 700,
+        "next": "ReadingClickAuto"
+    },
+    "ReadingClickSettings": {
+        "recognition": "OCR",
+        "expected": "设置",
+        "action": "Click",
+        "post_delay": 700,
+        "next": "ReadingClickAuto"
+    },
+    "ReadingClickAuto": {
+        "action": "Click",
+        "target": [
+            360,
+            1126
+        ],
+        "post_delay": 1000,
+        "next": "ReadingWaitOneMinute"
+    },
+    "ReadingWaitOneMinute": {
+        "post_delay": 2100000,
+        "focus": "自动阅读本轮计时完成，退出正文页恢复可截图状态",
+        "next": "ReadingExitAfterTimer"
+    },
+    "ReadingExitAfterTimer": {
+        "action": "ClickKey",
+        "key": 4,
+        "post_delay": 1500,
+        "focus": "已退出禁止截图的正文页，准备下一项任务"
+    },
+    "AudiobookTrial": {
+        "next": "DailyAudiobookFlow"
+    },
+    "DailyAudiobookFlow": {
+        "action": "StartApp",
+        "package": "com.qq.reader",
+        "post_delay": 2500,
+        "next": [
+            "AudiobookPlaying",
+            "AudiobookFindBook",
+            "AudiobookOpenFirstShelfBook",
+            "AudiobookBackUntilShelf"
+        ]
+    },
+    "AudiobookLeaveRewardPage": {
+        "recognition": "OCR",
+        "expected": "今日已获赠币|看小视频领好礼|玩游戏领赠币",
+        "action": "Click",
+        "target": [
+            55,
+            84
+        ],
+        "post_delay": 1500,
+        "next": "AudiobookFindBook"
+    },
+    "AudiobookBackUntilShelf": {
+        "action": "ClickKey",
+        "key": 4,
+        "post_delay": 1200,
+        "max_hit": 8,
+        "next": [
+            "AudiobookFindBook",
+            "AudiobookOpenFirstShelfBook",
+            "AudiobookBackUntilShelf"
+        ]
+    },
+    "AudiobookOpenFirstShelfBook": {
+        "recognition": "OCR",
+        "expected": "^书架.*$",
+        "roi": [
+            0,
+            0,
+            180,
+            120
+        ],
+        "action": "Click",
+        "target": [
+            290,
+            180
+        ],
+        "post_delay": 2500,
+        "focus": "固定听书目标不在书架时，打开当前第一本可见书籍",
+        "next": [
+            "AudiobookPlaying",
+            "AudiobookDismissProgressSync",
+            "AudiobookOpenMenu"
+        ]
+    },
+    "AudiobookFindBook": {
+        "recognition": "OCR",
+        "expected": "全职法师",
+        "order_by": "Vertical",
+        "index": 0,
+        "action": "Click",
+        "post_delay": 2500,
+        "next": [
+            "AudiobookPlaying",
+            "AudiobookDismissProgressSync",
+            "AudiobookOpenMenu"
+        ]
+    },
+    "AudiobookDismissProgressSync": {
+        "recognition": "OCR",
+        "expected": "^取消$",
+        "roi": [
+            360,
+            1120,
+            360,
+            160
+        ],
+        "action": "Click",
+        "post_delay": 800,
+        "next": "AudiobookOpenMenu"
+    },
+    "AudiobookOpenMenu": {
+        "action": "Click",
+        "target": [
+            360,
+            640
+        ],
+        "post_delay": 800,
+        "next": "AudiobookClickListenFixed"
+    },
+    "AudiobookClickListenFixed": {
+        "action": "Click",
+        "target": [
+            657,
+            1145
+        ],
+        "post_delay": 2500,
+        "next": [
+            "AudiobookPlaying",
+            "AudiobookClickPlayText",
+            "AudiobookClickPlayFallback"
+        ]
+    },
+    "AudiobookClickListen": {
+        "recognition": "OCR",
+        "expected": "听书",
+        "action": "Click",
+        "post_delay": 2500,
+        "next": [
+            "AudiobookClickPlayText",
+            "AudiobookClickPlayFallback"
+        ]
+    },
+    "AudiobookClickPlayText": {
+        "recognition": "OCR",
+        "expected": "播放|开始听书|继续播放",
+        "action": "Click",
+        "post_delay": 1200,
+        "next": "AudiobookPlaying"
+    },
+    "AudiobookClickPlayFallback": {
+        "action": "Click",
+        "target": [
+            360,
+            1080
+        ],
+        "post_delay": 1200,
+        "next": "AudiobookPlaying"
+    },
+    "AudiobookPlaying": {
+        "recognition": "OCR",
+        "expected": "AI朗读|会员本书免费听",
+        "next": "AudiobookWaitOneMinute"
+    },
+    "AudiobookWaitOneMinute": {
+        "post_delay": 2100000,
+        "focus": "听书本轮计时完成，准备暂停",
+        "next": "AudiobookPauseAfterTrial"
+    },
+    "AudiobookPauseAfterTrial": {
+        "action": "Click",
+        "target": [
+            360,
+            1080
+        ],
+        "post_delay": 800,
+        "focus": "听书已暂停"
+    },
+    "GameTrial": {
+        "next": "DailyGameFlow"
+    },
+    "DailyGameFlow": {
+        "action": "StartApp",
+        "package": "com.qq.reader",
+        "post_delay": 2500,
+        "next": [
+            "GameConfirmUserAgreement",
+            "GameEnterByTemplate",
+            "GameAcceptAgreement",
+            "GameLandingReady",
+            "GameRewardPageReady",
+            "GameOpenRewardFromShelf",
+            "GameBackUntilRewardOrShelf"
+        ],
+        "on_error": "GameRewardClaimSkipped"
+    },
+    "GameRewardEntryUnavailable": {
+        "recognition": "OCR",
+        "expected": "^书架.*$",
+        "roi": [
+            0,
+            0,
+            180,
+            120
+        ],
+        "focus": "当前 QQ 阅读版本书架未显示游戏奖励入口；本轮安全跳过游戏测试，不执行盲点"
+    },
+    "GameBackUntilRewardOrShelf": {
+        "action": "ClickKey",
+        "key": 4,
+        "post_delay": 1200,
+        "max_hit": 8,
+        "next": [
+            "GameDismissAddShelf",
+            "GameLandingReady",
+            "GameRewardPageReady",
+            "GameOpenRewardFromShelf",
+            "GameBackUntilRewardOrShelf"
+        ]
+    },
+    "GameDismissAddShelf": {
+        "recognition": "OCR",
+        "expected": "^(取消|暂不退出|继续使用)$",
+        "roi": [
+            0,
+            560,
+            720,
+            720
+        ],
+        "action": "Click",
+        "post_delay": 1000,
+        "next": [
+            "GameBackUntilRewardOrShelf"
+        ]
+    },
+    "GameOpenRewardFromShelf": {
+        "recognition": "OCR",
+        "expected": "签到领赠币|本周.*阅读|已连续签到|再读.*分钟领.*赠币|时长兑赠币|领.*赠币",
+        "action": "Click",
+        "post_delay": 2500,
+        "next": [
+            "GameDismissRewardPopup",
+            "GameFindPlayButton",
+            "GameScrollToPlay"
+        ]
+    },
+    "GameRewardPageReady": {
+        "recognition": "OCR",
+        "expected": "今日已获赠币|玩游戏领赠币",
+        "next": [
+            "GameDismissRewardPopup",
+            "GameFindPlayButton",
+            "GameScrollToPlay"
+        ]
+    },
+    "GameDismissRewardPopup": {
+        "recognition": "OCR",
+        "expected": "^我知道了$",
+        "action": "Click",
+        "post_delay": 1000,
+        "next": [
+            "GameFindPlayButton",
+            "GameScrollToPlay"
+        ]
+    },
+    "GameScrollToPlay": {
+        "action": "Swipe",
+        "begin": [
+            360,
+            980
+        ],
+        "end": [
+            360,
+            420
+        ],
+        "duration": 500,
+        "post_delay": 1000,
+        "max_hit": 4,
+        "next": [
+            "GameDismissRewardPopup",
+            "GameFindPlayButton",
+            "GameScrollToPlay"
+        ]
+    },
+    "GameFindPlayButton": {
+        "recognition": "OCR",
+        "expected": "去玩游戏",
+        "order_by": "Vertical",
+        "index": 0,
+        "action": "Click",
+        "post_delay": 5000,
+        "next": "GameOpenLargestBanner"
+    },
+    "GameOpenLargestBanner": {
+        "action": "Click",
+        "target": [
+            360,
+            360
+        ],
+        "post_delay": 5000,
+        "next": [
+            "GameDismissPromo",
+            "GameExternalActive",
+            "GameAcceptAgreement",
+            "GameSelectServer",
+            "GameEnterByTemplate",
+            "GameLandingReady",
+            "GameHallRetry"
+        ]
+    },
+    "GameHallRetry": {
+        "recognition": "OCR",
+        "expected": "精选大作|今日必玩推荐|新游|活动|排行|分类",
+        "action": "Click",
+        "target": [
+            360,
+            360
+        ],
+        "post_delay": 5000,
+        "max_hit": 4,
+        "next": [
+            "GameDismissPromo",
+            "GameExternalActive",
+            "GameAcceptAgreement",
+            "GameSelectServer",
+            "GameEnterByTemplate",
+            "GameLandingReady",
+            "GameHallRetry"
+        ]
+    },
+    "GameDismissPromo": {
+        "recognition": "OCR",
+        "expected": "会员月|游戏内充值任意金额",
+        "action": "Click",
+        "target": [
+            608,
+            356
+        ],
+        "post_delay": 1500,
+        "next": [
+            "GameExternalActive",
+            "GameAcceptAgreement",
+            "GameSelectServer",
+            "GameEnterByTemplate",
+            "GameLandingReady",
+            "GameHallRetry"
+        ]
+    },
+    "GameExternalActive": {
+        "recognition": "OCR",
+        "expected": "^领币$|远征|破败小镇|快醒醒|进度|战士武器|战士战力|升级战士|提升骷髅",
+        "timeout": 60000,
+        "focus": "已确认第三方小游戏处于可活动状态，保持前台完成每日游戏计时",
+        "next": "GameWaitOneMinute"
+    },
+    "GameSelectServer": {
+        "recognition": "OCR",
+        "expected": "^点击选服$|^选择服务器$|^进入区服$",
+        "action": "DoNothing",
+        "post_delay": 1000,
+        "next": "GameExternalActive"
+    },
+    "GameEnterByTemplate": {
+        "recognition": "TemplateMatch",
+        "template": "game_enter_button.png",
+        "threshold": 0.82,
+        "roi": [
+            150,
+            850,
+            420,
+            250
+        ],
+        "action": "Click",
+        "post_delay": 5000,
+        "focus": "通过登录按钮模板点击踏入仙途",
+        "next": "GameExternalActive"
+    },
+    "GameLandingReady": {
+        "recognition": "OCR",
+        "expected": "踏入仙途|进入游戏|开始游戏|开始修炼|创建角色|登录游戏",
+        "action": "Click",
+        "target": [
+            200,
+            900,
+            320,
+            180
+        ],
+        "post_delay": 1000,
+        "next": [
+            "GameConfirmUserAgreement",
+            "GameExternalActive"
+        ]
+    },
+    "GameAcceptAgreement": {
+        "recognition": "OCR",
+        "expected": "我已详细阅读并同意|用户协议.*隐私政策",
+        "action": "Click",
+        "target": [
+            145,
+            1020,
+            25,
+            25
+        ],
+        "post_delay": 800,
+        "focus": "检测到游戏协议页，先勾选同意后再点击进入游戏",
+        "next": [
+            "GameExternalActive",
+            "GameConfirmUserAgreement",
+            "GameEnterByTemplate",
+            "GameLandingReady"
+        ]
+    },
+    "GameWaitOneMinute": {
+        "post_delay": 60000,
+        "timeout": 90000,
+        "focus": "测试：确认游戏已运行一分钟，开始自动退出并返回奖励页",
+        "next": "GameExitBackFallback"
+    },
+    "GameOpenFloatMenu": {
+        "recognition": "OCR",
+        "expected": "^领币$",
+        "action": "Click",
+        "target": [
+            675,
+            275,
+            40,
+            55
+        ],
+        "post_delay": 1800,
+        "next": [
+            "GameClickExitMenu",
+            "GameOpenFloatSecondTap"
+        ]
+    },
+    "GameOpenFloatSecondTap": {
+        "recognition": "OCR",
+        "expected": "^领币$",
+        "action": "Click",
+        "target": [
+            675,
+            275,
+            40,
+            55
+        ],
+        "post_delay": 1800,
+        "next": [
+            "GameClickExitMenu",
+            "GameExitBackFallback"
+        ]
+    },
+    "GameClickExitMenu": {
+        "recognition": "OCR",
+        "expected": "^退出$",
+        "action": "Click",
+        "post_delay": 1200,
+        "next": [
+            "GameConfirmExit",
+            "GameAfterMenuExitNoDialog"
+        ]
+    },
+    "GameAfterMenuExitNoDialog": {
+        "recognition": "OCR",
+        "expected": "精选大作|今日必玩推荐|新游|活动|排行|分类",
+        "focus": "游戏已直接退出，未出现确认弹窗",
+        "next": "GameBackAfterExit"
+    },
+    "GameConfirmExit": {
+        "recognition": "OCR",
+        "expected": "^退出游戏$",
+        "action": "Click",
+        "post_delay": 1800,
+        "next": "GameBackAfterExit"
+    },
+    "GameExitBackFallback": {
+        "action": "ClickKey",
+        "key": 4,
+        "post_delay": 1500,
+        "max_hit": 6,
+        "focus": "未识别到悬浮菜单退出按钮，使用返回键退出游戏",
+        "next": [
+            "GameConfirmExit",
+            "GameAfterMenuExitNoDialog",
+            "GameRewardAfterExit",
+            "GameShelfAfterExit",
+            "GameExitBackFallback"
+        ]
+    },
+    "GameBackAfterExit": {
+        "action": "ClickKey",
+        "key": 4,
+        "post_delay": 1200,
+        "max_hit": 4,
+        "next": [
+            "GameRewardAfterExit",
+            "GameShelfAfterExit",
+            "GameBackAfterExit"
+        ]
+    },
+    "GameRewardAfterExit": {
+        "recognition": "OCR",
+        "expected": "今日已获赠币|玩游戏领赠币|看小视频领好礼",
+        "focus": "游戏已退出并返回奖励页",
+        "on_error": "GameRewardClaimSkipped",
+        "next": [
+            "ClaimGameRewardAlreadyDone",
+            "ClaimGameRewardRow",
+            "GameRewardClaimSkipped"
+        ]
+    },
+    "GameRewardClaimSkipped": {
+        "action": "DoNothing",
+        "focus": "未能识别游戏赠币领取页；本次仅记录跳过，不中断每日流程"
+    },
+    "GameShelfAfterExit": {
+        "recognition": "OCR",
+        "expected": "^书架$",
+        "focus": "游戏已退出并返回书架"
+    },
+    "DailyExternalAppFlow": {
+        "action": "StartApp",
+        "package": "com.qq.reader",
+        "post_delay": 5000,
+        "next": [
+            "ExternalBothComplete",
+            "ExternalRewardPageReady",
+            "ExternalOpenRewardFromShelf",
+            "ExternalBackUntilRewardOrShelf"
+        ]
+    },
+    "ExternalBackUntilRewardOrShelf": {
+        "action": "ClickKey",
+        "key": 4,
+        "post_delay": 1200,
+        "max_hit": 8,
+        "next": [
+            "ExternalBothComplete",
+            "ExternalRewardPageReady",
+            "ExternalOpenRewardFromShelf",
+            "ExternalBackUntilRewardOrShelf"
+        ]
+    },
+    "ExternalOpenRewardFromShelf": {
+        "recognition": "OCR",
+        "expected": "领\\d+赠币|签到领赠币",
+        "action": "Click",
+        "post_delay": 2500,
+        "next": [
+            "ExternalBothComplete",
+            "ExternalRewardPageReady",
+            "ExternalScrollToDianping"
+        ]
+    },
+    "ExternalRewardPageReady": {
+        "recognition": "OCR",
+        "expected": "今日已获赠币",
+        "next": [
+            "ExternalBothComplete",
+            "ExternalClickDianping",
+            "ExternalBaiduVisibleAfterDianping",
+            "ExternalDianpingRowFound",
+            "ExternalReachedBottom",
+            "ExternalScrollToDianping"
+        ]
+    },
+    "ExternalScrollToDianping": {
+        "action": "Swipe",
+        "begin": [
+            360,
+            1080
+        ],
+        "end": [
+            360,
+            420
+        ],
+        "duration": 500,
+        "post_delay": 1200,
+        "max_hit": 14,
+        "next": [
+            "ExternalBothComplete",
+            "ExternalClickDianping",
+            "ExternalBaiduVisibleAfterDianping",
+            "ExternalDianpingRowFound",
+            "ExternalScrollToDianping"
+        ]
+    },
+    "ExternalReachedBottom": {
+        "recognition": "OCR",
+        "expected": "^回到顶部$",
+        "focus": "外部应用入口未在当前奖励页开放；已到页底，记录为今日无可执行入口并安全结束"
+    },
+    "ExternalClickDianping": {
+        "recognition": "OCR",
+        "expected": "^去点评$",
+        "action": "Click",
+        "post_delay": 6000,
+        "focus": "已点击大众点评入口，等待外部应用启动",
+        "next": "ExternalReturnQQAfterDianping"
+    },
+    "ExternalDianpingRowFound": {
+        "recognition": "OCR",
+        "expected": "去大众点评发现好去处",
+        "focus": "大众点评任务已完成或入口不可用，跳过京东金融并继续百度地图",
+        "next": "ExternalFindBaidu"
+    },
+    "ExternalBaiduVisibleAfterDianping": {
+        "recognition": "OCR",
+        "expected": "去百度地图领现金|去百度地图",
+        "focus": "大众点评任务已在此前完成，直接继续百度地图任务",
+        "next": "ExternalFindBaidu"
+    },
+    "ExternalReturnQQAfterDianping": {
+        "action": "StartApp",
+        "package": "com.qq.reader",
+        "post_delay": 3000,
+        "next": [
+            "ExternalRewardAfterDianping",
+            "ExternalCloseDianpingBridge",
+            "ExternalBackAfterDianping"
+        ]
+    },
+    "ExternalRewardAfterDianping": {
+        "recognition": "OCR",
+        "expected": "今日已获赠币",
+        "next": "ExternalFindBaidu"
+    },
+    "ExternalCloseDianpingBridge": {
+        "recognition": "OCR",
+        "expected": "\\[?大众点评\\]?|该服务由大众点评",
+        "action": "Click",
+        "target": [
+            55,
+            84
+        ],
+        "post_delay": 1800,
+        "next": "ExternalFindBaidu"
+    },
+    "ExternalBackAfterDianping": {
+        "action": "ClickKey",
+        "key": 4,
+        "post_delay": 1200,
+        "max_hit": 4,
+        "next": [
+            "ExternalRewardAfterDianping",
+            "ExternalCloseDianpingBridge",
+            "ExternalBackAfterDianping"
+        ]
+    },
+    "ExternalFindBaidu": {
+        "next": [
+            "ExternalBothComplete",
+            "ExternalClickBaidu",
+            "ExternalBaiduRowFound",
+            "ExternalBaiduReachedBottom",
+            "ExternalScrollToBaidu"
+        ]
+    },
+    "ExternalScrollToBaidu": {
+        "action": "Swipe",
+        "begin": [
+            360,
+            1080
+        ],
+        "end": [
+            360,
+            500
+        ],
+        "duration": 500,
+        "post_delay": 1000,
+        "max_hit": 8,
+        "next": [
+            "ExternalBothComplete",
+            "ExternalClickBaidu",
+            "ExternalBaiduRowFound",
+            "ExternalScrollToBaidu"
+        ]
+    },
+    "ExternalBaiduReachedBottom": {
+        "recognition": "OCR",
+        "expected": "^回到顶部$",
+        "focus": "百度地图入口未在当前奖励页开放；已到页底，记录为今日无可执行入口并安全结束"
+    },
+    "ExternalClickBaidu": {
+        "recognition": "OCR",
+        "expected": "^去百度地图$",
+        "action": "Click",
+        "post_delay": 6000,
+        "focus": "已点击百度地图入口，等待外部应用启动",
+        "next": "ExternalReturnQQAfterBaidu"
+    },
+    "ExternalBaiduRowFound": {
+        "recognition": "OCR",
+        "expected": "去百度地图领现金",
+        "focus": "百度地图任务已完成或入口不可用，检查两项最终状态",
+        "next": "ExternalBothComplete"
+    },
+    "ExternalReturnQQAfterBaidu": {
+        "action": "StartApp",
+        "package": "com.qq.reader",
+        "post_delay": 3000,
+        "next": [
+            "ExternalBothComplete",
+            "ExternalRewardAfterBaidu",
+            "ExternalCloseBaiduBridge",
+            "ExternalBackAfterBaidu"
+        ]
+    },
+    "ExternalRewardAfterBaidu": {
+        "recognition": "OCR",
+        "expected": "今日已获赠币",
+        "next": "ExternalBothReturnedComplete"
+    },
+    "ExternalCloseBaiduBridge": {
+        "recognition": "OCR",
+        "expected": "去百度地图金币商城|百度地图",
+        "action": "Click",
+        "target": [
+            55,
+            84
+        ],
+        "post_delay": 1800,
+        "next": "ExternalBothReturnedComplete"
+    },
+    "ExternalBackAfterBaidu": {
+        "action": "ClickKey",
+        "key": 4,
+        "post_delay": 1200,
+        "max_hit": 4,
+        "next": [
+            "ExternalBothReturnedComplete",
+            "ExternalRewardAfterBaidu",
+            "ExternalCloseBaiduBridge",
+            "ExternalBackAfterBaidu"
+        ]
+    },
+    "ExternalBothComplete": {
+        "recognition": "OCR",
+        "expected": "^明日再来$",
+        "order_by": "Vertical",
+        "index": 1,
+        "focus": "大众点评与百度地图均显示明日再来，外部应用每日流程完成"
+    },
+    "ExternalBothReturnedComplete": {
+        "recognition": "OCR",
+        "expected": "今日已获赠币",
+        "focus": "大众点评与百度地图均已跳转并返回奖励页，外部应用每日流程完成"
+    },
+    "DailyLevelAdFlow": {
+        "action": "StartApp",
+        "package": "com.qq.reader",
+        "post_delay": 3500,
+        "anchor": {
+            "LevelAfterAd": ""
+        },
+        "next": [
+            "LevelPageReady",
+            "LevelMyPageReady",
+            "LevelClickMyTab",
+            "LevelBackUntilHome"
+        ]
+    },
+    "LevelBackUntilHome": {
+        "action": "ClickKey",
+        "key": 4,
+        "post_delay": 1200,
+        "max_hit": 8,
+        "next": [
+            "LevelPageReady",
+            "LevelMyPageReady",
+            "LevelClickMyTab",
+            "LevelBackUntilHome"
+        ]
+    },
+    "LevelClickMyTab": {
+        "recognition": "OCR",
+        "expected": "^我的$",
+        "roi": [
+            520,
+            1120,
+            200,
+            160
+        ],
+        "action": "Click",
+        "post_delay": 2000,
+        "next": "LevelMyPageReady"
+    },
+    "LevelMyPageReady": {
+        "recognition": "OCR",
+        "expected": "我的账户|阅读故事|浏览历史",
+        "next": "LevelClickLevelIcon"
+    },
+    "LevelClickLevelIcon": {
+        "recognition": "OCR",
+        "expected": "^等级$",
+        "action": "Click",
+        "post_delay": 2500,
+        "next": "LevelPageReady"
+    },
+    "LevelPageReady": {
+        "recognition": "OCR",
+        "expected": "用户等级|等级福利|当前等级|提升等级",
+        "next": [
+            "LevelClickCoinAd",
+            "LevelCoinSectionFound",
+            "LevelClickPointsAd",
+            "LevelPointsSectionFound",
+            "LevelScrollToCoinAd"
+        ]
+    },
+    "LevelScrollToCoinAd": {
+        "action": "Swipe",
+        "begin": [
+            360,
+            1080
+        ],
+        "end": [
+            360,
+            400
+        ],
+        "duration": 500,
+        "post_delay": 1000,
+        "max_hit": 12,
+        "next": [
+            "LevelClickCoinAd",
+            "LevelCoinSectionFound",
+            "LevelClickPointsAd",
+            "LevelPointsSectionFound",
+            "LevelScrollToCoinAd"
+        ]
+    },
+    "LevelClickCoinAd": {
+        "recognition": "OCR",
+        "expected": "^立即领取$",
+        "action": "Click",
+        "post_delay": 3500,
+        "anchor": {
+            "LevelAfterAd": "LevelAfterCoinAd"
+        },
+        "focus": "已点击等级页广告领赠币",
+        "next": [
+            "AdThirdPartyLoginPage",
+            "AdSkipBrowseOffer",
+            "AdContinueWatching",
+            "AdCompleted",
+            "AdCountdown",
+            "AdScrollDownRepeat"
+        ]
+    },
+    "LevelCoinSectionFound": {
+        "recognition": "OCR",
+        "expected": "赢10-99赠币|看小视频领奖",
+        "focus": "等级页赠币广告今日已完成或入口不可用，继续积分广告",
+        "next": "LevelFindPointsAd"
+    },
+    "LevelAfterCoinAd": {
+        "focus": "等级页赠币广告已返回，继续积分广告",
+        "next": "LevelFindPointsAd"
+    },
+    "LevelFindPointsAd": {
+        "next": [
+            "LevelClickPointsAd",
+            "LevelPointsSectionFound",
+            "LevelScrollToPointsAd"
+        ]
+    },
+    "LevelScrollToPointsAd": {
+        "action": "Swipe",
+        "begin": [
+            360,
+            1080
+        ],
+        "end": [
+            360,
+            520
+        ],
+        "duration": 500,
+        "post_delay": 900,
+        "max_hit": 8,
+        "next": [
+            "LevelClickPointsAd",
+            "LevelPointsSectionFound",
+            "LevelScrollToPointsAd"
+        ]
+    },
+    "LevelClickPointsAd": {
+        "recognition": "OCR",
+        "expected": "^看小视频$",
+        "action": "Click",
+        "post_delay": 3500,
+        "anchor": {
+            "LevelAfterAd": "LevelAfterPointsAd"
+        },
+        "focus": "已点击等级页广告加积分",
+        "next": [
+            "AdThirdPartyLoginPage",
+            "AdSkipBrowseOffer",
+            "AdContinueWatching",
+            "AdCompleted",
+            "AdCountdown",
+            "AdScrollDownRepeat"
+        ]
+    },
+    "LevelPointsSectionFound": {
+        "recognition": "OCR",
+        "expected": "看小视频.*[+＋]5积分",
+        "focus": "等级页积分广告今日已完成或入口不可用，等级页广告流程结束"
+    },
+    "LevelAfterPointsAd": {
+        "focus": "等级页赠币广告与积分广告处理完成"
+    },
+    "SingleAdTrial": {
+        "next": "DailyAdFlow"
+    },
+    "DailyAdFlow": {
+        "action": "StartApp",
+        "package": "com.qq.reader",
+        "post_delay": 6000,
+        "anchor": {
+            "LevelAfterAd": ""
+        },
+        "next": [
+            "AdThirdPartyLoginPage",
+            "AdDailyComplete",
+            "AdConfirmSkipBrowse",
+            "AdSkipBrowseOffer",
+            "AdContinueWatching",
+            "AdCompleted",
+            "AdCountdown",
+            "AdClosableAfterCountdown",
+            "AdCaptchaDetected",
+            "AdRewardPageReady",
+            "AdOpenRewardFromShelf",
+            "AdShelfRewardBanner",
+            "AdBackUntilRewardOrShelf"
+        ]
+    },
+    "AdBackUntilRewardOrShelf": {
+        "action": "ClickKey",
+        "key": 4,
+        "post_delay": 1200,
+        "max_hit": 8,
+        "next": [
+            "AdDismissAddShelf",
+            "AdDailyComplete",
+            "AdRewardPageReady",
+            "AdOpenRewardFromShelf",
+            "AdShelfRewardBanner",
+            "AdBackUntilRewardOrShelf"
+        ]
+    },
+    "AdDismissAddShelf": {
+        "recognition": "OCR",
+        "expected": "^(取消|暂不退出|继续使用)$",
+        "roi": [
+            0,
+            560,
+            720,
+            720
+        ],
+        "action": "Click",
+        "post_delay": 1000,
+        "next": "AdWaitShelfReady"
+    },
+    "AdWaitShelfReady": {
+        "post_delay": 3000,
+        "next": [
+            "AdDailyComplete",
+            "AdRewardPageReady",
+            "AdOpenRewardFromShelf",
+            "AdShelfRewardBanner",
+            "AdBackUntilRewardOrShelf"
+        ]
+    },
+    "AdRewardPageReady": {
+        "recognition": "OCR",
+        "expected": "今日已获赠币|看小视频领好礼|玩游戏领赠币|每日阅读领赠币|每日听书.*分钟|今日已领.*赠币|今日还可领|与小Q一起做公益|再签.*天可领|已连续签到|本周签满.*天|付费会员领双倍赠币|签到提醒|抽奖|签到领赠币|时长兑赠币|赢\\d+-\\d+赠币",
+        "next": [
+            "AdDailyComplete",
+            "AdGoTopButton",
+            "AdTopReady",
+            "AdScrollToTop"
+        ]
+    },
+    "AdOpenRewardFromShelf": {
+        "recognition": "OCR",
+        "expected": "^签到领赠币$|本周.*阅读|已连续签到|再读.*分钟领.*赠币|时长兑赠币|^领\\d+赠币$|赢\\d+-\\d+赠币",
+        "action": "Click",
+        "post_delay": 2500,
+        "next": "AdRewardPageReady"
+    },
+    "AdShelfRewardBanner": {
+        "recognition": "OCR",
+        "expected": "^书架$",
+        "action": "Click",
+        "target": [
+            510,
+            155,
+            180,
+            125
+        ],
+        "post_delay": 3000,
+        "focus": "书架赠币文字未稳定识别，点击顶部时长赠币卡片进入奖励页",
+        "next": "AdRewardPageReady"
+    },
+    "AdGoTopButton": {
+        "recognition": "OCR",
+        "expected": "^回到顶部$",
+        "action": "Click",
+        "post_delay": 1200,
+        "next": "AdTopReady"
+    },
+    "AdTopReady": {
+        "recognition": "OCR",
+        "expected": "签到提醒|已连续签到|每日阅读领赠币",
+        "focus": "奖励页已回到顶部，开始逐次查找视频入口",
+        "next": [
+            "AdDailyComplete",
+            "AdVideoCounterVisible",
+            "AdClickWatch",
+            "AdScrollToVideoCard"
+        ]
+    },
+    "AdScrollToTop": {
+        "action": "Swipe",
+        "begin": [
+            360,
+            300
+        ],
+        "end": [
+            360,
+            1100
+        ],
+        "duration": 500,
+        "post_delay": 800,
+        "max_hit": 12,
+        "next": [
+            "AdGoTopButton",
+            "AdTopReady",
+            "AdScrollToVideoCard"
+        ]
+    },
+    "AdScrollToVideoCard": {
+        "action": "Swipe",
+        "begin": [
+            360,
+            1000
+        ],
+        "end": [
+            360,
+            350
+        ],
+        "duration": 500,
+        "post_delay": 1200,
+        "max_hit": 60,
+        "focus": "已滑动一次，先检查当前画面是否存在视频入口",
+        "next": [
+            "AdDailyComplete",
+            "AdVideoCounterVisible",
+            "AdClickWatch",
+            "AdScrollToVideoCard"
+        ]
+    },
+    "AdScrollDownRepeat": {
+        "action": "Swipe",
+        "begin": [
+            360,
+            1000
+        ],
+        "end": [
+            360,
+            340
+        ],
+        "duration": 500,
+        "post_delay": 1800,
+        "max_hit": 240,
+        "next": [
+            "AdThirdPartyLoginPage",
+            "AdLiveCouponPopup",
+            "AdBrowseOfferModal",
+            "AdSkipBrowseOffer",
+            "AdContinueWatching",
+            "AdCompleted",
+            "AdRewardIssued",
+            "AdCountdown",
+            "AdCaptchaDetected",
+            "AdReturnedAfterClose",
+            "AdScrollDownRepeat"
+        ]
+    },
+    "AdThirdPartyLoginPage": {
+        "recognition": "OCR",
+        "expected": "抖音登录授权|使用抖音账号登录|立即打开抖音|登录授权",
+        "action": "ClickKey",
+        "key": 4,
+        "post_delay": 1500,
+        "max_hit": 6,
+        "focus": "检测到第三方登录授权页，拒绝授权并返回广告",
+        "next": [
+            "AdThirdPartyLoginPage",
+            "AdSkipBrowseOffer",
+            "AdContinueWatching",
+            "AdCompleted",
+            "AdCountdown",
+            "AdScrollDownRepeat",
+            "AdReturnedAfterClose"
+        ]
+    },
+    "AdLiveCouponPopup": {
+        "recognition": "OCR",
+        "expected": "恭喜获得优惠券|限时领取.*后结束",
+        "action": "Click",
+        "target": [
+            361,
+            1168
+        ],
+        "post_delay": 1200,
+        "focus": "已关闭下滑广告进行中的优惠券遮罩，继续浏览直至奖励发放",
+        "next": "AdScrollDownRepeat"
+    },
+    "AdClickWatch": {
+        "recognition": "OCR",
+        "expected": "立即观看|看小视频再多领",
+        "order_by": "Vertical",
+        "index": 0,
+        "action": "Click",
+        "post_delay": 3500,
+        "next": [
+            "AdThirdPartyLoginPage",
+            "AdBrowseOfferModal",
+            "AdSkipBrowseOffer",
+            "AdContinueWatching",
+            "AdCompleted",
+            "AdCountdown",
+            "AdScrollDownRepeat"
+        ]
+    },
+    "AdVideoCounterVisible": {
+        "recognition": "OCR",
+        "expected": "(?:\\(|（)?(?:[0-9]|1[01])\\s*/\\s*12(?:\\)|）)?",
+        "roi": [
+            0,
+            150,
+            720,
+            950
+        ],
+        "action": "Click",
+        "target_offset": [
+            430,
+            -20,
+            -180,
+            60
+        ],
+        "post_delay": 3500,
+        "focus": "识别到未完成的视频计数，点击同一行右侧观看按钮",
+        "next": [
+            "AdThirdPartyLoginPage",
+            "AdBrowseOfferModal",
+            "AdSkipBrowseOffer",
+            "AdContinueWatching",
+            "AdCompleted",
+            "AdCountdown",
+            "AdScrollDownRepeat"
+        ]
+    },
+    "AdClosableAfterCountdown": {
+        "recognition": "OCR",
+        "expected": "^(X|x|×|✕|✖|关闭|退出|跳过|我知道了)$",
+        "roi": [
+            0,
+            0,
+            720,
+            320
+        ],
+        "action": "Click",
+        "post_delay": 1800,
+        "focus": "广告倒计时结束后识别左上角或右上角关闭按钮（X/关闭/跳过等）并点击",
+        "next": [
+            "AdCouponPopup",
+            "AdClickIKnow",
+            "AdCaptchaDetected",
+            "AdReturnedAfterClose",
+            "AdCloseByBackKey"
+        ]
+    },
+    "AdCloseAfterNormalCountdown": {
+        "recognition": "OCR",
+        "expected": "^(X|x|×|✕|✖|关闭|退出|跳过|我知道了)$",
+        "roi": [
+            0,
+            0,
+            720,
+            320
+        ],
+        "action": "Click",
+        "post_delay": 1800,
+        "focus": "普通倒计时广告已结束，识别左上角或右上角关闭按钮并点击",
+        "next": [
+            "AdCouponPopup",
+            "AdClickIKnow",
+            "AdCaptchaDetected",
+            "AdReturnedAfterClose",
+            "AdCloseByBackKey"
+        ]
+    },
+    "AdCouponPopup": {
+        "recognition": "OCR",
+        "expected": "恭喜获得优惠券|限时领取|立即领取",
+        "action": "Click",
+        "target": [
+            361,
+            1168
+        ],
+        "post_delay": 1200,
+        "focus": "已关闭广告结束后出现的优惠券弹窗",
+        "next": [
+            "AdClosableAfterCountdown",
+            "AdCaptchaDetected",
+            "AdReturnedAfterClose"
+        ]
+    },
+    "AdContinueWatching": {
+        "recognition": "OCR",
+        "expected": "继续观看",
+        "action": "Click",
+        "post_delay": 1500,
+        "next": [
+            "AdThirdPartyLoginPage",
+            "AdBrowseOfferModal",
+            "AdSkipBrowseOffer",
+            "AdCompleted",
+            "AdCountdown",
+            "AdScrollDownRepeat"
+        ]
+    },
+    "AdSkipBrowseOffer": {
+        "recognition": "OCR",
+        "expected": "跳过",
+        "roi": [
+            500,
+            0,
+            220,
+            120
+        ],
+        "action": "Click",
+        "target": [
+            680,
+            35
+        ],
+        "post_delay": 1800,
+        "focus": "已跳过广告浏览加速，不进入详情或第三方页面",
+        "next": [
+            "AdConfirmSkipBrowse",
+            "AdBrowseOfferModal",
+            "AdContinueWatching",
+            "AdCompleted",
+            "AdCountdown",
+            "AdScrollDownRepeat",
+            "AdWaitAfterSkip"
+        ]
+    },
+    "AdConfirmSkipBrowse": {
+        "recognition": "OCR",
+        "expected": "坚持退出",
+        "roi": [
+            150,
+            700,
+            450,
+            300
+        ],
+        "action": "Click",
+        "post_delay": 1800,
+        "focus": "已确认坚持退出浏览加速，不领取需跳转详情的奖励",
+        "next": [
+            "AdContinueWatching",
+            "AdCompleted",
+            "AdCountdown",
+            "AdScrollDownRepeat",
+            "AdCaptchaDetected",
+            "AdReturnedAfterClose",
+            "AdWaitAfterSkip"
+        ]
+    },
+    "AdWaitAfterSkip": {
+        "post_delay": 2500,
+        "max_hit": 60,
+        "next": [
+            "AdThirdPartyLoginPage",
+            "AdConfirmSkipBrowse",
+            "AdBrowseOfferModal",
+            "AdSkipBrowseOffer",
+            "AdContinueWatching",
+            "AdCompleted",
+            "AdCountdown",
+            "AdScrollDownRepeat",
+            "AdWaitAfterSkip"
+        ],
+        "on_error": "AdCloseFallbackLeft"
+    },
+    "AdCountdown": {
+        "recognition": "OCR",
+        "expected": "观看.*秒.*可获得奖励",
+        "post_delay": 5000,
+        "max_hit": 120,
+        "timeout": 45000,
+        "next": [
+            "AdThirdPartyLoginPage",
+            "AdConfirmSkipBrowse",
+            "AdBrowseOfferModal",
+            "AdSkipBrowseOffer",
+            "AdContinueWatching",
+            "AdCompleted",
+            "AdRewardIssued",
+            "AdCountdown",
+            "AdCloseAfterNormalCountdown",
+            "AdScrollDownRepeat"
+        ],
+        "on_error": "AdCloseFallbackLeft"
+    },
+    "AdRewardIssued": {
+        "recognition": "OCR",
+        "expected": "奖励已发放|已发放|恭喜获得奖励|恭喜完成任务",
+        "post_delay": 800,
+        "next": "AdClosableAfterCountdown"
+    },
+    "AdCompleted": {
+        "recognition": "OCR",
+        "expected": "恭喜获得奖励|恭喜完成任务",
+        "action": "Click",
+        "target": [
+            48,
+            70
+        ],
+        "post_delay": 1800,
+        "next": [
+            "AdCouponPopup",
+            "AdClickIKnow",
+            "AdCaptchaDetected",
+            "AdReturnedAfterClose"
+        ]
+    },
+    "AdClickIKnow": {
+        "recognition": "OCR",
+        "expected": "我知道了",
+        "action": "Click",
+        "post_delay": 1000,
+        "next": [
+            "AdCaptchaDetected",
+            "AdReturnedAfterClose"
+        ]
+    },
+    "AdFinish": {
+        "focus": "单次广告流程结束"
+    },
+    "AdCloseFallbackLeft": {
+        "action": "Click",
+        "target": [
+            52,
+            112
+        ],
+        "post_delay": 1800,
+        "next": [
+            "AdClickIKnow",
+            "AdCaptchaDetected",
+            "AdReturnedAfterClose",
+            "AdCloseFallbackRight",
+            "AdCloseByBackKey"
+        ]
+    },
+    "AdCloseFallbackRight": {
+        "action": "Click",
+        "target": [
+            670,
+            112
+        ],
+        "post_delay": 1800,
+        "next": [
+            "AdClickIKnow",
+            "AdCaptchaDetected",
+            "AdReturnedAfterClose",
+            "AdCloseByBackKey"
+        ]
+    },
+    "AdCloseByBackKey": {
+        "action": "ClickKey",
+        "key": 4,
+        "post_delay": 1500,
+        "max_hit": 6,
+        "focus": "广告/直播页关闭按钮点击未生效，改用系统返回键逐层退出，直到回到奖励页或书架",
+        "next": [
+            "AdReturnedAfterClose",
+            "AdRewardPageReady",
+            "AdBackUntilRewardOrShelf",
+            "AdCloseByBackKey"
+        ]
+    },
+    "AdCaptchaDetected": {
+        "recognition": "TemplateMatch",
+        "template": "qq_reader_captcha_prompt.png",
+        "threshold": 0.8,
+        "roi": [
+            40,
+            260,
+            640,
+            160
+        ],
+        "focus": "检测到图片验证码，保留当前页面并等待人工确认处理",
+        "next": "AdCaptchaAwaitManualSolve"
+    },
+    "AdCaptchaAwaitManualSolve": {
+        "recognition": "TemplateMatch",
+        "template": "qq_reader_captcha_prompt.png",
+        "threshold": 0.8,
+        "roi": [
+            40,
+            260,
+            640,
+            160
+        ],
+        "post_delay": 3000,
+        "focus": "等待人工完成当前验证码；验证通过并返回奖励页后自动继续",
+        "next": [
+            "AdCaptchaDetected",
+            "AdReturnedAfterClose",
+            "AdCaptchaAwaitManualSolve"
+        ]
+    },
+    "AdCaptchaCloseFixedLeft": {
+        "action": "Click",
+        "target": [
+            139,
+            965
+        ],
+        "post_delay": 1500,
+        "focus": "已点击实测固定位置的验证码左下角关闭按钮",
+        "next": "AdCaptchaAbort"
+    },
+    "AdCaptchaCloseLeftButton": {
+        "recognition": "OCR",
+        "expected": "^[Xx×]$",
+        "roi": [
+            80,
+            850,
+            170,
+            190
+        ],
+        "action": "Click",
+        "post_delay": 1500,
+        "focus": "已点击验证码弹窗左下角关闭按钮",
+        "next": "AdCaptchaAbort"
+    },
+    "AdCaptchaCloseRightButton": {
+        "recognition": "OCR",
+        "expected": "^[Xx×]$",
+        "roi": [
+            560,
+            380,
+            140,
+            150
+        ],
+        "action": "Click",
+        "post_delay": 1500,
+        "focus": "已点击验证码弹窗右上角关闭按钮",
+        "next": "AdCaptchaAbort"
+    },
+    "AdCaptchaWaitForSafeClose": {
+        "recognition": "OCR",
+        "expected": "请在下图依次点击",
+        "post_delay": 3000,
+        "focus": "未安全识别到关闭按钮，等待按钮出现或人工关闭，不点击验证码图片",
+        "next": [
+            "AdCaptchaCloseLeftButton",
+            "AdCaptchaCloseRightButton",
+            "AdCaptchaAbort"
+        ]
+    },
+    "AdCaptchaAbort": {
+        "action": "StopTask",
+        "focus": "图片验证码阻断了奖励发放，本轮广告停止并判定为未成功"
+    },
+    "AdReturnedAfterClose": {
+        "recognition": "OCR",
+        "expected": "今日已获赠币|看小视频领好礼|玩游戏领赠币|签到领赠币|本周.*阅读|时长兑赠币|领.*赠币|用户等级|提升等级|看小视频.*积分|赢10-99赠币",
+        "focus": "广告已关闭并返回 QQ 阅读，继续观察延迟出现的验证码",
+        "next": "AdPostReturnWatch"
+    },
+    "AdPostReturnWatch": {
+        "post_delay": 4000,
+        "next": [
+            "AdCaptchaDetected",
+            "AdReturnStable"
+        ]
+    },
+    "AdReturnStable": {
+        "recognition": "OCR",
+        "expected": "今日已获赠币|看小视频领好礼|玩游戏领赠币|签到领赠币|本周.*阅读|时长兑赠币|领.*赠币|用户等级|提升等级|看小视频.*积分|赢10-99赠币",
+        "focus": "返回 QQ 阅读后观察完成，根据广告来源继续对应每日流程",
+        "next": [
+            "[Anchor]LevelAfterAd",
+            "AdDailyComplete",
+            "AdDailyRepeat"
+        ]
+    },
+    "AdDailyRepeat": {
+        "post_delay": 1000,
+        "max_hit": 24,
+        "focus": "未出现 12/12 或明日再来，继续下一轮每日广告",
+        "next": [
+            "AdDailyComplete",
+            "AdScrollToTop",
+            "AdVideoCounterVisible",
+            "AdClickWatch",
+            "AdScrollToVideoCard"
+        ]
+    },
+    "AdDailyComplete": {
+        "recognition": "OCR",
+        "expected": "(?:\\(|（)?12\\s*/\\s*12(?:\\)|）)?|(?:看小视频|看视频).*(?:明日再来|已领取|已领)|(?:明日再来|已领取|已领).*(?:看小视频|看视频)",
+        "focus": "仅在视频广告明确显示 12/12、已领取或明日再来时结束；总赠币数不再作为广告完成依据"
+    },
+    "AdCloseCurrentTrial": {
+        "next": "AdCloseFallbackLeft"
+    },
+    "ClaimOneReward": {
+        "action": "StartApp",
+        "package": "com.qq.reader",
+        "post_delay": 2500,
+        "next": [
+            "ClaimRewardPageReady",
+            "ClaimOpenRewardFromShelf",
+            "ClaimDismissAddShelf"
+        ],
+        "on_error": "ClaimBackUntilRewardOrShelf"
+    },
+    "ClaimGameReward": {
+        "action": "StartApp",
+        "package": "com.qq.reader",
+        "post_delay": 2500,
+        "next": [
+            "ClaimGameRewardPageReady",
+            "ClaimGameOpenRewardFromShelf",
+            "ClaimGameDismissAddShelf"
+        ],
+        "on_error": "ClaimGameBackUntilRewardOrShelf"
+    },
+    "ClaimGameBackUntilRewardOrShelf": {
+        "action": "ClickKey",
+        "key": 4,
+        "post_delay": 1200,
+        "max_hit": 8,
+        "next": [
+            "ClaimGameDismissAddShelf",
+            "ClaimGameRewardPageReady",
+            "ClaimGameOpenRewardFromShelf",
+            "ClaimGameBackUntilRewardOrShelf"
+        ]
+    },
+    "ClaimGameDismissAddShelf": {
+        "recognition": "OCR",
+        "expected": "^(取消|暂不退出|继续使用)$",
+        "roi": [
+            0,
+            560,
+            720,
+            720
+        ],
+        "action": "Click",
+        "post_delay": 1000,
+        "next": [
+            "ClaimGameOpenRewardFromShelf",
+            "ClaimGameRewardPageReady"
+        ]
+    },
+    "ClaimGameOpenRewardFromShelf": {
+        "recognition": "OCR",
+        "expected": "签到领赠币|本周.*阅读|已连续签到|再读.*分钟领.*赠币|时长兑赠币|领.*赠币",
+        "action": "Click",
+        "post_delay": 2500,
+        "next": [
+            "ClaimGameRewardPopup",
+            "ClaimGameRewardPageReady"
+        ]
+    },
+    "ClaimGameRewardPageReady": {
+        "recognition": "OCR",
+        "expected": "今日已获赠币|每日阅读领赠币|看小视频领好礼|玩游戏领赠币",
+        "next": [
+            "ClaimGameRewardAlreadyDone",
+            "ClaimGameRewardRow",
+            "ClaimGameScrollDown"
+        ]
+    },
+    "ClaimGameRewardRow": {
+        "recognition": "OCR",
+        "expected": "玩游戏领赠币.*",
+        "action": "Click",
+        "target_offset": [
+            466,
+            -12,
+            -130,
+            34
+        ],
+        "post_delay": 1800,
+        "focus": "已定位玩游戏领赠币行并点击右侧立即领取",
+        "next": [
+            "ClaimGameRewardPopup",
+            "ClaimGameRewardAlreadyDone",
+            "ClaimGameRewardClaimed"
+        ]
+    },
+    "ClaimGameRewardPopup": {
+        "recognition": "OCR",
+        "expected": "^我知道了$|^知道了$",
+        "action": "Click",
+        "post_delay": 1000,
+        "next": "ClaimGameRewardClaimed"
+    },
+    "ClaimGameRewardAlreadyDone": {
+        "recognition": "OCR",
+        "expected": "玩游戏领赠币.*(?:已领取|明日再来)|(?:已领取|明日再来).*玩游戏领赠币",
+        "focus": "游戏赠币奖励已领取"
+    },
+    "ClaimGameRewardClaimed": {
+        "recognition": "OCR",
+        "expected": "今日已获赠币|玩游戏领赠币",
+        "focus": "游戏赠币奖励领取点击已完成"
+    },
+    "ClaimGameScrollDown": {
+        "action": "Swipe",
+        "begin": [
+            360,
+            1050
+        ],
+        "end": [
+            360,
+            360
+        ],
+        "duration": 500,
+        "post_delay": 900,
+        "max_hit": 12,
+        "next": [
+            "ClaimGameRewardAlreadyDone",
+            "ClaimGameRewardRow",
+            "ClaimGameScrollDown"
+        ]
+    },
+    "ClaimBackUntilRewardOrShelf": {
+        "action": "ClickKey",
+        "key": 4,
+        "post_delay": 1200,
+        "max_hit": 8,
+        "next": [
+            "ClaimDismissAddShelf",
+            "ClaimRewardPageReady",
+            "ClaimOpenRewardFromShelf",
+            "ClaimBackUntilRewardOrShelf"
+        ]
+    },
+    "ClaimDismissAddShelf": {
+        "recognition": "OCR",
+        "expected": "^(取消|暂不退出|继续使用)$",
+        "roi": [
+            0,
+            560,
+            720,
+            720
+        ],
+        "action": "Click",
+        "post_delay": 1000,
+        "next": [
+            "ClaimOpenRewardFromShelf",
+            "ClaimRewardPageReady"
+        ]
+    },
+    "ClaimOpenRewardFromShelf": {
+        "recognition": "OCR",
+        "expected": "签到领赠币|本周.*阅读|已连续签到|再读.*分钟领.*赠币|时长兑赠币|领.*赠币",
+        "action": "Click",
+        "post_delay": 2500,
+        "next": [
+            "ClaimDismissRewardPopup",
+            "ClaimRewardPageReady"
+        ]
+    },
+    "ClaimRewardEntryUnavailable": {
+        "recognition": "OCR",
+        "expected": "^书架.*$",
+        "roi": [
+            0,
+            0,
+            180,
+            120
+        ],
+        "focus": "当前 QQ 阅读版本书架未显示奖励中心入口；本轮安全结束领奖检查，不执行盲点"
+    },
+    "ClaimRewardPageReady": {
+        "recognition": "OCR",
+        "expected": "今日已获赠币|每日阅读领赠币|看小视频领好礼|玩游戏领赠币",
+        "next": [
+            "ClaimInitialDismissRewardPopup",
+            "ClaimGoTopButton",
+            "ClaimTopReady",
+            "ClaimScrollToTop"
+        ]
+    },
+    "ClaimInitialDismissRewardPopup": {
+        "recognition": "OCR",
+        "expected": "^我知道了$|^知道了$",
+        "action": "Click",
+        "post_delay": 1000,
+        "next": [
+            "ClaimGoTopButton",
+            "ClaimTopReady",
+            "ClaimScrollToTop"
+        ]
+    },
+    "ClaimGoTopButton": {
+        "recognition": "OCR",
+        "expected": "^回到顶部$",
+        "action": "Click",
+        "post_delay": 1200,
+        "next": "ClaimTopReady"
+    },
+    "ClaimTopReady": {
+        "recognition": "OCR",
+        "expected": "签到提醒|已连续签到|每日阅读领赠币",
+        "focus": "奖励页已回到顶部，开始逐页领取",
+        "next": [
+            "ClaimDismissRewardPopup",
+            "ClaimEnabledButton",
+            "ClaimScrollDown"
+        ]
+    },
+    "ClaimScrollToTop": {
+        "action": "Swipe",
+        "begin": [
+            360,
+            300
+        ],
+        "end": [
+            360,
+            1100
+        ],
+        "duration": 500,
+        "post_delay": 800,
+        "max_hit": 12,
+        "next": [
+            "ClaimInitialDismissRewardPopup",
+            "ClaimGoTopButton",
+            "ClaimTopReady",
+            "ClaimScrollToTop"
+        ]
+    },
+    "ClaimDismissRewardPopup": {
+        "recognition": "OCR",
+        "expected": "^我知道了$|^知道了$",
+        "action": "Click",
+        "post_delay": 1000,
+        "next": [
+            "ClaimEnabledButton",
+            "ClaimScrollDown"
+        ]
+    },
+    "ClaimEnabledTextColor": {
+        "recognition": "ColorMatch",
+        "method": 4,
+        "lower": [
+            135,
+            75,
+            20
+        ],
+        "upper": [
+            225,
+            195,
+            155
+        ]
+    },
+    "ClaimEnabledButton": {
+        "recognition": "OCR",
+        "expected": "^(领取|立即领取)$",
+        "order_by": "Vertical",
+        "index": 0,
+        "action": "Click",
+        "post_delay": 1500,
+        "focus": "已领取一个当前可用奖励",
+        "next": [
+            "ClaimDismissRewardPopup",
+            "ClaimScrollDown"
+        ]
+    },
+    "ClaimScrollDown": {
+        "action": "Swipe",
+        "begin": [
+            360,
+            1050
+        ],
+        "end": [
+            360,
+            330
+        ],
+        "duration": 500,
+        "post_delay": 1000,
+        "max_hit": 10,
+        "next": [
+            "ClaimDismissRewardPopup",
+            "ClaimEnabledButton",
+            "ClaimReachedBottom",
+            "ClaimScrollDown"
+        ]
+    },
+    "ClaimReachedBottom": {
+        "recognition": "OCR",
+        "expected": "连续签到180天|本周签满7天|回到顶部",
+        "focus": "奖励页已检查到底，所有可领取按钮均已处理"
+    },
+    "DailyPlanScan": {
+        "action": "StartApp",
+        "package": "com.qq.reader",
+        "post_delay": 3500,
+        "next": [
+            "PlanDismissAddShelf",
+            "PlanRewardPageReady",
+            "PlanOpenRewardFromShelf",
+            "PlanBackUntilRewardOrShelf"
+        ]
+    },
+    "PlanBackUntilRewardOrShelf": {
+        "action": "ClickKey",
+        "key": 4,
+        "post_delay": 1200,
+        "max_hit": 8,
+        "next": [
+            "PlanDismissAddShelf",
+            "PlanRewardPageReady",
+            "PlanOpenRewardFromShelf",
+            "PlanBackUntilRewardOrShelf"
+        ]
+    },
+    "PlanDismissAddShelf": {
+        "recognition": "OCR",
+        "expected": "^(取消|暂不退出|继续使用)$",
+        "roi": [
+            0,
+            560,
+            720,
+            720
+        ],
+        "action": "Click",
+        "post_delay": 1000,
+        "next": [
+            "PlanRewardPageReady",
+            "PlanOpenRewardFromShelf"
+        ]
+    },
+    "PlanOpenRewardFromShelf": {
+        "recognition": "OCR",
+        "expected": "签到领赠币|本周.*阅读|已连续签到|再读.*分钟领.*赠币|时长兑赠币|领.*赠币",
+        "action": "Click",
+        "post_delay": 2500,
+        "next": [
+            "PlanDismissRewardPopup",
+            "PlanRewardPageReady"
+        ]
+    },
+    "PlanRewardPageReady": {
+        "recognition": "OCR",
+        "expected": "今日已获赠币|每日阅读领赠币|看小视频领好礼|玩游戏领赠币",
+        "next": [
+            "PlanDismissRewardPopup",
+            "PlanGoTopButton",
+            "PlanTopReady",
+            "PlanScrollToTop"
+        ]
+    },
+    "PlanDismissRewardPopup": {
+        "recognition": "OCR",
+        "expected": "^我知道了$|^知道了$",
+        "action": "Click",
+        "post_delay": 1000,
+        "next": [
+            "PlanGoTopButton",
+            "PlanTopReady",
+            "PlanScrollToTop"
+        ]
+    },
+    "PlanGoTopButton": {
+        "recognition": "OCR",
+        "expected": "^回到顶部$",
+        "action": "Click",
+        "post_delay": 1200,
+        "next": "PlanTopReady"
+    },
+    "PlanScrollToTop": {
+        "action": "Swipe",
+        "begin": [
+            360,
+            300
+        ],
+        "end": [
+            360,
+            1100
+        ],
+        "duration": 500,
+        "post_delay": 800,
+        "max_hit": 12,
+        "next": [
+            "PlanDismissRewardPopup",
+            "PlanGoTopButton",
+            "PlanTopReady",
+            "PlanScrollToTop"
+        ]
+    },
+    "PlanTopReady": {
+        "recognition": "OCR",
+        "expected": "签到提醒|已连续签到|每日阅读领赠币",
+        "focus": "奖励页已回到顶部，开始扫描任务完成状态",
+        "next": "PlanScanPage0"
+    },
+    "PlanScanPage0": {
+        "recognition": "OCR",
+        "expected": ".*",
+        "focus": "QQ_PLAN_SCAN_PAGE_0",
+        "next": "PlanScrollPage1"
+    },
+    "PlanScrollPage1": {
+        "action": "Swipe",
+        "begin": [
+            360,
+            1050
+        ],
+        "end": [
+            360,
+            330
+        ],
+        "duration": 500,
+        "post_delay": 1000,
+        "next": "PlanScanPage1"
+    },
+    "PlanScanPage1": {
+        "recognition": "OCR",
+        "expected": ".*",
+        "focus": "QQ_PLAN_SCAN_PAGE_1",
+        "next": "PlanScrollPage2"
+    },
+    "PlanScrollPage2": {
+        "action": "Swipe",
+        "begin": [
+            360,
+            1050
+        ],
+        "end": [
+            360,
+            330
+        ],
+        "duration": 500,
+        "post_delay": 1000,
+        "next": "PlanScanPage2"
+    },
+    "PlanScanPage2": {
+        "recognition": "OCR",
+        "expected": ".*",
+        "focus": "QQ_PLAN_SCAN_PAGE_2",
+        "next": "PlanScrollPage3"
+    },
+    "PlanScrollPage3": {
+        "action": "Swipe",
+        "begin": [
+            360,
+            1050
+        ],
+        "end": [
+            360,
+            330
+        ],
+        "duration": 500,
+        "post_delay": 1000,
+        "next": "PlanScanPage3"
+    },
+    "PlanScanPage3": {
+        "recognition": "OCR",
+        "expected": ".*",
+        "focus": "QQ_PLAN_SCAN_PAGE_3",
+        "next": "PlanScrollPage4"
+    },
+    "PlanScrollPage4": {
+        "action": "Swipe",
+        "begin": [
+            360,
+            1050
+        ],
+        "end": [
+            360,
+            330
+        ],
+        "duration": 500,
+        "post_delay": 1000,
+        "next": "PlanScanPage4"
+    },
+    "PlanScanPage4": {
+        "recognition": "OCR",
+        "expected": ".*",
+        "focus": "QQ_PLAN_SCAN_PAGE_4",
+        "next": "PlanScanDone"
+    },
+    "PlanScanDone": {
+        "focus": "QQ_PLAN_SCAN_DONE"
+    },
+    "DailyFinalRewardEvidence": {
+        "action": "StartApp",
+        "package": "com.qq.reader",
+        "post_delay": 2500,
+        "next": [
+            "FinalEvidenceDismissExit",
+            "FinalEvidenceDismissRewardPopup",
+            "FinalEvidenceRewardPageReady",
+            "FinalEvidenceOpenRewardFromShelf",
+            "FinalEvidenceBackUntilRewardOrShelf"
+        ]
+    },
+    "FinalEvidenceBackUntilRewardOrShelf": {
+        "action": "ClickKey",
+        "key": 4,
+        "post_delay": 1200,
+        "max_hit": 8,
+        "next": [
+            "FinalEvidenceDismissExit",
+            "FinalEvidenceDismissRewardPopup",
+            "FinalEvidenceRewardPageReady",
+            "FinalEvidenceOpenRewardFromShelf",
+            "FinalEvidenceBackUntilRewardOrShelf"
+        ]
+    },
+    "FinalEvidenceDismissExit": {
+        "recognition": "OCR",
+        "expected": "^(取消|暂不退出|继续使用)$",
+        "roi": [
+            0,
+            560,
+            720,
+            720
+        ],
+        "action": "Click",
+        "post_delay": 1000,
+        "next": [
+            "FinalEvidenceRewardPageReady",
+            "FinalEvidenceOpenRewardFromShelf"
+        ]
+    },
+    "FinalEvidenceOpenRewardFromShelf": {
+        "recognition": "OCR",
+        "expected": "签到领赠币|本周.*阅读|已连续签到|再读.*分钟领.*赠币|时长兑赠币|领.*赠币",
+        "action": "Click",
+        "post_delay": 2500,
+        "next": [
+            "FinalEvidenceDismissRewardPopup",
+            "FinalEvidenceRewardPageReady"
+        ]
+    },
+    "FinalEvidenceRewardPageReady": {
+        "recognition": "OCR",
+        "expected": "今日已获赠币|每日阅读领赠币|看小视频领好礼|玩游戏领赠币",
+        "next": [
+            "FinalEvidenceDismissRewardPopup",
+            "FinalEvidenceGoTopButton",
+            "FinalEvidenceTopReady",
+            "FinalEvidenceScrollToTop"
+        ]
+    },
+    "FinalEvidenceDismissRewardPopup": {
+        "recognition": "OCR",
+        "expected": "^我知道了$|^知道了$",
+        "action": "Click",
+        "post_delay": 1000,
+        "next": [
+            "FinalEvidenceGoTopButton",
+            "FinalEvidenceTopReady",
+            "FinalEvidenceScrollToTop"
+        ]
+    },
+    "FinalEvidenceGoTopButton": {
+        "recognition": "OCR",
+        "expected": "^回到顶部$",
+        "action": "Click",
+        "post_delay": 1200,
+        "next": "FinalEvidenceTopReady"
+    },
+    "FinalEvidenceScrollToTop": {
+        "action": "Swipe",
+        "begin": [
+            360,
+            300
+        ],
+        "end": [
+            360,
+            1100
+        ],
+        "duration": 500,
+        "post_delay": 800,
+        "max_hit": 12,
+        "next": [
+            "FinalEvidenceDismissRewardPopup",
+            "FinalEvidenceGoTopButton",
+            "FinalEvidenceTopReady",
+            "FinalEvidenceScrollToTop"
+        ]
+    },
+    "FinalEvidenceTopReady": {
+        "recognition": "OCR",
+        "expected": "今日已获赠币.*|签到提醒|已连续签到|每日阅读领赠币",
+        "focus": "QQ_FINAL_REWARD_EVIDENCE_READY"
+    },
+    "GameConfirmUserAgreement": {
+        "recognition": "OCR",
+        "expected": "^确认$",
+        "action": "Click",
+        "post_delay": 800,
+        "focus": "检测到游戏用户协议详情页，确认后回到登录页点击进入游戏",
+        "next": "GameLandingReady"
+    },
+    "AdBrowseOfferModal": {
+        "recognition": "OCR",
+        "expected": "了解详情|跳转详情页或第三方应用|下载QQ浏览器|QQ浏览器",
+        "action": "ClickKey",
+        "key": 4,
+        "post_delay": 1800,
+        "focus": "已用返回键关闭仅展示了解详情的广告弹窗，不进入详情或第三方页面",
+        "next": [
+            "AdBrowseOfferModal",
+            "AdCouponPopup",
+            "AdClickIKnow",
+            "AdCaptchaDetected",
+            "AdReturnedAfterClose"
+        ],
+        "on_error": "AdCloseByBackKey"
+    }
+}

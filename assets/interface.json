@@ -1,0 +1,63 @@
+{
+    "interface_version": 2,
+    "name": "MaaQQReader",
+    "label": "QQ阅读每日任务",
+    "title": "QQ阅读每日任务",
+    "description": "用于 MuMu 模拟器中完成 QQ 阅读页面识别、阅读、听书、内置游戏、奖励页广告、等级页广告、领奖，以及大众点评和百度地图跳转流程。京东金融不执行。",
+    "license": "MIT",
+    "welcome": "默认执行：自动阅读 2 次、每次 35 分钟；听书 35 分钟；游戏 25 分钟。各任务串行运行，次数与时长可在可视化界面或配置文件中修改。",
+    "version": "0.4.0",
+    "controller": [
+        {
+            "name": "MuMu安卓端",
+            "type": "Adb",
+            "display_short_side": 720
+        }
+    ],
+    "resource": [
+        {
+            "name": "QQ阅读",
+            "path": [
+                "./resource"
+            ]
+        }
+    ],
+    "task": [
+        {
+            "name": "00 启动 QQ 阅读并关闭开屏弹窗",
+            "entry": "LaunchQQReader"
+        },
+        {
+            "name": "00 页面识别检查",
+            "entry": "SmokeTest"
+        },
+        {
+            "name": "01 每日自动阅读（默认2次×35分钟）",
+            "entry": "DailyReadingFlow"
+        },
+        {
+            "name": "02 每日听书（默认35分钟，结束后暂停）",
+            "entry": "DailyAudiobookFlow"
+        },
+        {
+            "name": "03 每日游戏（默认25分钟）",
+            "entry": "DailyGameFlow"
+        },
+        {
+            "name": "04 每日广告完整流程（自动至12/12）",
+            "entry": "DailyAdFlow"
+        },
+        {
+            "name": "05 外部应用每日流程（大众点评+百度地图）",
+            "entry": "DailyExternalAppFlow"
+        },
+        {
+            "name": "06 等级页广告每日流程（赠币+积分）",
+            "entry": "DailyLevelAdFlow"
+        },
+        {
+            "name": "07 领取全部已完成奖励",
+            "entry": "ClaimOneReward"
+        }
+    ]
+}
