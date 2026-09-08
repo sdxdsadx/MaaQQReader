@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "machine": {
+    "adb_path": "C:\\path\\to\\adb.exe",
+    "adb_address": "127.0.0.1:16384",
+    "package_name": "com.qq.reader",
+    "emulator_path": "C:\\path\\to\\MuMuPlayer.exe",
+    "python_executable": "C:\\path\\to\\python.exe",
+    "resolution": [720, 1280],
+    "screenshot_dir": "runtime/screenshots",
+    "log_dir": "runtime/logs",
+    "record_dir": "runtime/records"
+  },
+  "captcha": {
+    "solver": "manual",
+    "max_attempts": 2,
+    "verify_frames": 3,
+    "verify_interval_seconds": 1.0,
+    "slide_roi": null
+  },
+  "tasks": {
+    "DailyAdFlow": {
+      "enabled": true,
+      "timeout_seconds": 2700,
+      "retry": 3,
+      "feature_overrides": {}
+    },
+    "DailyGameFlow": {
+      "enabled": true,
+      "timeout_seconds": 1800,
+      "retry": 3,
+      "feature_overrides": {}
+    }
+  }
+}

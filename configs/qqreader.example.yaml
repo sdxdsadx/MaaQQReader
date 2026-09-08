@@ -1,0 +1,33 @@
+# QQReader 本机配置示例（占位值，复制为 configs/qqreader.yaml 后按机器填写）
+# 统一 UTF-8；路径支持中文与空格。真实密钥/账号不要写进仓库。
+version: 1
+
+machine:
+  adb_path: "C:\\path\\to\\adb.exe"
+  adb_address: "127.0.0.1:16384"
+  package_name: "com.qq.reader"
+  emulator_path: "C:\\path\\to\\MuMuPlayer.exe"
+  python_executable: "C:\\path\\to\\python.exe"
+  resolution: [720, 1280]
+  screenshot_dir: "runtime/screenshots"
+  log_dir: "runtime/logs"
+  record_dir: "runtime/records"
+
+captcha:
+  solver: "manual"          # manual | ddddocr | slide | auto
+  max_attempts: 2
+  verify_frames: 3
+  verify_interval_seconds: 1.0
+  slide_roi: null           # [x, y, w, h]，实机标定后再填
+
+tasks:
+  DailyAdFlow:
+    enabled: true
+    timeout_seconds: 2700
+    retry: 3
+    feature_overrides: {}
+  DailyGameFlow:
+    enabled: true
+    timeout_seconds: 1800
+    retry: 3
+    feature_overrides: {}
