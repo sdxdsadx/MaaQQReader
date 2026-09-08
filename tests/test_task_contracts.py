@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from qqreader.captcha.guard import ManualCaptchaGuard
+from qqreader.config import ConfigError, loads_config
 from qqreader.contract.contract import CONTRACT_FIELDS, TimeoutSpec
 from qqreader.page.feature_keys import DEFAULT_FEATURE_KEYS
 from qqreader.page.observation import PageObservation
@@ -221,3 +224,52 @@ def test_action_validation() -> None:
         Action(ActionKind.TAP_FEATURE)
     with pytest.raises(ContractViolation):
         Action(ActionKind.WAIT, seconds=-1)
+
+
+def _config_with(tasks: dict, captcha: dict | None = None):
+    return loads_config(
+        json.dumps(
+            {
+                "version": 1,
+                "machine": {
+                    "adb_path": "C:\\tools\\adb.exe",
+                    "adb_address": "127.0.0.1:16384",
+                },
+                "captcha": captcha or {"solver": "manual"},
+                "tasks": tasks,
+            }
+        )
+    )
+
+
+def test_default_registry_uses_config_enabled_and_timeout() -> None:
+    config = _config_with(
+        {
+            "DailyAdFlow": {"enabled": True, "timeout_seconds": 99},
+            "DailyGameFlow": {"enabled": False},
+        }
+    )
+    registry = build_default_registry(
+        QueueObserver([home_observation()]), SimulatedDevice(), config=config
+    )
+    assert registry.names() == (AD_TASK_NAME,)
+    assert registry.get(AD_TASK_NAME).contract.timeout.seconds == 99
+
+
+def test_default_registry_rejects_auto_solver_without_guard() -> None:
+    config = _config_with({}, captcha={"solver": "ddddocr"})
+    with pytest.raises(ConfigError, match="captcha_guard"):
+        build_default_registry(
+            QueueObserver([home_observation()]), SimulatedDevice(), config=config
+        )
+
+
+def test_default_registry_accepts_injected_guard_for_auto_solver() -> None:
+    config = _config_with({}, captcha={"solver": "ddddocr"})
+    registry = build_default_registry(
+        QueueObserver([home_observation()]),
+        SimulatedDevice(),
+        config=config,
+        captcha_guard=ManualCaptchaGuard(),
+    )
+    assert AD_TASK_NAME in registry
