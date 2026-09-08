@@ -1,0 +1,87 @@
+"""页面特征键（逻辑名）。
+
+这里只放**逻辑键**，不放盘符、绝对路径或硬编码坐标。真实模板文件名、OCR
+正则、ROI、阈值由识别适配器/配置提供，属于 QQR-6（多特征识别策略）与
+QQR-14/15（任务接入）的调优范围。
+
+默认值来自旧工程 ``assets/resource/pipeline/qq_reader_trial.json`` 的
+OCR ``expected``（静态审计），仅作为**初始逻辑名**；按 AGENTS.md §3.10.3/4，
+必须用实际设备重新截图校准后才能视为有效资源。
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Optional
+
+
+@dataclass(frozen=True)
+class FeatureKeys:
+    """各页面状态的逻辑特征名。"""
+
+    # --- App ---
+    qq_reader_package: str = "com.qq.reader"
+    #: 第三方小游戏包名；未确认前保持 None，状态定义会跳过当前 App 特征。
+    game_package: Optional[str] = None
+
+    # --- HOME（QQ 阅读主页/书架，公共起点）---
+    home_ocr_shelf: str = "书架"
+    home_ocr_mine: str = "我的"
+    home_nav_my: str = "home.nav_my"                 # 固定图标：底部「我的」
+    home_bottom_nav: str = "home.bottom_nav"         # 结构特征：底部导航
+    home_reward_entry: str = "home.reward_entry"     # 主页/书架上的奖励页入口
+
+    # --- REWARD_HOME（奖励页）---
+    reward_header: str = "reward.header"             # 固定图标：奖励页标题栏
+    reward_bottom_nav: str = "reward.bottom_nav"     # 结构特征
+    reward_ocr_granted: str = "今日已获赠币"
+    reward_ocr_ad_banner: str = "看小视频领好礼"
+    reward_ocr_game_banner: str = "玩游戏领赠币"
+    reward_ocr_watch: str = "立即观看"
+    reward_ocr_done: str = "明日再来"
+
+    # --- AD_PLAYING / AD_RESULT ---
+    ad_video_surface: str = "ad.video_surface"       # 结构特征：视频播放区域
+    ad_skip: str = "ad.skip"                         # 固定图标：跳过/关闭按钮
+    ad_ocr_countdown: str = "广告"
+    ad_ocr_skip: str = "跳过"
+    ad_ocr_close: str = "关闭"
+    ad_result_close: str = "ad.result_close"         # 固定图标：结果页关闭
+    ad_ocr_issued: str = "奖品已发放"
+    ad_ocr_coupon: str = "恭喜获得优惠券"
+    ad_success_counter: str = "12/12"                # 唯一正常完成标志之一
+    ad_success_done: str = "明日再来"
+    #: 旧工程 AdDailyComplete 的正则（静态审计，待实机校准）。
+    ad_success_regex: str = (
+        r"(?:12\s*/\s*12)|(?:(?:看小视频|看视频).*(?:明日再来|已领取|已领))"
+    )
+
+    # --- CAPTCHA ---
+    captcha_overlay: str = "captcha.overlay"         # 结构特征：验证码遮罩
+    captcha_prompt_icon: str = "captcha.prompt_icon"  # 固定图标：顶部提示
+    captcha_slider_track: str = "captcha.slider_track"  # 局部模板：滑块轨道
+    captcha_ocr_pick: str = "请在下图依次点击"        # 图片顺序点选验证码
+    captcha_ocr_slider: str = "拖动滑块"              # 滑动验证码（待实机确认）
+
+    # --- GAME ---
+    game_entry: str = "game.entry"                   # 奖励页/主页的游戏入口
+    game_ocr_hall: str = "游戏大厅"
+    game_loading_marker: str = "game.loading_marker"  # 结构特征：游戏登录页
+    game_login_button: str = "game.login_button"      # 局部模板：登录按钮
+    game_ocr_select_server: str = "点击选服"
+    game_ocr_enter: str = "进入游戏"
+    game_ocr_enter_alt: str = "踏入仙途"
+    game_hud: str = "game.hud"                       # 结构特征：游戏内 HUD
+    game_ocr_active: str = "领币"
+    game_exit_menu: str = "game.exit_menu"           # 固定图标：悬浮菜单
+    game_ocr_exit: str = "退出"
+    game_exit_dialog: str = "game.exit_dialog"       # 局部模板：退出确认
+    #: 旧工程「玩游戏领赠币 + 已领取/明日再来」完成判定（静态审计，待实机校准）。
+    game_success_regex: str = r"玩游戏领赠币.*(?:已领取|明日再来)"
+
+    # --- 通用弹窗 ---
+    popup_close: str = "popup.close"
+    popup_ocr_cancel: str = "取消"
+
+
+DEFAULT_FEATURE_KEYS = FeatureKeys()

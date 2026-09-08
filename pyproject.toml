@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qqreader"
+version = "0.1.0"
+description = "QQ 阅读每日任务自动化（MaaFramework 重构）"
+readme = "README.md"
+requires-python = ">=3.9"
+# 核心状态机 / 契约 / 恢复 / 验证码 / 调度器不依赖任何第三方库。
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+include = ["qqreader*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
