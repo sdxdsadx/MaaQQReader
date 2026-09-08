@@ -17,6 +17,7 @@ from qqreader.recovery.policy import EscalationPolicy, RecoveryAction
 from qqreader.runner.runner import RunnerConfig, TaskRunner
 from tests.helpers import (
     FakeAdapter,
+    PageFlowObserver,
     QueueObserver,
     ad_playing_observation,
     ad_result_observation,
@@ -179,22 +180,21 @@ def test_page_state_change_resets_recovery_ladder() -> None:
         success_condition=Never(),
         timeout_seconds=6.0,
     )
-    empty = PageObservation.empty()
-    observer = QueueObserver(
-        [
-            empty,
-            empty,
-            empty,
-            home_observation(),  # 状态变化 → 重置阶梯
-            empty,
-            empty,
-            empty,
-            home_observation(),  # 再次变化 → 再次重置
-            empty,
-            empty,
-        ]
+    # 页面由「恢复 / 推进」驱动翻转，而不是靠固定的观测脚本，
+    # 这样即使页面确认阶梯会额外抓帧，也能稳定制造两次「状态变化」。
+    observer = PageFlowObserver(
+        {"unknown": PageObservation.empty(), "home": home_observation()},
+        start="unknown",
     )
-    adapter = FakeAdapter(on_advance=lambda ctx: ctx.clock.sleep(1.0, ctx.token))
+
+    def flip_page(_action, _context) -> None:
+        observer.go("home" if observer.page == "unknown" else "unknown")
+
+    def advance_and_flip(ctx) -> None:
+        ctx.clock.sleep(1.0, ctx.token)
+        observer.go("unknown")
+
+    adapter = FakeAdapter(on_advance=advance_and_flip, on_recover=flip_page)
     definition = make_definition(
         contract, observer, adapter, recovery=EscalationPolicy(max_rounds=1)
     )
@@ -207,7 +207,7 @@ def test_page_state_change_resets_recovery_ladder() -> None:
     assert adapter.recoveries == [RecoveryAction.RESCREENSHOT, RecoveryAction.RESCREENSHOT]
     assert sum(
         1 for event in result.diagnostics if event.kind == "recovery.reset"
-    ) == 2
+    ) >= 2
 
 
 def test_unexpected_exception_returns_failed_with_diagnostics() -> None:

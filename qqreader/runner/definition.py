@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 from ..captcha.guard import CaptchaGuard
 from ..contract.contract import TaskContract
@@ -16,6 +17,7 @@ from ..page.recognizer import PageStateRecognizer
 from ..recovery.policy import RecoveryStrategy
 from ..runtime.context import TaskAdapter
 from ..runtime.observer import PageObserver
+from .confirmation import PageConfirmer
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,8 @@ class TaskDefinition:
     recovery: RecoveryStrategy
     captcha_guard: CaptchaGuard
     state_recognizer: PageStateRecognizer
+    #: 识别不到目标时的确认阶梯（QQR-5）；为 None 时由执行器按契约构造默认值。
+    confirmer: Optional[PageConfirmer] = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.contract, TaskContract):

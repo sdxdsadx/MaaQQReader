@@ -233,11 +233,13 @@ class FakeAdapter:
         self,
         steps: Optional[Sequence[StepResult]] = None,
         on_advance: Optional[Callable[[TaskContext], None]] = None,
+        on_recover: Optional[Callable[[RecoveryAction, TaskContext], None]] = None,
     ) -> None:
         self.advances: List[PageState] = []
         self.recoveries: List[RecoveryAction] = []
         self._steps = list(steps or [])
         self._on_advance = on_advance
+        self._on_recover = on_recover
 
     def advance(self, context: TaskContext) -> StepResult:
         self.advances.append(context.state)
@@ -249,6 +251,8 @@ class FakeAdapter:
 
     def recover(self, action: RecoveryAction, context: TaskContext) -> StepResult:
         self.recoveries.append(action)
+        if self._on_recover is not None:
+            self._on_recover(action, context)
         return StepResult(f"假适配器恢复 {action.value}", progress=True)
 
 
@@ -349,6 +353,7 @@ def make_definition(
     recovery=None,
     captcha_guard=None,
     recognizer=None,
+    confirmer=None,
 ):
     from qqreader.runner.definition import TaskDefinition
 
@@ -359,4 +364,5 @@ def make_definition(
         recovery=recovery or EscalationPolicy(),
         captcha_guard=captcha_guard or StubCaptchaGuard(),
         state_recognizer=recognizer or make_recognizer(),
+        confirmer=confirmer,
     )

@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Tuple
 
@@ -24,10 +24,12 @@ from ..contract.conditions import ConditionResult
 from ..contract.contract import FatalErrorSpec, RecoverableErrorSpec
 from ..contract.outcome import DiagnosticEvent, TaskOutcome, TaskResult
 from ..errors import Cancelled
+from ..page.recognizer import StateDecision
 from ..page.states import PageState, RunState
 from ..recovery.policy import RecoveryAction
 from ..runtime.clock import CancellationToken, Clock
 from ..runtime.context import TaskContext
+from .confirmation import ConfirmationConfig, PageConfirmer, feature_report
 from .definition import TaskDefinition
 
 #: 当前执行阶段在 ``TaskContext.data`` 中的键；适配器可据此做安全的引导动作。
@@ -46,6 +48,12 @@ class RunnerConfig:
     max_unknown_rechecks: int = 3
     #: 恢复阶梯耗尽后每次重试之间的等待，避免空转。
     recovery_pause_seconds: float = 0.25
+    #: 页面无法确认时每轮确认后的等待，避免在 UNKNOWN 上空转（也绝不允许盲点）。
+    unknown_pause_seconds: float = 0.5
+    #: 确认到弹窗遮挡时最多定向关闭几次；之后交给恢复阶梯继续升级。
+    max_popup_dismissals: int = 1
+    #: 页面确认阶梯开关（QQR-5 / §3.6）：识别失败先确认，再决定是否恢复。
+    confirmation: ConfirmationConfig = field(default_factory=ConfirmationConfig)
 
     def __post_init__(self) -> None:
         if self.max_steps < 1:
@@ -56,6 +64,10 @@ class RunnerConfig:
             raise ValueError("max_unknown_rechecks 必须 >= 1")
         if self.recovery_pause_seconds < 0:
             raise ValueError("recovery_pause_seconds 必须 >= 0")
+        if self.unknown_pause_seconds < 0:
+            raise ValueError("unknown_pause_seconds 必须 >= 0")
+        if self.max_popup_dismissals < 1:
+            raise ValueError("max_popup_dismissals 必须 >= 1")
 
 
 class RunPhase(str, Enum):
@@ -93,6 +105,14 @@ class TaskRunner:
         self._clock = clock
         self._token = token or CancellationToken()
         self._config = config or RunnerConfig()
+        # QQR-5：识别不到目标时先做多特征页面确认，再由本循环决定是否恢复。
+        # 任务定义可注入自定义确认器（便于替换/测试），否则按契约构造默认实现。
+        self._confirmer = definition.confirmer or PageConfirmer(
+            self._observer,
+            self._recognizer,
+            captcha_condition=self._contract.captcha_condition,
+            config=self._config.confirmation,
+        )
 
     @property
     def definition(self) -> TaskDefinition:
@@ -218,7 +238,9 @@ class TaskRunner:
                     return terminal
                 continue
 
-            # 2) 状态未确认：只允许重新判断 / 恢复，绝不判失败。
+            # 2) 状态未确认：先按 QQR-5 的确认阶梯「重新截图 → 重新判断 →
+            #    模板 B / OCR / 页面特征 → 查弹窗 → 查验证码 → 刷新状态」，
+            #    确认失败只允许恢复，绝不在 UNKNOWN 上盲点，也绝不判失败。
             if decision.needs_recheck:
                 streak = int(context.get("unknown_streak", 0)) + 1
                 context.update_data(unknown_streak=streak)
@@ -226,11 +248,64 @@ class TaskRunner:
                     diagnostics,
                     context,
                     "page.unknown",
-                    f"第 {streak} 次未确认页面状态；重新判断，不判失败",
+                    f"第 {streak} 次未确认页面状态；先做页面确认，不判失败",
                 )
-                if streak >= self._config.max_unknown_rechecks:
-                    context.update_data(unknown_streak=0)
-                    self._recover(context, diagnostics, "state_unknown")
+                # QQR-5：识别失败必须留下「尝试了哪些特征、各自结果」。
+                self._record_feature_report(context, diagnostics, decision)
+                confirmation = self._confirmer.confirm(
+                    context, observation=observation, decision=decision
+                )
+                diagnostics.extend(confirmation.diagnostics())
+                if confirmation.captcha_detected:
+                    terminal = self._handle_captcha(context, diagnostics)
+                    if terminal is not None:
+                        return terminal
+                    continue
+                if confirmation.confirmed:
+                    # 确认本身发现页面可识别了，等价于「状态变化 → 阶梯重置」。
+                    if (
+                        decision.state is not confirmation.state
+                        and (
+                            context.get("recovery_attempt")
+                            or context.get("recovery_exhausted")
+                        )
+                    ):
+                        context.update_data(recovery_attempt=0, recovery_exhausted=False)
+                        self._record(
+                            diagnostics,
+                            context,
+                            "recovery.reset",
+                            f"页面确认 {decision.state.value} → "
+                            f"{confirmation.state.value}，恢复阶梯重置",
+                        )
+                    context.update_data(unknown_streak=0, popup_dismissals=0)
+                    self._record(
+                        diagnostics,
+                        context,
+                        "page.confirmed",
+                        f"页面确认成功: {context.state.value}（{confirmation.reason}）",
+                        confidence=round(confirmation.confidence, 3),
+                    )
+                    # 用刚确认的状态继续走契约阶段判断；不点击、不跳过阶段。
+                else:
+                    if confirmation.popup_detected:
+                        dismissals = int(context.get("popup_dismissals", 0)) + 1
+                        context.update_data(popup_dismissals=dismissals)
+                        if dismissals <= self._config.max_popup_dismissals:
+                            # 弹窗遮挡：优先定向关闭，不占用恢复阶梯。
+                            self._recover(
+                                context,
+                                diagnostics,
+                                "popup_blocking",
+                                action=RecoveryAction.DISMISS_POPUP,
+                            )
+                        else:
+                            # 弹窗反复出现：交给恢复阶梯继续升级（返回 / 重进 / 重启）。
+                            self._recover(context, diagnostics, "popup_blocking")
+                    elif streak >= self._config.max_unknown_rechecks:
+                        context.update_data(unknown_streak=0)
+                        self._recover(context, diagnostics, "state_unknown")
+                    self._pause_unknown()
                     continue
             elif context.get("unknown_streak"):
                 context.update_data(unknown_streak=0)
@@ -422,9 +497,34 @@ class TaskRunner:
     # ------------------------------------------------------------ 恢复
 
     def _recover(
-        self, context: TaskContext, diagnostics: List[DiagnosticEvent], reason: str
+        self,
+        context: TaskContext,
+        diagnostics: List[DiagnosticEvent],
+        reason: str,
+        *,
+        action: Optional[RecoveryAction] = None,
     ) -> None:
         context.run_state = RunState.RECOVERING
+        if action is not None:
+            # 定向恢复（例如确认到弹窗遮挡）：只执行这一动作，不占用恢复阶梯。
+            self._record(
+                diagnostics,
+                context,
+                "recovery.action",
+                f"执行定向恢复动作 {action.value}",
+                reason=reason,
+                targeted=True,
+            )
+            step = self._adapter.recover(action, context)
+            self._record(
+                diagnostics,
+                context,
+                "recovery.done",
+                step.description,
+                action=action.value,
+                actions=list(step.actions),
+            )
+            return
         attempt = int(context.get("recovery_attempt", 0))
         if self._recovery.exhausted(attempt):
             context.update_data(recovery_exhausted=True)
@@ -469,6 +569,29 @@ class TaskRunner:
     def _pause_after_exhausted(self) -> None:
         if self._config.recovery_pause_seconds > 0:
             self._clock.sleep(self._config.recovery_pause_seconds, self._token)
+
+    def _pause_unknown(self) -> None:
+        """无法确认页面时短暂等待，避免空转（绝不在此盲点）。"""
+        if self._config.unknown_pause_seconds > 0:
+            self._clock.sleep(self._config.unknown_pause_seconds, self._token)
+
+    def _record_feature_report(
+        self,
+        context: TaskContext,
+        diagnostics: List[DiagnosticEvent],
+        decision: Optional[StateDecision],
+    ) -> None:
+        """QQR-5：把「尝试了哪些特征、各自结果」写进诊断。"""
+        lines = feature_report(decision)
+        if not lines:
+            return
+        self._record(
+            diagnostics,
+            context,
+            "page.features",
+            "\n".join(lines),
+            features=list(lines),
+        )
 
     # ------------------------------------------------------------ 收尾
 

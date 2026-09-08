@@ -24,14 +24,14 @@
 
 ### 实现状态（2026-09-09，本仓库）
 
-QQR-3「页面状态机与任务契约」的核心已落地；`py -3.10 -m pytest` 当前 **71 个单元测试全部通过**（10 个测试文件）。事实边界如下，未验证项不得当成已完成：
+QQR-3「页面状态机与任务契约」与 QQR-5「识别失败改为页面确认与恢复」的核心已落地；`py -3.10 -m pytest` 当前 **77 个单元测试全部通过**（11 个测试文件）。事实边界如下，未验证项不得当成已完成：
 
 | 已实现（有单元测试覆盖） | 未实现 / 未验证 |
 | --- | --- |
-| `PageState`（`HOME` + 规范要求的 8 个状态）、多特征识别、`UNKNOWN` 只重判/恢复 | 未接入 MaaFramework；`PageObserver` / `DeviceController` / `TaskAdapter` 仅有协议与测试假对象 |
+| `PageState`（`HOME` + 规范要求的 8 个状态）、多特征识别、`UNKNOWN` 只走确认/恢复（绝不判失败、绝不盲点） | 未接入 MaaFramework；`PageObserver` / `DeviceController` / `TaskAdapter` 仅有协议与测试假对象 |
 | `TaskContract` 8 字段、条件原语、`TaskOutcome` / `TaskResult` | 未在模拟器/真机运行任何真实任务；模板、ROI、阈值、OCR 文案未重新标定（QQR-6 / QQR-14 / QQR-15） |
 | 恢复阶梯 `EscalationPolicy`；验证码守卫（默认等待人工；求解后必须重新观测确认消失） | 验证码自动求解未实现 |
-| `TaskRunner`（超时 / 取消 / `UNKNOWN` / 验证码优先阻塞）、`TaskRegistry`、`PageConfirmer` | GUI、配置存储、运行记录、MaaFramework 适配未实现 |
+| `TaskRunner`（超时 / 取消 / 验证码优先阻塞）、`TaskRegistry`、`PageConfirmer`（QQR-5：识别失败先确认，`UNKNOWN` 上不点击也不判失败，`page.features` 记录每个候选特征结果） | GUI、配置存储、运行记录、MaaFramework 适配未实现 |
 | 广告 `DailyAdFlow`、游戏 `DailyGameFlow` 的契约与声明式动作计划 | 广告 45 分钟、游戏挂机 25 分钟、游戏超时 30 分钟等为初始默认值，待用户确认 |
 
 核心包 `qqreader/` 无第三方依赖；测试需要 `pytest`。
@@ -392,5 +392,5 @@ SUCCESS   FAILED   TIMEOUT   BLOCKED_BY_CAPTCHA   SKIPPED
 ### 当前下一步
 
 1. 完成 3.10 的写死值审计与验证码调用链实机确认（对应 P0 第三项）。
-2. QQR-3 的页面状态机 / 任务契约 / 调度核心已在本仓库落地并有单元测试覆盖；下一步接入 MaaFramework 的真实 `PageObserver` / `DeviceController` / `TaskAdapter`。
+2. QQR-3 的页面状态机 / 任务契约 / 调度核心、QQR-5 的「识别失败先确认与恢复」已在本仓库落地并有单元测试覆盖（含验收场景 B）；下一步接入 MaaFramework 的真实 `PageObserver` / `DeviceController` / `TaskAdapter`。
 3. 在模拟器上按 5.2 的场景 A/B/C/D 跑通广告与游戏任务；在此之前先完成 QQR-6 / QQR-14 / QQR-15 的真实截图与阈值校准。

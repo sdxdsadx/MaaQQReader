@@ -54,6 +54,34 @@ CONFIRMATION_LADDER: Tuple[ConfirmationStep, ...] = (
 )
 
 
+def feature_report(decision: Optional[StateDecision]) -> Tuple[str, ...]:
+    """把一次状态判断展开成「每个候选状态命中了哪些特征、缺了什么」。
+
+    QQR-5 要求识别失败必须能回答「尝试了哪些特征、各自结果」；调度核心在
+    每次未确认时都会把本函数的输出写进 ``page.features`` 诊断事件。
+    """
+
+    if decision is None:
+        return ()
+    lines = []
+    for candidate in decision.candidates:
+        matched = ", ".join(
+            f"{m.kind.value}:{m.spec.key or (m.spec.candidates[0] if m.spec.candidates else '?')}"
+            for m in candidate.matched
+        ) or "无"
+        missing = ", ".join(
+            f"{m.kind.value}:{m.spec.key or (m.spec.candidates[0] if m.spec.candidates else '?')}"
+            f"(score={m.score:.2f},阈值={m.spec.threshold:.2f})"
+            for m in candidate.missing_required
+        ) or "无"
+        lines.append(
+            f"{candidate.state.value} score={candidate.score:.3f} "
+            f"matched={candidate.matched_count}/{candidate.total_count} "
+            f"required_ok={candidate.required_ok} 命中=[{matched}] 缺失必需=[{missing}]"
+        )
+    return tuple(lines)
+
+
 @dataclass(frozen=True)
 class ConfirmationConfig:
     """确认阶梯开关。
@@ -154,6 +182,8 @@ class ConfirmationResult:
                     data={
                         "confirmed": attempt.confirmed,
                         "confidence": round(attempt.confidence, 3),
+                        # QQR-5：识别失败必须能回答「尝试了哪些特征、各自结果」。
+                        "features": list(attempt.feature_report),
                     },
                 )
             )
@@ -169,6 +199,8 @@ class ConfirmationResult:
                     data={
                         "steps": [s.value for s in self.steps()],
                         "popup_detected": self.popup_detected,
+                        # QQR-5：识别失败必须能回答「尝试了哪些特征、各自结果」。
+                        "features": list(self.feature_report()),
                     },
                 )
             )
@@ -379,22 +411,4 @@ class PageConfirmer:
 
     @staticmethod
     def _feature_report(decision: Optional[StateDecision]) -> Tuple[str, ...]:
-        if decision is None:
-            return ()
-        lines = []
-        for candidate in decision.candidates:
-            matched = ", ".join(
-                f"{m.kind.value}:{m.spec.key or (m.spec.candidates[0] if m.spec.candidates else '?')}"
-                for m in candidate.matched
-            ) or "无"
-            missing = ", ".join(
-                f"{m.kind.value}:{m.spec.key or (m.spec.candidates[0] if m.spec.candidates else '?')}"
-                f"(score={m.score:.2f},阈值={m.spec.threshold:.2f})"
-                for m in candidate.missing_required
-            ) or "无"
-            lines.append(
-                f"{candidate.state.value} score={candidate.score:.3f} "
-                f"matched={candidate.matched_count}/{candidate.total_count} "
-                f"required_ok={candidate.required_ok} 命中=[{matched}] 缺失必需=[{missing}]"
-            )
-        return tuple(lines)
+        return feature_report(decision)
