@@ -46,6 +46,47 @@ def build_run_game_flow_command(
     return tuple(command)
 
 
+def build_run_task_command(
+    python_executable: str,
+    repo_root: Path,
+    config_path: Path,
+    task_key: str,
+    *,
+    python_args: Sequence[str] = (),
+    settings: Optional[dict] = None,
+    quiet: bool = False,
+) -> Tuple[str, ...]:
+    """构造 ``scripts/run_task.py --task ...`` 的 subprocess 参数。"""
+    if not task_key.strip():
+        raise ValueError("task_key 不能为空")
+    if not str(config_path).strip():
+        raise ValueError("config_path 不能为空")
+    script = Path(repo_root) / "scripts" / "run_task.py"
+    command = [
+        str(python_executable),
+        *[str(part) for part in python_args],
+        str(script),
+        "--config",
+        str(config_path),
+        "--task",
+        task_key,
+    ]
+    values = dict(settings or {})
+    for key in ("duration_minutes", "timeout_minutes", "max_steps"):
+        if key not in values or values[key] is None:
+            continue
+        value = values[key]
+        text = (
+            str(int(value))
+            if key == "max_steps"
+            else f"{float(value):g}"
+        )
+        command.extend((f"--{key.replace('_', '-')}", text))
+    if quiet:
+        command.append("--quiet")
+    return tuple(command)
+
+
 def build_emulator_launch_command(
     emulator_path: Path,
     *,

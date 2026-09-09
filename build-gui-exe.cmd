@@ -30,6 +30,7 @@ if errorlevel 1 (
 
 echo.
 echo [OK] dist\QQReaderGUI.exe
-echo Put the exe in this repo root before running it; it uses local Python 3.10 for scripts\run_game_flow.py.
+echo Put the exe in this repo root before running it; it uses local Python 3.10 for scripts\\run_task.py.
 pause
 endlocal
+
