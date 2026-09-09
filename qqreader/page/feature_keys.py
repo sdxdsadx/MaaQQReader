@@ -75,7 +75,9 @@ class FeatureKeys:
     captcha_prompt_icon: str = "captcha.prompt_icon"  # 固定图标：顶部提示
     captcha_slider_track: str = "captcha.slider_track"  # 局部模板：滑块轨道
     captcha_ocr_pick: str = "请在下图依次点击"        # 图片顺序点选验证码
-    captcha_ocr_slider: str = "拖动滑块"              # 滑动验证码（待实机确认）
+    captcha_ocr_title: str = "安全验证"              # 验证码页标题
+    #: 滑动验证码文案；正则避免依赖单一版本。
+    captcha_ocr_slider: str = "拖动下方滑块|拖动滑块|滑动验证|完成拼图"
 
     # --- GAME ---
     game_entry: str = "game.entry"                   # 奖励页/主页的游戏入口（模板逻辑名，待实机校准）

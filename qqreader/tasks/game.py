@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
+from ..captcha.factory import build_default_captcha_guard
 from ..captcha.guard import CaptchaGuard, ManualCaptchaGuard
 from ..contract.conditions import StateIs, all_of, feature, state_in
 from ..contract.contract import TaskContract, TimeoutSpec
@@ -486,6 +487,7 @@ def build_game_definition(
     entry_scroll_action: Optional[Action] = None,
 ) -> TaskDefinition:
     """装配游戏任务。"""
+    contract = build_game_contract(keys, timeout_seconds=timeout_seconds)
     if entry_scroll_action is None:
         # 旧 pipeline GameScrollToPlay 的坐标，作为配置化之前的滚动兜底；
         # 仅用于奖励页游戏入口不在当前屏时查找，不做任何点击。
@@ -527,11 +529,18 @@ def build_game_definition(
         agreement_action_alt=Action.tap_point(152, 1066),
         entry_scroll_action=entry_scroll_action,
     )
+    if captcha_guard is None:
+        captcha_guard = build_default_captcha_guard(
+            observer=observer,
+            device=device,
+            recognizer=recognizer,
+            captcha_condition=contract.captcha_condition,
+        )
     return TaskDefinition(
-        contract=build_game_contract(keys, timeout_seconds=timeout_seconds),
+        contract=contract,
         observer=observer,
         adapter=adapter,
         recovery=recovery,
-        captcha_guard=captcha_guard or ManualCaptchaGuard(),
+        captcha_guard=captcha_guard,
         state_recognizer=recognizer,
     )

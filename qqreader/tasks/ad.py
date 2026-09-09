@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from ..captcha.factory import build_default_captcha_guard
 from ..captcha.guard import CaptchaGuard, ManualCaptchaGuard
 from ..contract.conditions import StateIs, all_of, any_of, feature, state_in
 from ..contract.contract import TaskContract, TimeoutSpec
@@ -283,6 +284,7 @@ def build_ad_definition(
     captcha_guard: Optional[CaptchaGuard] = None,
 ) -> TaskDefinition:
     """装配广告任务（契约 + 观测器 + 适配器 + 恢复 + 验证码守卫）。"""
+    contract = build_ad_contract(keys, timeout_seconds=timeout_seconds)
     adapter = AdTaskAdapter(
         device=device,
         plan=build_ad_action_plan(keys),
@@ -306,11 +308,18 @@ def build_ad_definition(
         claim_exit_text=keys.ad_ocr_claim_after_exit,
         force_exit_text=keys.ad_ocr_force_exit,
     )
+    if captcha_guard is None:
+        captcha_guard = build_default_captcha_guard(
+            observer=observer,
+            device=device,
+            recognizer=recognizer,
+            captcha_condition=contract.captcha_condition,
+        )
     return TaskDefinition(
-        contract=build_ad_contract(keys, timeout_seconds=timeout_seconds),
+        contract=contract,
         observer=observer,
         adapter=adapter,
         recovery=recovery,
-        captcha_guard=captcha_guard or ManualCaptchaGuard(),
+        captcha_guard=captcha_guard,
         state_recognizer=recognizer,
     )

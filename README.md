@@ -11,15 +11,16 @@ QQ 阅读每日任务自动化（MaaFramework 重构）的新仓库。
 **QQR-17「奖励页游戏入口 / 去玩游戏按钮」**、**QQR-18「游戏挂机完整退出链路」**、
 **QQR-19「去玩游戏识别/点击修复」**、**QQR-20「游戏大厅下划 → 在线玩 → 游戏中心 → 进入游戏」**、
 **QQR-21「GUI 重构并接入运行脚本」**、**QQR-22「MAA GUI 风格任务分级 + 串行执行」**、
-**QQR-23「迁移旧 GUI 任务列表与功能」**、**QQR-24「GUI 视觉重构」** 与
-**QQR-25「任务列表改为卡片式直观布局」** 的核心实现，并有单元测试覆盖：
+**QQR-23「迁移旧 GUI 任务列表与功能」**、**QQR-24「GUI 视觉重构」**、
+**QQR-25「任务列表改为卡片式直观布局」** 与 **QQR-29「滑动验证码检测/阻塞/求解/复核」**
+的核心实现，并有单元测试覆盖：
 
 | 层 | 模块 | 内容 |
 | --- | --- | --- |
 | 页面状态 | `qqreader/page/` | `PageState`（`HOME` + 规范要求的 8 个状态 + `GAME_ENTRY` / `GAME_HALL` / `GAME_CENTER` / `GAME_MENU` / `GAME_EXIT_CONFIRM` 等游戏中间态）、多特征 `FeatureSpec`/`FeatureMatch`、§3.6 降级链（模板 A → 模板 B / OCR / 页面结构）、`RecognitionVerdict`（`CONFIRMED` / `TEMPORARY_MISMATCH` / `NOT_PRESENT`）、`PageObservation`、`PageStateRecognizer`、`FeatureKeys`、默认状态定义 |
 | 任务契约 | `qqreader/contract/` | `TaskContract` 的 8 个字段、条件原语（`AllOf`/`AnyOf`/`NotCondition`/`StateIs`/`StateIn`/`FeatureMatches`/`predicate`）、`TaskOutcome`/`TaskResult`、`KeyNodeScreenshot`/`RecoveryStep` |
 | 恢复 | `qqreader/recovery/` | 升级式恢复阶梯 `EscalationPolicy`（重新截图 → 重新判断 → 关弹窗 → 返回 → 重进入口 → 重启 App → 可选重启模拟器 → 放弃） |
-| 验证码 | `qqreader/captcha/` | `ManualCaptchaGuard`（默认等待人工）、`VerifyingCaptchaGuard`（求解后必须重新观测确认消失） |
+| 验证码 | `qqreader/captcha/` | `VerifyingCaptchaGuard`（求解后必须重新观测确认消失）、`SlideCaptchaSolver`（OpenCV 轨道/滑块/缺口检测 + `DeviceController.swipe`）、`ManualCaptchaGuard` 人工兜底；CAPTCHA 状态优先于普通页面识别，OCR 识别 `安全验证` / `拖动下方滑块完成拼图` |
 | 调度 | `qqreader/runner/` | `TaskRunner`（阶段推进 / 超时 / 取消 / UNKNOWN 只重判或恢复 / 验证码优先阻塞）、`PageConfirmer`（确认阶梯）、`FileRunRecorder`（JSON 运行记录 + 关键节点截图 + 默认 30 天保留）、`TaskRegistry`、`TaskDefinition` |
 | 具体任务 | `qqreader/tasks/` | 声明式 `StateActionPlan` + `PlannedTaskAdapter`；广告 `DailyAdFlow`、游戏 `DailyGameFlow` 的契约与动作计划；HOME 使用书架 OCR「本周阅读时长」进奖励页、奖励页滚动查找「去玩游戏」并在 OCR 定位失败时退到按钮坐标 fallback；游戏大厅下划一次 → 识别「在线玩」→ 游戏中心点游戏卡「在线玩」→ 登录/协议页（勾选/登录游戏）→ `GAME_RUNNING`「领币」计时；退出流程含「退出」「关闭游戏」和返回奖励页，退出后禁止再次进入游戏；`build_default_registry` |
 | 运行时协议 | `qqreader/runtime/` | `Clock`/`CancellationToken`/`DeviceController`/`PageObserver`/`TaskAdapter`/`TaskContext`；`qqreader/maa/` 已提供 MaaFramework ctypes 适配（截图/OCR/模板/点击/滑动/前台 App）；`scripts/run_task.py` 支持新流程任务，旧任务转调备份里的旧 QQ 阅读 `run_maa_ad.py` |
@@ -30,7 +31,7 @@ QQ 阅读每日任务自动化（MaaFramework 重构）的新仓库。
 py -3.10 -m pytest
 ```
 
-当前结果：**182 个单元测试全部通过**（21 个测试文件）。核心包 `qqreader/` 不依赖任何第三方库，仅测试需要 `pytest`。
+当前结果：**186 个单元测试全部通过**（22 个测试文件）。核心包 `qqreader/` 不依赖任何第三方库；滑动验证码求解器可选依赖 `opencv-python` / `numpy`，测试需要 `pytest`。
 
 ## GUI 控制台（MAA GUI 风格）
 
@@ -111,6 +112,14 @@ GUI 支持：
 child return error ... settings get secure android_id
 No available screencap method
 ```
+
+### 滑动验证码
+
+- `PageState.CAPTCHA` 对 `安全验证` / `拖动下方滑块完成拼图` 等 OCR 敏感识别；
+- `SlideCaptchaSolver` 用 OpenCV 定位蓝色滑块、灰色轨道和缺口，再通过
+  `DeviceController.swipe` 执行一次滑动；
+- `VerifyingCaptchaGuard` 求解后必须重新观测，确认验证码确实消失才恢复任务；
+- 连续尝试仍无法解决时返回 `BLOCKED_BY_CAPTCHA` / `WAITING_FOR_HUMAN`，不继续点击。
 
 单任务命令行：
 

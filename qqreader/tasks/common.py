@@ -79,7 +79,8 @@ def captcha_condition(keys: FeatureKeys) -> Condition:
     return any_of(
         state_in(PageState.CAPTCHA),
         feature(ocr(keys.captcha_ocr_pick)),
-        feature(ocr(keys.captcha_ocr_slider)),
+        feature(ocr(keys.captcha_ocr_slider, mode=MatchMode.REGEX)),
+        feature(ocr(keys.captcha_ocr_title)),
         feature(template(keys.captcha_prompt_icon)),
         feature(template(keys.captcha_slider_track)),
         feature(structure(keys.captcha_overlay, threshold=0.5)),

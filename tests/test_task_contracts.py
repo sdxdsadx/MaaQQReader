@@ -6,7 +6,8 @@ import json
 
 import pytest
 
-from qqreader.captcha.guard import ManualCaptchaGuard
+from qqreader.captcha.guard import ManualCaptchaGuard, VerifyingCaptchaGuard
+from qqreader.captcha.slide import SlideCaptchaSolver
 from qqreader.config import ConfigError, loads_config
 from qqreader.contract.contract import CONTRACT_FIELDS, TimeoutSpec
 from qqreader.page.feature_keys import DEFAULT_FEATURE_KEYS
@@ -130,7 +131,7 @@ def test_default_registry_registers_ad_and_game() -> None:
     assert GAME_TASK_NAME in registry
 
 
-def test_default_captcha_guard_waits_for_human() -> None:
+def test_default_captcha_guard_uses_slide_solver() -> None:
     definition = build_ad_definition(
         DEFAULT_FEATURE_KEYS,
         QueueObserver([home_observation()]),
@@ -138,7 +139,8 @@ def test_default_captcha_guard_waits_for_human() -> None:
         EscalationPolicy(),
         make_recognizer(),
     )
-    assert isinstance(definition.captcha_guard, ManualCaptchaGuard)
+    assert isinstance(definition.captcha_guard, VerifyingCaptchaGuard)
+    assert isinstance(definition.captcha_guard._solver, SlideCaptchaSolver)
 
 
 def test_planned_adapter_never_taps_on_unknown() -> None:
