@@ -9,6 +9,7 @@ from .confirmation import (
     PageConfirmer,
 )
 from .definition import TaskDefinition
+from .recording import FileRunRecorder, RecordingConfig, RunRecorder, ScreenshotProvider
 from .registry import TaskRegistry
 from .runner import PHASE_KEY, RunPhase, RunnerConfig, TaskRunner
 
@@ -19,9 +20,13 @@ __all__ = [
     "ConfirmationConfig",
     "ConfirmationResult",
     "ConfirmationStep",
+    "FileRunRecorder",
     "PageConfirmer",
+    "RecordingConfig",
     "RunPhase",
+    "RunRecorder",
     "RunnerConfig",
+    "ScreenshotProvider",
     "TaskDefinition",
     "TaskRegistry",
     "TaskRunner",

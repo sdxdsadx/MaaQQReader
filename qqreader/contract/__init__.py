@@ -28,7 +28,13 @@ from .contract import (
     TaskContract,
     TimeoutSpec,
 )
-from .outcome import DiagnosticEvent, TaskOutcome, TaskResult
+from .outcome import (
+    DiagnosticEvent,
+    KeyNodeScreenshot,
+    RecoveryStep,
+    TaskOutcome,
+    TaskResult,
+)
 
 __all__ = [
     "AllOf",
@@ -41,9 +47,11 @@ __all__ = [
     "DiagnosticEvent",
     "FatalErrorSpec",
     "FeatureMatches",
+    "KeyNodeScreenshot",
     "Never",
     "NotCondition",
     "RecoverableErrorSpec",
+    "RecoveryStep",
     "StateIn",
     "StateIs",
     "TaskContract",

@@ -16,13 +16,19 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import List, Optional, Tuple
 
 from ..contract.conditions import ConditionResult
 from ..contract.contract import FatalErrorSpec, RecoverableErrorSpec
-from ..contract.outcome import DiagnosticEvent, TaskOutcome, TaskResult
+from ..contract.outcome import (
+    DiagnosticEvent,
+    KeyNodeScreenshot,
+    RecoveryStep,
+    TaskOutcome,
+    TaskResult,
+)
 from ..errors import Cancelled
 from ..page.recognizer import StateDecision
 from ..page.states import PageState, RunState
@@ -31,6 +37,7 @@ from ..runtime.clock import CancellationToken, Clock
 from ..runtime.context import TaskContext
 from .confirmation import ConfirmationConfig, PageConfirmer, feature_report
 from .definition import TaskDefinition
+from .recording import RunRecorder
 
 #: 当前执行阶段在 ``TaskContext.data`` 中的键；适配器可据此做安全的引导动作。
 PHASE_KEY = "phase"
@@ -94,6 +101,7 @@ class TaskRunner:
         clock: Clock,
         token: Optional[CancellationToken] = None,
         config: Optional[RunnerConfig] = None,
+        recorder: Optional[RunRecorder] = None,
     ) -> None:
         self._definition = definition
         self._contract = definition.contract
@@ -105,6 +113,8 @@ class TaskRunner:
         self._clock = clock
         self._token = token or CancellationToken()
         self._config = config or RunnerConfig()
+        #: QQR-10：运行记录器；为 None 时完全不落盘，不影响任务成败。
+        self._recorder = recorder
         # QQR-5：识别不到目标时先做多特征页面确认，再由本循环决定是否恢复。
         # 任务定义可注入自定义确认器（便于替换/测试），否则按契约构造默认实现。
         self._confirmer = definition.confirmer or PageConfirmer(
@@ -126,6 +136,8 @@ class TaskRunner:
             started_at=self._clock.now(),
             run_state=RunState.IDLE,
         )
+        # QQR-10：截图与恢复历史随任务上下文收集，收尾时一起写入 TaskResult。
+        context.update_data(screenshots=[], recovery_history=[])
         diagnostics: List[DiagnosticEvent] = []
         self._record(
             diagnostics,
@@ -134,6 +146,7 @@ class TaskRunner:
             f"开始任务 {self._contract.name}",
             timeout_seconds=self._contract.timeout.seconds,
         )
+        self._recorder_start(context, diagnostics)
         try:
             return self._run(context, diagnostics)
         except Cancelled as exc:
@@ -207,11 +220,19 @@ class TaskRunner:
             decision = self._recognizer.evaluate(observation)
             previous_state = context.state
             context.update_observation(observation, decision)
+            if not context.get("evidence_started"):
+                context.update_data(evidence_started=True)
+                self._capture_evidence(
+                    context,
+                    diagnostics,
+                    "TASK_START",
+                    f"任务 {self._contract.name} 首帧证据",
+                )
             # 只有页面状态真的发生变化，才认为任务取得了新进展并重置恢复阶梯；
             # 仅「progress_condition 当前成立」不足以证明有新进展，否则会掩盖卡死。
+            state_changed = previous_state is not None and previous_state is not decision.state
             if (
-                previous_state is not None
-                and previous_state is not decision.state
+                state_changed
                 and (context.get("recovery_attempt") or context.get("recovery_exhausted"))
             ):
                 context.update_data(recovery_attempt=0, recovery_exhausted=False)
@@ -221,12 +242,20 @@ class TaskRunner:
                     "recovery.reset",
                     f"页面状态 {previous_state.value} → {decision.state.value}，恢复阶梯重置",
                 )
+            if state_changed and decision.is_confirmed:
+                self._capture_evidence(
+                    context,
+                    diagnostics,
+                    f"PAGE_{decision.state.value}",
+                    f"页面状态确认: {decision.state.value}",
+                )
             self._record(
                 diagnostics,
                 context,
                 "page.observed",
                 decision.state.value,
                 confidence=round(decision.confidence, 3),
+                verdict=decision.verdict.value,
                 reason=decision.reason,
                 unknown=decision.needs_recheck,
             )
@@ -249,6 +278,8 @@ class TaskRunner:
                     context,
                     "page.unknown",
                     f"第 {streak} 次未确认页面状态；先做页面确认，不判失败",
+                    verdict=decision.verdict.value,
+                    failed_features=list(decision.failed_features),
                 )
                 # QQR-5：识别失败必须留下「尝试了哪些特征、各自结果」。
                 self._record_feature_report(context, diagnostics, decision)
@@ -285,6 +316,12 @@ class TaskRunner:
                         "page.confirmed",
                         f"页面确认成功: {context.state.value}（{confirmation.reason}）",
                         confidence=round(confirmation.confidence, 3),
+                    )
+                    self._capture_evidence(
+                        context,
+                        diagnostics,
+                        f"PAGE_{context.state.value}",
+                        f"页面确认成功: {context.state.value}",
                     )
                     # 用刚确认的状态继续走契约阶段判断；不点击、不跳过阶段。
                 else:
@@ -422,6 +459,7 @@ class TaskRunner:
         self._record(
             diagnostics, context, "captcha.detected", "检测到验证码，正常任务推进暂停"
         )
+        self._capture_evidence(context, diagnostics, "CAPTCHA_DETECTED", "验证码出现")
         outcome = self._captcha_guard.handle(context)
         self._record(
             diagnostics,
@@ -472,6 +510,7 @@ class TaskRunner:
             "captcha.verified_gone",
             "已确认验证码消失，恢复原任务",
         )
+        self._capture_evidence(context, diagnostics, "CAPTCHA_CLEARED", "验证码已确认消失")
         return None
 
     # ------------------------------------------------------------ 错误匹配
@@ -524,6 +563,21 @@ class TaskRunner:
                 action=action.value,
                 actions=list(step.actions),
             )
+            self._record_recovery_step(
+                context,
+                diagnostics,
+                attempt=int(context.get("recovery_attempt", 0)),
+                action=action,
+                reason=reason,
+                description=step.description,
+                targeted=True,
+            )
+            self._capture_evidence(
+                context,
+                diagnostics,
+                f"RECOVERY_{action.value}",
+                f"定向恢复: {reason}",
+            )
             return
         attempt = int(context.get("recovery_attempt", 0))
         if self._recovery.exhausted(attempt):
@@ -533,6 +587,14 @@ class TaskRunner:
                 context,
                 "recovery.exhausted",
                 f"恢复阶梯已耗尽（attempt={attempt}）；保持重试直到独立超时，不直接判失败",
+            )
+            self._record_recovery_step(
+                context,
+                diagnostics,
+                attempt=attempt,
+                action=RecoveryAction.GIVE_UP,
+                reason=reason,
+                description="恢复阶梯已耗尽",
             )
             self._pause_after_exhausted()
             return
@@ -544,6 +606,14 @@ class TaskRunner:
                 context,
                 "recovery.exhausted",
                 "恢复策略返回 GIVE_UP；保持重试直到独立超时，不直接判失败",
+            )
+            self._record_recovery_step(
+                context,
+                diagnostics,
+                attempt=attempt,
+                action=RecoveryAction.GIVE_UP,
+                reason=reason,
+                description="恢复策略返回 GIVE_UP",
             )
             self._pause_after_exhausted()
             return
@@ -564,6 +634,21 @@ class TaskRunner:
             step.description,
             action=action.value,
             actions=list(step.actions),
+        )
+        self._record_recovery_step(
+            context,
+            diagnostics,
+            attempt=attempt,
+            action=action,
+            reason=reason,
+            description=step.description,
+            targeted=False,
+        )
+        self._capture_evidence(
+            context,
+            diagnostics,
+            f"RECOVERY_{action.value}",
+            f"恢复动作: {reason}",
         )
 
     def _pause_after_exhausted(self) -> None:
@@ -593,6 +678,125 @@ class TaskRunner:
             features=list(lines),
         )
 
+    # ------------------------------------------------------------ 运行记录
+
+    def _recorder_start(
+        self, context: TaskContext, diagnostics: List[DiagnosticEvent]
+    ) -> None:
+        if self._recorder is None:
+            return
+        try:
+            self._recorder.start(context)
+        except Exception as exc:  # noqa: BLE001 - 记录失败不得影响任务
+            self._record(
+                diagnostics,
+                context,
+                "record.error",
+                f"运行记录启动失败: {type(exc).__name__}: {exc}",
+            )
+
+    def _record_recovery_step(
+        self,
+        context: TaskContext,
+        diagnostics: List[DiagnosticEvent],
+        *,
+        attempt: int,
+        action: RecoveryAction,
+        reason: str,
+        description: str,
+        targeted: bool = False,
+    ) -> None:
+        step = RecoveryStep(
+            at=context.now,
+            attempt=attempt,
+            action=action.value,
+            reason=reason,
+            description=description,
+            targeted=targeted,
+        )
+        context.data.setdefault("recovery_history", []).append(step)
+        if self._recorder is not None:
+            try:
+                self._recorder.recovery(context, step)
+            except Exception as exc:  # noqa: BLE001 - 记录失败不得影响任务
+                self._record(
+                    diagnostics,
+                    context,
+                    "record.error",
+                    f"恢复记录失败: {type(exc).__name__}: {exc}",
+                )
+        self._record(diagnostics, context, "recovery.record", step.render())
+
+    def _capture_evidence(
+        self,
+        context: TaskContext,
+        diagnostics: List[DiagnosticEvent],
+        kind: str,
+        note: str,
+    ) -> None:
+        """记录一个关键节点；截图/落盘失败只写 ``record.error``，不改变结果。"""
+        if self._recorder is None:
+            return
+        try:
+            evidence = self._recorder.capture(
+                context, kind, note, provider=self._observer
+            )
+        except Exception as exc:  # noqa: BLE001 - 证据失败不得影响任务
+            self._record(
+                diagnostics,
+                context,
+                "record.error",
+                f"关键节点截图失败: {type(exc).__name__}: {exc}",
+                evidence_kind=kind,
+            )
+            return
+        if evidence is None:
+            return
+        context.data.setdefault("screenshots", []).append(evidence)
+        self._record(
+            diagnostics,
+            context,
+            "evidence.capture",
+            f"关键节点截图: {kind}",
+            evidence_kind=kind,
+            path=evidence.path,
+            state=evidence.state,
+            note=note,
+        )
+
+    def _recorder_finish(
+        self,
+        context: TaskContext,
+        result: TaskResult,
+        diagnostics: List[DiagnosticEvent],
+    ) -> TaskResult:
+        if self._recorder is None:
+            return result
+        try:
+            path = self._recorder.finish(result)
+        except Exception as exc:  # noqa: BLE001 - 记录失败不得影响任务
+            self._record(
+                diagnostics,
+                context,
+                "record.error",
+                f"运行记录落盘失败: {type(exc).__name__}: {exc}",
+            )
+            return replace(result, diagnostics=tuple(diagnostics))
+        if path is None:
+            return result
+        self._record(
+            diagnostics,
+            context,
+            "record.saved",
+            f"运行记录已保存: {path}",
+            path=str(path),
+        )
+        return replace(
+            result,
+            record_path=str(path),
+            diagnostics=tuple(diagnostics),
+        )
+
     # ------------------------------------------------------------ 收尾
 
     def _finish(
@@ -604,6 +808,13 @@ class TaskRunner:
         run_state: RunState,
     ) -> TaskResult:
         context.run_state = run_state
+        # QQR-10：任务结束本身也是关键节点，先留一帧证据。
+        self._capture_evidence(
+            context,
+            diagnostics,
+            outcome.value,
+            f"任务结束: {outcome.value}: {reason}",
+        )
         self._record(
             diagnostics,
             context,
@@ -612,7 +823,7 @@ class TaskRunner:
             steps=context.step,
             final_state=context.state.value,
         )
-        return TaskResult(
+        result = TaskResult(
             task=self._contract.name,
             outcome=outcome,
             reason=reason,
@@ -622,7 +833,10 @@ class TaskRunner:
             final_state=context.state,
             run_state=run_state,
             diagnostics=tuple(diagnostics),
+            screenshots=tuple(context.get("screenshots", ())),
+            recovery_history=tuple(context.get("recovery_history", ())),
         )
+        return self._recorder_finish(context, result, diagnostics)
 
     def _record(
         self,
