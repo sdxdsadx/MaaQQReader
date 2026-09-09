@@ -101,6 +101,17 @@ def _run_legacy_task(task: str, config: Any, minutes: Optional[float]) -> int:
     node = LEGACY_TIMING_NODE.get(task)
     original = None
     resource_dir = Path(config.machine.maa_resource_dir)
+    from qqreader.maa.adb import ensure_maa_ready
+
+    ready, detail = ensure_maa_ready(
+        config.machine.adb_path,
+        config.machine.adb_address,
+        package_name=config.machine.package_name,
+        timeout=45.0,
+    )
+    print(f"[legacy] ADB 预检: {detail}", flush=True)
+    if not ready:
+        print("[legacy] 设备不可截图，旧流程可能仍会失败。", flush=True)
     if node and minutes and float(minutes) > 0:
         original = _patch_legacy_pipeline(resource_dir, node, float(minutes))
     command = [

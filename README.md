@@ -30,7 +30,7 @@ QQ 阅读每日任务自动化（MaaFramework 重构）的新仓库。
 py -3.10 -m pytest
 ```
 
-当前结果：**170 个单元测试全部通过**（18 个测试文件）。核心包 `qqreader/` 不依赖任何第三方库，仅测试需要 `pytest`。
+当前结果：**175 个单元测试全部通过**（19 个测试文件）。核心包 `qqreader/` 不依赖任何第三方库，仅测试需要 `pytest`。
 
 ## GUI 控制台（MAA GUI 风格）
 
@@ -89,6 +89,22 @@ GUI 支持：
 - 实时显示每个子进程的 `[observe]` OCR 日志、结果和诊断；
 - 停止当前任务并终止整个串行队列；
 - 打开配置中的 `record_dir`。
+
+### ADB / 截图预检
+
+`qqreader/maa/adb.py` 会在 MAA 连接前执行：
+
+1. `adb connect` + 等待 `sys.boot_completed=1`；
+2. 试执行 `adb exec-out screencap -p`；
+3. 如果截图为空（QQ 阅读阅读页 `ReaderPageActivity` 是 FLAG_SECURE），
+   自动 `am force-stop` 后重新启动 QQ 阅读，回到可截图页面。
+
+这样可避免 MAA 反复报：
+
+```text
+child return error ... settings get secure android_id
+No available screencap method
+```
 
 单任务命令行：
 

@@ -712,22 +712,17 @@ class QQReaderGui:
         self._log("[ADB] " + command_preview(command))
 
         def worker() -> None:
-            try:
-                result = subprocess.run(
-                    command,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=20,
-                    check=False,
-                )
-                self._log(
-                    f"[ADB] exit={result.returncode} "
-                    f"{result.stdout.strip() or result.stderr.strip()}"
-                )
-            except (OSError, subprocess.SubprocessError) as exc:
-                self._log(f"[ADB 错误] {exc}")
+            from ..maa.adb import ensure_maa_ready
+
+            ready, detail = ensure_maa_ready(
+                config.machine.adb_path,
+                config.machine.adb_address,
+                package_name=config.machine.package_name,
+                timeout=60.0,
+            )
+            self._log(f"[ADB] {detail}")
+            if not ready:
+                self._log("[ADB] 设备未就绪，启动任务时仍会再次重试。")
 
         threading.Thread(target=worker, daemon=True).start()
 

@@ -40,6 +40,7 @@ def build_ctypes_config(
         controller=controller or machine.maa_controller,
         adb_path=machine.adb_path,
         adb_address=machine.adb_address,
+        package_name=machine.package_name,
         agent_dir=machine.maa_agent_dir,
         custom_images=tuple(custom_images),
         custom_dir=custom_dir or machine.maa_custom_dir,

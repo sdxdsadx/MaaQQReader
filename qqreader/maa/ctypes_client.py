@@ -98,6 +98,7 @@ class CtypesMaaConfig:
     controller: str = "adb"
     adb_path: Optional[str] = None
     adb_address: Optional[str] = None
+    package_name: str = "com.qq.reader"
     agent_dir: Optional[Path] = None
     custom_images: Tuple[bytes, ...] = ()
     custom_dir: Optional[Path] = None
@@ -457,33 +458,57 @@ class CtypesMaaClient:
     def _create_controller(self) -> None:
         lib = self._lib
         if self._config.controller == "adb":
-            agent = self._config.agent_dir or (self._config.runtime_dir / "MaaAgentBinary")
-            self._controller = ctypes.c_void_p(
-                lib.MaaAdbControllerCreate(
-                    os.fsencode(os.fspath(self._config.adb_path)),
-                    self._config.adb_address.encode("utf-8"),
-                    self._config.screencap_methods,
-                    self._config.input_methods,
-                    b"{}",
-                    os.fsencode(os.fspath(agent)),
-                )
+            # 先做 ADB 预检，避免模拟器刚启动/offline 时 MAA 内部 adb 子进程
+            # 反复报 `settings get secure android_id` child return error。
+            from .adb import ensure_maa_ready
+
+            ensure_maa_ready(
+                str(self._config.adb_path),
+                str(self._config.adb_address),
+                package_name=self._config.package_name,
+                timeout=45.0,
             )
-        else:
-            self._controller = self._create_custom_controller()
+            agent = self._config.agent_dir or (
+                self._config.runtime_dir / "MaaAgentBinary"
+            )
+            last_status: Optional[int] = None
+            for attempt in range(3):
+                self._controller = ctypes.c_void_p(
+                    lib.MaaAdbControllerCreate(
+                        os.fsencode(os.fspath(self._config.adb_path)),
+                        self._config.adb_address.encode("utf-8"),
+                        self._config.screencap_methods,
+                        self._config.input_methods,
+                        b"{}",
+                        os.fsencode(os.fspath(agent)),
+                    )
+                )
+                if not self._controller.value:
+                    raise MaaClientError("MaaControllerCreate 失败")
+                if self._config.short_side:
+                    short_side = ctypes.c_int32(int(self._config.short_side))
+                    lib.MaaControllerSetOption(
+                        self._controller,
+                        OPTION_SCREENSHOT_SHORT_SIDE,
+                        ctypes.byref(short_side),
+                        ctypes.sizeof(short_side),
+                    )
+                conn_id = lib.MaaControllerPostConnection(self._controller)
+                status = lib.MaaControllerWait(self._controller, conn_id)
+                if status == STATUS_SUCCEEDED:
+                    return
+                last_status = status
+                if self._controller.value:
+                    lib.MaaControllerDestroy(self._controller)
+                    self._controller = ctypes.c_void_p()
+                if attempt < 2:
+                    time.sleep(2.0)
+            raise MaaClientError(
+                f"Maa 控制器连接失败，状态码 {last_status}（已重试 3 次）"
+            )
+        self._controller = self._create_custom_controller()
         if not self._controller.value:
             raise MaaClientError("MaaControllerCreate 失败")
-        if self._config.short_side:
-            short_side = ctypes.c_int32(int(self._config.short_side))
-            lib.MaaControllerSetOption(
-                self._controller,
-                OPTION_SCREENSHOT_SHORT_SIDE,
-                ctypes.byref(short_side),
-                ctypes.sizeof(short_side),
-            )
-        conn_id = lib.MaaControllerPostConnection(self._controller)
-        status = lib.MaaControllerWait(self._controller, conn_id)
-        if status != STATUS_SUCCEEDED:
-            raise MaaClientError(f"Maa 控制器连接失败，状态码 {status}")
 
     def _create_custom_controller(self) -> Any:
         lib = self._lib
