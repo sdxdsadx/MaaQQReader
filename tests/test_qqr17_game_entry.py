@@ -16,6 +16,7 @@ from qqreader.tasks.game import build_game_action_plan, build_game_contract
 from tests.helpers import (
     SimulatedDevice,
     game_entry_observation,
+    game_hall_observation,
     make_context,
     make_recognizer,
     reward_observation,
@@ -132,6 +133,11 @@ def test_game_entry_page_taps_go_play_button() -> None:
     step = adapter.advance(context)
     assert step.actions == (f"{ActionKind.TAP_FEATURE.value}:{GAME_GO_PLAY_KEY}",)
     assert ("tap_feature", GAME_GO_PLAY_KEY) in device.calls
+
+
+def test_game_hall_is_recognized_as_game_loading() -> None:
+    decision = make_recognizer().evaluate(game_hall_observation())
+    assert decision.state is PageState.GAME_LOADING
 
 
 def test_game_contract_has_game_entry_intermediate_state() -> None:

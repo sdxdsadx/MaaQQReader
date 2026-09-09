@@ -309,9 +309,17 @@ def build_default_state_definitions(
                     ),
                     _template(keys.game_login_button, weight=1.0),
                     _structure(keys.game_loading_marker, weight=1.0),
+                    _text(
+                        FeatureKind.OCR,
+                        keys.game_ocr_hall_marker,
+                        values=("今日必玩推荐", "新游", "活动", "排行", "分类"),
+                        weight=1.0,
+                        mode=MatchMode.ONE_OF,
+                        description="游戏大厅推荐/分类文案",
+                    ),
                     weight=1.5,
                     required=True,
-                    description="游戏加载身份：点击选服/踏入仙途/进入游戏 / 登录按钮 / 登录页结构",
+                    description="游戏加载/大厅身份：点击选服/踏入仙途/进入游戏 / 登录页 / 精选大作等大厅文案",
                 ),
                 _orientation(
                     Orientation.LANDSCAPE,

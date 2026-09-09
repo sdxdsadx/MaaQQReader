@@ -70,6 +70,8 @@ class FeatureKeys:
     #: 奖励页游戏卡点击后出现的「去玩游戏」按钮（旧 pipeline GameFindPlayButton）。
     game_ocr_go_play: str = "去玩游戏"
     game_ocr_hall: str = "游戏大厅"
+    #: 游戏大厅真实文案（旧 pipeline GameHallRetry）；「游戏大厅」标题不一定出现。
+    game_ocr_hall_marker: str = "精选大作"
     game_loading_marker: str = "game.loading_marker"  # 结构特征：游戏登录页
     game_login_button: str = "game.login_button"      # 局部模板：登录按钮
     game_ocr_select_server: str = "点击选服"

@@ -108,6 +108,17 @@ def game_loading_observation(**overrides: object) -> PageObservation:
     return PageObservation(**base)  # type: ignore[arg-type]
 
 
+def game_hall_observation(**overrides: object) -> PageObservation:
+    """「去玩游戏」点击后的游戏大厅/加载页（旧 pipeline GameHallRetry）。"""
+    base = dict(
+        current_app=QQ,
+        orientation=Orientation.PORTRAIT,
+        ocr_texts=("精选大作", "今日必玩推荐", "排行", "分类"),
+    )
+    base.update(overrides)
+    return PageObservation(**base)  # type: ignore[arg-type]
+
+
 def game_running_observation(**overrides: object) -> PageObservation:
     base = dict(
         current_app=QQ,
