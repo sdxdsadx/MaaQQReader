@@ -96,6 +96,39 @@ def game_entry_observation(**overrides: object) -> PageObservation:
     return PageObservation(**base)  # type: ignore[arg-type]
 
 
+def game_agreement_observation(**overrides: object) -> PageObservation:
+    """小游戏登录/协议页：需要勾选协议后点「进入游戏」。"""
+    base = dict(
+        current_app=QQ,
+        orientation=Orientation.PORTRAIT,
+        ocr_texts=("我已详细阅读并同意", "进入游戏"),
+    )
+    base.update(overrides)
+    return PageObservation(**base)  # type: ignore[arg-type]
+
+
+def game_menu_observation(**overrides: object) -> PageObservation:
+    """点击右侧「领币」后出现的延伸菜单。"""
+    base = dict(
+        current_app=QQ,
+        orientation=Orientation.PORTRAIT,
+        ocr_texts=("领币", "退出"),
+    )
+    base.update(overrides)
+    return PageObservation(**base)  # type: ignore[arg-type]
+
+
+def game_close_confirm_observation(**overrides: object) -> PageObservation:
+    """退出游戏确认弹窗：关闭游戏。"""
+    base = dict(
+        current_app=QQ,
+        orientation=Orientation.PORTRAIT,
+        ocr_texts=("退出", "关闭游戏"),
+    )
+    base.update(overrides)
+    return PageObservation(**base)  # type: ignore[arg-type]
+
+
 def game_loading_observation(**overrides: object) -> PageObservation:
     base = dict(
         current_app=QQ,
@@ -146,6 +179,14 @@ def reward_done_observation(
     text: str = "玩游戏领赠币 明日再来", **overrides: object
 ) -> PageObservation:
     return reward_observation(ocr=(text, "今日已获赠币"), **overrides)
+
+
+def reward_claim_observation(**overrides: object) -> PageObservation:
+    """游戏时长满足后，奖励页出现「立即领取」按钮。"""
+    return reward_observation(
+        ocr=("今日已获赠币", "玩游戏领赠币+20赠币", "立即领取"),
+        **overrides,
+    )
 
 
 # --------------------------------------------------------------------- 假对象
@@ -215,15 +256,19 @@ class PageFlowObserver:
 
 
 class SimulatedDevice:
-    """记录调用并可对点击特征回调（用于驱动观测脚本）。"""
+    """记录调用并可对点击特征/坐标/返回键回调（用于驱动观测脚本）。"""
     def __init__(
         self,
         on_tap_feature: Optional[Callable[[str], None]] = None,
         tap_results: Optional[Dict[str, bool]] = None,
+        on_tap_point: Optional[Callable[[int, int], None]] = None,
+        on_press_back: Optional[Callable[[], None]] = None,
     ) -> None:
         self.calls: List[Tuple[object, ...]] = []
         self._on_tap_feature = on_tap_feature
         self._tap_results = tap_results or {}
+        self._on_tap_point = on_tap_point
+        self._on_press_back = on_press_back
 
     def tap_feature(self, name: str) -> bool:
         self.calls.append(("tap_feature", name))
@@ -234,12 +279,16 @@ class SimulatedDevice:
 
     def tap_point(self, x: int, y: int) -> None:
         self.calls.append(("tap_point", x, y))
+        if self._on_tap_point is not None:
+            self._on_tap_point(x, y)
 
     def swipe(self, x0: int, y0: int, x1: int, y1: int, duration_ms: int = 300) -> None:
         self.calls.append(("swipe", x0, y0, x1, y1, duration_ms))
 
     def press_back(self) -> None:
         self.calls.append(("press_back",))
+        if self._on_press_back is not None:
+            self._on_press_back()
 
     def launch_app(self, package: str) -> None:
         self.calls.append(("launch_app", package))

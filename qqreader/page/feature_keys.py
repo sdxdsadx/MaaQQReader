@@ -77,11 +77,17 @@ class FeatureKeys:
     game_ocr_select_server: str = "点击选服"
     game_ocr_enter: str = "进入游戏"
     game_ocr_enter_alt: str = "踏入仙途"
+    #: 游戏协议勾选框文案；点击其左侧坐标切换同意。
+    game_ocr_agreement: str = "我已详细阅读并同意"
     game_hud: str = "game.hud"                       # 结构特征：游戏内 HUD
     game_ocr_active: str = "领币"
     game_exit_menu: str = "game.exit_menu"           # 固定图标：悬浮菜单
     game_ocr_exit: str = "退出"
+    #: 部分小游戏退出弹窗的确认按钮文案。
+    game_ocr_close_game: str = "关闭游戏"
     game_exit_dialog: str = "game.exit_dialog"       # 局部模板：退出确认
+    #: 奖励页游戏赠币领取按钮；游戏时长满足后出现。
+    game_ocr_claim: str = "立即领取"
     #: 旧工程「玩游戏领赠币 + 已领取/明日再来」完成判定（静态审计，待实机校准）。
     game_success_regex: str = r"玩游戏领赠币.*(?:已领取|明日再来)"
 

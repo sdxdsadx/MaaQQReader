@@ -26,10 +26,15 @@ from tests.helpers import (
     SimulatedDevice,
     ad_playing_observation,
     ad_result_observation,
+    game_agreement_observation,
+    game_close_confirm_observation,
     game_entry_observation,
+    game_hall_observation,
     game_loading_observation,
+    game_menu_observation,
     game_running_observation,
     home_observation,
+    reward_claim_observation,
     make_context,
     make_recognizer,
     reward_done_observation,
@@ -43,15 +48,17 @@ REWARD_WATCH_KEY = feature_key(KEYS, KEYS.reward_ocr_watch)
 AD_RESULT_CLOSE_KEY = feature_key(KEYS, KEYS.ad_result_close)
 GAME_REWARD_ENTRY_KEY = feature_key(KEYS, KEYS.game_ocr_reward_entry)
 GAME_GO_PLAY_KEY = feature_key(KEYS, KEYS.game_ocr_go_play)
-GAME_ENTER_KEY = feature_key(KEYS, KEYS.game_ocr_enter_alt)
-GAME_EXIT_MENU_KEY = feature_key(KEYS, KEYS.game_exit_menu)
+GAME_ENTER_KEY = feature_key(KEYS, KEYS.game_ocr_enter)
+GAME_EXIT_MENU_KEY = feature_key(KEYS, KEYS.game_ocr_exit)
+GAME_CLOSE_GAME_KEY = feature_key(KEYS, KEYS.game_ocr_close_game)
+GAME_CLAIM_KEY = feature_key(KEYS, KEYS.game_ocr_claim)
 POPUP_CLOSE_KEY = feature_key(KEYS, KEYS.popup_close)
 
 
 def _make_game_adapter(device, duration: float) -> GameTaskAdapter:
     return GameTaskAdapter(
         game_duration_seconds=duration,
-        exit_action=Action.tap_feature(GAME_EXIT_MENU_KEY),
+        exit_action=Action.tap_point(695, 302),
         device=device,
         plan=build_game_action_plan(KEYS),
         expected_package=QQ,
@@ -82,12 +89,13 @@ def test_game_timer_starts_only_after_running_and_exits_after_duration() -> None
     waiting = adapter.advance(running)
     assert waiting.actions == (ActionKind.WAIT.value,)
     assert clock.now() == 10.0
-    assert ("tap_feature", GAME_EXIT_MENU_KEY) not in device.calls
+    assert ("tap_point", 695, 302) not in device.calls
 
     clock.advance(50.0)  # 累计 60s，达到挂机时长
     exiting = adapter.advance(running)
-    assert exiting.actions == (f"{ActionKind.TAP_FEATURE.value}:{GAME_EXIT_MENU_KEY}",)
-    assert ("tap_feature", GAME_EXIT_MENU_KEY) in device.calls
+    assert exiting.actions == (ActionKind.TAP_POINT.value,)
+    assert ("tap_point", 695, 302) in device.calls
+    assert running.get("game_exit_done") is True
 
 
 def test_game_adapter_rejects_non_positive_duration() -> None:
@@ -139,11 +147,14 @@ def test_game_flow_end_to_end_with_real_adapter() -> None:
         pages={
             "HOME": home_observation(),
             "REWARD_HOME": reward_observation(
-                ocr=("今日已获赠币", "玩游戏领赠币")
+                ocr=("今日已获赠币", "玩游戏领赠币", "去玩游戏")
             ),
-            "GAME_ENTRY": game_entry_observation(),
-            "GAME_LOADING": game_loading_observation(),
+            "GAME_HALL": game_hall_observation(),
+            "GAME_AGREEMENT": game_agreement_observation(),
             "GAME_RUNNING": game_running_observation(),
+            "GAME_MENU": game_menu_observation(),
+            "GAME_EXIT_CONFIRM": game_close_confirm_observation(),
+            "REWARD_CLAIM": reward_claim_observation(),
             "REWARD_DONE": reward_done_observation(),
         },
         start="HOME",
@@ -152,16 +163,32 @@ def test_game_flow_end_to_end_with_real_adapter() -> None:
     def on_tap(name: str) -> None:
         if name == HOME_REWARD_KEY:
             observer.go("REWARD_HOME")
-        elif name == GAME_REWARD_ENTRY_KEY:
-            observer.go("GAME_ENTRY")
         elif name == GAME_GO_PLAY_KEY:
-            observer.go("GAME_LOADING")
+            observer.go("GAME_HALL")
         elif name == GAME_ENTER_KEY:
             observer.go("GAME_RUNNING")
         elif name == GAME_EXIT_MENU_KEY:
+            observer.go("GAME_EXIT_CONFIRM")
+        elif name == GAME_CLOSE_GAME_KEY:
+            observer.go("GAME_HALL")
+        elif name == GAME_CLAIM_KEY:
             observer.go("REWARD_DONE")
 
-    device = SimulatedDevice(on_tap_feature=on_tap)
+    def on_tap_point(x: int, y: int) -> None:
+        if (x, y) == (360, 360):
+            observer.go("GAME_AGREEMENT")
+        elif (x, y) == (695, 302):
+            observer.go("GAME_MENU")
+
+    def on_press_back() -> None:
+        if observer.page == "GAME_HALL":
+            observer.go("REWARD_CLAIM")
+
+    device = SimulatedDevice(
+        on_tap_feature=on_tap,
+        on_tap_point=on_tap_point,
+        on_press_back=on_press_back,
+    )
     definition = build_game_definition(
         KEYS,
         observer,
@@ -175,9 +202,13 @@ def test_game_flow_end_to_end_with_real_adapter() -> None:
 
     assert result.outcome is TaskOutcome.SUCCESS
     assert ("tap_feature", HOME_REWARD_KEY) in device.calls
-    assert ("tap_feature", GAME_REWARD_ENTRY_KEY) in device.calls
-    assert ("tap_feature", GAME_GO_PLAY_KEY) in device.calls
+    assert ("tap_point", 360, 360) in device.calls
+    assert ("tap_point", 157, 1032) in device.calls
     assert ("tap_feature", GAME_ENTER_KEY) in device.calls
+    assert ("tap_point", 695, 302) in device.calls
     assert ("tap_feature", GAME_EXIT_MENU_KEY) in device.calls
+    assert ("tap_feature", GAME_CLOSE_GAME_KEY) in device.calls
+    assert ("press_back",) in device.calls
+    assert ("tap_feature", GAME_CLAIM_KEY) in device.calls
     kinds = [event.kind for event in result.diagnostics]
     assert "task.success" in kinds

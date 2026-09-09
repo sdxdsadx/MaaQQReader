@@ -32,7 +32,7 @@ from .plan import Action, PlannedTaskAdapter, StateActionPlan
 
 GAME_TASK_NAME = "DailyGameFlow"
 DEFAULT_GAME_TIMEOUT_SECONDS = 30 * 60
-DEFAULT_GAME_DURATION_SECONDS = 25 * 60
+DEFAULT_GAME_DURATION_SECONDS = 22 * 60
 
 
 def build_game_contract(
@@ -46,15 +46,24 @@ def build_game_contract(
         name=GAME_TASK_NAME,
         description="游戏挂机：进入游戏 → 确认运行 → 挂机 → 退出 → 奖励页确认",
         start_condition=state_in(
-            PageState.HOME, PageState.REWARD_HOME, PageState.GAME_ENTRY
+            PageState.HOME,
+            PageState.REWARD_HOME,
+            PageState.GAME_ENTRY,
+            PageState.GAME_HALL,
         ),
         ready_condition=state_in(
-            PageState.GAME_ENTRY, PageState.GAME_LOADING, PageState.GAME_RUNNING
+            PageState.GAME_ENTRY,
+            PageState.GAME_HALL,
+            PageState.GAME_LOADING,
+            PageState.GAME_RUNNING,
         ),
         progress_condition=state_in(
             PageState.GAME_ENTRY,
+            PageState.GAME_HALL,
             PageState.GAME_LOADING,
             PageState.GAME_RUNNING,
+            PageState.GAME_MENU,
+            PageState.GAME_EXIT_CONFIRM,
             PageState.GAME_RESULT,
             PageState.REWARD_HOME,
         ),
@@ -93,10 +102,19 @@ def build_game_action_plan(keys: FeatureKeys = DEFAULT_FEATURE_KEYS) -> StateAct
             PageState.GAME_ENTRY: Action.tap_feature(
                 feature_key(keys, keys.game_ocr_go_play)
             ),
+            # 游戏大厅：点击轮播图中心；GameTaskAdapter 在退出后改为返回。
+            PageState.GAME_HALL: Action.tap_point(360, 360),
+            # 登录/协议页：GameTaskAdapter 会先勾选协议再点「进入游戏」。
             PageState.GAME_LOADING: Action.tap_feature(
-                feature_key(keys, keys.game_ocr_enter_alt)
+                feature_key(keys, keys.game_ocr_enter)
             ),
             PageState.GAME_RUNNING: Action.wait(10.0),
+            PageState.GAME_MENU: Action.tap_feature(
+                feature_key(keys, keys.game_ocr_exit)
+            ),
+            PageState.GAME_EXIT_CONFIRM: Action.tap_feature(
+                feature_key(keys, keys.game_ocr_close_game)
+            ),
             PageState.GAME_RESULT: Action.tap_feature(
                 feature_key(keys, keys.game_ocr_exit)
             ),
@@ -133,6 +151,22 @@ class GameTaskAdapter(PlannedTaskAdapter):
         ),
         reward_entry_text: str = DEFAULT_FEATURE_KEYS.game_ocr_reward_entry,
         go_play_text: str = DEFAULT_FEATURE_KEYS.game_ocr_go_play,
+        enter_game_key: str = DEFAULT_FEATURE_KEYS.logical_name(
+            DEFAULT_FEATURE_KEYS.game_ocr_enter
+        ),
+        exit_menu_key: str = DEFAULT_FEATURE_KEYS.logical_name(
+            DEFAULT_FEATURE_KEYS.game_ocr_exit
+        ),
+        close_game_key: str = DEFAULT_FEATURE_KEYS.logical_name(
+            DEFAULT_FEATURE_KEYS.game_ocr_close_game
+        ),
+        claim_key: str = DEFAULT_FEATURE_KEYS.logical_name(
+            DEFAULT_FEATURE_KEYS.game_ocr_claim
+        ),
+        agreement_text: str = DEFAULT_FEATURE_KEYS.game_ocr_agreement,
+        claim_text: str = DEFAULT_FEATURE_KEYS.game_ocr_claim,
+        carousel_action: Optional[Action] = None,
+        agreement_action: Optional[Action] = None,
         entry_scroll_action: Optional[Action] = None,
         max_entry_scrolls: int = 4,
     ) -> None:
@@ -152,17 +186,58 @@ class GameTaskAdapter(PlannedTaskAdapter):
         self._go_play_key = go_play_key
         self._reward_entry_text = reward_entry_text
         self._go_play_text = go_play_text
+        self._enter_game_key = enter_game_key
+        self._exit_menu_key = exit_menu_key
+        self._close_game_key = close_game_key
+        self._claim_key = claim_key
+        self._agreement_text = agreement_text
+        self._claim_text = claim_text
+        self._carousel_action = carousel_action or Action.tap_point(360, 360)
+        self._agreement_action = agreement_action or Action.tap_point(157, 1032)
         self._entry_scroll_action = entry_scroll_action
         self._max_entry_scrolls = max_entry_scrolls
 
     def advance(self, context: TaskContext) -> StepResult:
         state = context.decision.state if context.decision is not None else None
 
+        # 游戏大厅：首次点击轮播图进入游戏；退出游戏后按返回键回奖励页。
+        if state is PageState.GAME_HALL:
+            if context.get("game_exit_done"):
+                return self._execute(Action.press_back(), context)
+            return self._execute(self._carousel_action, context)
+
+        # 登录/协议页：先勾选协议，再点「进入游戏」。
+        if state is PageState.GAME_LOADING:
+            if (
+                self._has_text(context, self._agreement_text)
+                and not context.get("game_agreement_clicked")
+            ):
+                context.update_data(game_agreement_clicked=True)
+                return self._execute(self._agreement_action, context)
+            return self._execute(Action.tap_feature(self._enter_game_key), context)
+
+        if state is PageState.GAME_MENU:
+            return self._execute(Action.tap_feature(self._exit_menu_key), context)
+
+        if state is PageState.GAME_EXIT_CONFIRM:
+            return self._execute(Action.tap_feature(self._close_game_key), context)
+
         # QQR-17：奖励页可能出现两种布局：
         # 1. 直接看到「去玩游戏」按钮 → 点按钮；
         # 2. 只看到「玩游戏领赠币」游戏卡 → 先点游戏卡，进入 GAME_ENTRY 后再点按钮。
         # 两者都不在屏幕内时，先按旧 pipeline 的坐标滚动查找。
+        # QQR-18：游戏退出后回到奖励页，则尝试领取游戏赠币。
         if state is PageState.REWARD_HOME:
+            if context.get("game_exit_done"):
+                if self._has_text(context, self._claim_text):
+                    return self._execute(
+                        Action.tap_feature(self._claim_key), context
+                    )
+                return StepResult(
+                    "游戏已退出，奖励页暂未出现可领取按钮",
+                    actions=(),
+                    progress=False,
+                )
             if self._has_text(context, self._go_play_text):
                 context.update_data(game_entry_scrolls=0)
                 return self._execute(Action.tap_feature(self._go_play_key), context)
@@ -177,6 +252,18 @@ class GameTaskAdapter(PlannedTaskAdapter):
                     context.update_data(game_entry_scrolls=attempts + 1)
                     return self._execute(self._entry_scroll_action, context)
         elif state is PageState.GAME_ENTRY:
+            # 奖励页游戏卡也可能被识别成 GAME_ENTRY；游戏退出后这里必须
+            # 走「领取赠币」而不是再次进入游戏。
+            if context.get("game_exit_done"):
+                if self._has_text(context, self._claim_text):
+                    return self._execute(
+                        Action.tap_feature(self._claim_key), context
+                    )
+                return StepResult(
+                    "游戏已退出，奖励页暂未出现可领取按钮",
+                    actions=(),
+                    progress=False,
+                )
             return self._execute(Action.tap_feature(self._go_play_key), context)
 
         if state is PageState.GAME_RUNNING:
@@ -189,7 +276,18 @@ class GameTaskAdapter(PlannedTaskAdapter):
                     progress=True,
                 )
             if context.now - float(started) >= self._game_duration:
-                return self._execute(self._exit_action, context)
+                if not context.get("game_exit_started"):
+                    # QQR-18：点击右侧「领币」悬浮窗（OCR 定位后取右下角热点）。
+                    context.update_data(
+                        game_exit_started=True,
+                        game_exit_done=True,
+                    )
+                    return self._execute(self._exit_action, context)
+                return StepResult(
+                    "已点击领币，等待延伸菜单出现",
+                    actions=(),
+                    progress=False,
+                )
         return super().advance(context)
 
     @staticmethod
@@ -216,7 +314,8 @@ def build_game_definition(
         entry_scroll_action = Action.swipe(360, 980, 360, 420, 500)
     adapter = GameTaskAdapter(
         game_duration_seconds=game_duration_seconds,
-        exit_action=Action.tap_feature(feature_key(keys, keys.game_exit_menu)),
+        # QQR-18：计时到点后点击右侧「领币」悬浮窗右下角热点。
+        exit_action=Action.tap_point(695, 302),
         device=device,
         plan=build_game_action_plan(keys),
         expected_package=keys.qq_reader_package,
@@ -225,6 +324,14 @@ def build_game_definition(
         go_play_key=feature_key(keys, keys.game_ocr_go_play),
         reward_entry_text=keys.game_ocr_reward_entry,
         go_play_text=keys.game_ocr_go_play,
+        enter_game_key=feature_key(keys, keys.game_ocr_enter),
+        exit_menu_key=feature_key(keys, keys.game_ocr_exit),
+        close_game_key=feature_key(keys, keys.game_ocr_close_game),
+        claim_key=feature_key(keys, keys.game_ocr_claim),
+        agreement_text=keys.game_ocr_agreement,
+        claim_text=keys.game_ocr_claim,
+        carousel_action=Action.tap_point(360, 360),
+        agreement_action=Action.tap_point(157, 1032),
         entry_scroll_action=entry_scroll_action,
     )
     return TaskDefinition(

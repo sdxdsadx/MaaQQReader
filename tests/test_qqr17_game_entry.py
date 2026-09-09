@@ -27,7 +27,7 @@ KEYS = DEFAULT_FEATURE_KEYS
 HOME_REWARD_KEY = feature_key(KEYS, KEYS.home_reward_entry)
 GAME_REWARD_ENTRY_KEY = feature_key(KEYS, KEYS.game_ocr_reward_entry)
 GAME_GO_PLAY_KEY = feature_key(KEYS, KEYS.game_ocr_go_play)
-GAME_ENTER_KEY = feature_key(KEYS, KEYS.game_ocr_enter_alt)
+GAME_ENTER_KEY = feature_key(KEYS, KEYS.game_ocr_enter)
 GAME_EXIT_MENU_KEY = feature_key(KEYS, KEYS.game_exit_menu)
 POPUP_CLOSE_KEY = feature_key(KEYS, KEYS.popup_close)
 
@@ -135,9 +135,9 @@ def test_game_entry_page_taps_go_play_button() -> None:
     assert ("tap_feature", GAME_GO_PLAY_KEY) in device.calls
 
 
-def test_game_hall_is_recognized_as_game_loading() -> None:
+def test_game_hall_is_recognized_as_game_hall() -> None:
     decision = make_recognizer().evaluate(game_hall_observation())
-    assert decision.state is PageState.GAME_LOADING
+    assert decision.state is PageState.GAME_HALL
 
 
 def test_game_contract_has_game_entry_intermediate_state() -> None:

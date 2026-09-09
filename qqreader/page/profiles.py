@@ -295,6 +295,29 @@ def build_default_state_definitions(
             description="游戏任务页：点击「去玩游戏」进入游戏大厅/加载页",
         ),
         StateDefinition(
+            state=PageState.GAME_HALL,
+            features=(
+                game_app,
+                _text(
+                    FeatureKind.OCR,
+                    keys.game_ocr_hall_marker,
+                    values=("今日必玩推荐", "新游", "活动", "排行", "分类", "在线玩"),
+                    weight=2.0,
+                    required=True,
+                    mode=MatchMode.ONE_OF,
+                    description="游戏大厅：精选大作 / 今日必玩推荐 / 排行 / 分类",
+                ),
+                _orientation(
+                    Orientation.PORTRAIT,
+                    values=any_orientation,
+                    weight=0.3,
+                ),
+            ),
+            min_score=0.4,
+            min_matched=2,
+            description="游戏大厅：点击轮播图进入任意游戏",
+        ),
+        StateDefinition(
             state=PageState.GAME_LOADING,
             features=(
                 game_app,
@@ -351,6 +374,64 @@ def build_default_state_definitions(
             min_score=0.4,
             min_matched=2,
             description="游戏运行中：HUD / 领币悬浮（横竖屏均兼容）",
+        ),
+        StateDefinition(
+            state=PageState.GAME_MENU,
+            features=(
+                game_app,
+                _text(
+                    FeatureKind.OCR,
+                    keys.game_ocr_exit,
+                    weight=2.0,
+                    required=True,
+                    mode=MatchMode.EQUALS,
+                    description="悬浮窗延伸菜单：退出按钮",
+                ),
+                _text(
+                    FeatureKind.OCR,
+                    keys.game_ocr_active,
+                    weight=0.5,
+                    mode=MatchMode.CONTAINS,
+                    description="仍能看到「领币」悬浮窗，确认是游戏内菜单",
+                ),
+                _orientation(
+                    Orientation.PORTRAIT,
+                    values=any_orientation,
+                    weight=0.3,
+                ),
+            ),
+            min_score=0.4,
+            min_matched=2,
+            description="游戏悬浮窗延伸菜单：点击「退出」",
+        ),
+        StateDefinition(
+            state=PageState.GAME_EXIT_CONFIRM,
+            features=(
+                game_app,
+                _text(
+                    FeatureKind.OCR,
+                    keys.game_ocr_close_game,
+                    weight=2.0,
+                    required=True,
+                    mode=MatchMode.CONTAINS,
+                    description="退出游戏确认弹窗：关闭游戏",
+                ),
+                _text(
+                    FeatureKind.OCR,
+                    keys.game_ocr_exit,
+                    weight=0.5,
+                    mode=MatchMode.CONTAINS,
+                    description="退出确认弹窗上下文",
+                ),
+                _orientation(
+                    Orientation.PORTRAIT,
+                    values=any_orientation,
+                    weight=0.3,
+                ),
+            ),
+            min_score=0.4,
+            min_matched=2,
+            description="退出游戏确认弹窗：点击「关闭游戏」",
         ),
         StateDefinition(
             state=PageState.GAME_RESULT,
