@@ -31,7 +31,7 @@ QQ 阅读每日任务自动化（MaaFramework 重构）的新仓库。
 py -3.10 -m pytest
 ```
 
-当前结果：**186 个单元测试全部通过**（22 个测试文件）。核心包 `qqreader/` 不依赖任何第三方库；滑动验证码求解器可选依赖 `opencv-python` / `numpy`，测试需要 `pytest`。
+当前结果：**187 个单元测试全部通过**（23 个测试文件）。核心包 `qqreader/` 不依赖任何第三方库；滑动验证码求解器可选依赖 `opencv-python` / `numpy`，测试需要 `pytest`。
 
 ## GUI 控制台（MAA GUI 风格）
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from qqreader.captcha.slide import SlideCaptchaSolver, detect_slide
@@ -87,3 +89,15 @@ def test_captcha_condition_triggers_on_slide_text() -> None:
     )
     context = make_context(observation, run_state=RunState.RUNNING)
     assert captcha_condition(DEFAULT_FEATURE_KEYS).evaluate(context).satisfied
+
+
+def test_detect_slide_on_real_old_captcha_screenshot() -> None:
+    path = Path(
+        r"G:\project_X\dev\debug\slide_evidence_20260907_142107.png"
+    )
+    if not path.is_file():
+        pytest.skip("本机没有旧工程保存的真实滑动验证码截图")
+    detection = detect_slide(path.read_bytes())
+    assert detection.found is True
+    assert detection.distance > 0
+
