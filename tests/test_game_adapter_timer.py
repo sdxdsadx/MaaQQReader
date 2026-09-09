@@ -177,7 +177,9 @@ def test_game_flow_end_to_end_with_real_adapter() -> None:
         elif name == GAME_GO_PLAY_KEY:
             observer.go("GAME_HALL")
         elif name == GAME_ONLINE_PLAY_KEY:
-            observer.go("GAME_CENTER")
+            observer.go(
+                "GAME_CENTER" if observer.page == "GAME_HALL" else "GAME_AGREEMENT"
+            )
         elif name == GAME_ENTER_KEY:
             observer.go("GAME_RUNNING")
         elif name == GAME_EXIT_MENU_KEY:
@@ -188,7 +190,7 @@ def test_game_flow_end_to_end_with_real_adapter() -> None:
             observer.go("REWARD_DONE")
 
     def on_tap_point(x: int, y: int) -> None:
-        if (x, y) == (100, 982):
+        if (x, y) in ((98, 981), (254, 981), (408, 980), (564, 982)):
             observer.go("GAME_AGREEMENT")
         elif (x, y) == (360, 360):
             observer.go("GAME_AGREEMENT")
@@ -219,7 +221,7 @@ def test_game_flow_end_to_end_with_real_adapter() -> None:
     assert ("tap_feature", HOME_REWARD_KEY) in device.calls
     assert ("swipe", 360, 420, 360, 980, 500) in device.calls
     assert ("tap_feature", GAME_ONLINE_PLAY_KEY) in device.calls
-    assert ("tap_point", 100, 982) in device.calls
+    assert ("tap_point", 98, 981) in device.calls
     assert ("tap_point", 157, 1032) in device.calls
     assert ("tap_point", 152, 1066) in device.calls
     assert ("tap_feature", GAME_ENTER_KEY) in device.calls

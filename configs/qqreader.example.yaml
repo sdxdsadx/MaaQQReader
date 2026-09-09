@@ -12,6 +12,13 @@ machine:
   screenshot_dir: "runtime/screenshots"
   log_dir: "runtime/logs"
   record_dir: "runtime/records"
+  # MaaFramework 运行时（含 MaaFramework.dll 与各 ControlUnit 依赖）
+  maa_runtime_dir: "C:\\path\\to\\MaaFramework"
+  maa_resource_dir: "C:\\path\\to\\MaaFramework\\resource"
+  maa_agent_dir: "C:\\path\\to\\MaaFramework\\MaaAgentBinary"
+  maa_controller: "adb"       # adb（真机/模拟器）| custom（静态截图，离线）
+  maa_short_side: 720         # 旧工程用 720 保持坐标体系；null 表示不缩放
+  maa_custom_dir: null        # controller=custom 时的截图目录
 
 captcha:
   solver: "manual"          # manual | ddddocr | slide | auto

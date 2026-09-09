@@ -74,6 +74,18 @@ class MachineConfig:
     screenshot_dir: Path = Path("runtime/screenshots")
     log_dir: Path = Path("runtime/logs")
     record_dir: Path = Path("runtime/records")
+    #: MaaFramework 运行时（含 MaaFramework.dll 与各 ControlUnit 依赖）。
+    maa_runtime_dir: Optional[Path] = None
+    #: Maa 资源包目录（含 OCR 模型与 pipeline；识别必需）。
+    maa_resource_dir: Optional[Path] = None
+    #: MaaAgentBinary 目录（ADB 控制器需要）。
+    maa_agent_dir: Optional[Path] = None
+    #: controller="custom" 时使用的静态截图目录（离线自检/集成测试）。
+    maa_custom_dir: Optional[Path] = None
+    #: "adb"（真机/模拟器）或 "custom"（静态截图，离线）。
+    maa_controller: str = "adb"
+    #: 截图缩放目标短边（旧工程用 720 保持坐标体系）；None 表示不缩放。
+    maa_short_side: Optional[int] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "adb_path", _require_text(self.adb_path, "machine.adb_path"))
@@ -94,6 +106,16 @@ class MachineConfig:
         object.__setattr__(self, "resolution", _as_resolution(self.resolution))
         for name in ("screenshot_dir", "log_dir", "record_dir"):
             object.__setattr__(self, name, _as_path(getattr(self, name), f"machine.{name}"))
+        for name in ("maa_runtime_dir", "maa_resource_dir", "maa_agent_dir", "maa_custom_dir"):
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(self, name, _as_path(value, f"machine.{name}"))
+        if self.maa_controller not in ("adb", "custom"):
+            raise ConfigError(
+                f"machine.maa_controller 必须是 'adb' 或 'custom'，当前: {self.maa_controller!r}"
+            )
+        if self.maa_short_side is not None and int(self.maa_short_side) <= 0:
+            raise ConfigError("machine.maa_short_side 必须 > 0 或 null")
 
     def resolve_paths(self, base_dir: Path) -> "MachineConfig":
         """把相对目录解析到配置文件所在目录（支持中文与空格路径）。"""
@@ -102,11 +124,16 @@ class MachineConfig:
         def _resolve(value: Path) -> Path:
             return value if value.is_absolute() else (base / value)
 
+        optional = {
+            name: (_resolve(value) if (value := getattr(self, name)) is not None else None)
+            for name in ("maa_runtime_dir", "maa_resource_dir", "maa_agent_dir", "maa_custom_dir")
+        }
         return replace(
             self,
             screenshot_dir=_resolve(self.screenshot_dir),
             log_dir=_resolve(self.log_dir),
             record_dir=_resolve(self.record_dir),
+            **optional,
         )
 
     def missing_paths(self) -> Tuple[Path, ...]:
@@ -134,8 +161,19 @@ class MachineConfig:
                 f"  screenshot_dir  = {self.screenshot_dir}",
                 f"  log_dir         = {self.log_dir}",
                 f"  record_dir      = {self.record_dir}",
+                f"  maa_controller  = {self.maa_controller}",
             ]
         )
+        for label, value in (
+            ("maa_runtime_dir", self.maa_runtime_dir),
+            ("maa_resource_dir", self.maa_resource_dir),
+            ("maa_agent_dir", self.maa_agent_dir),
+            ("maa_custom_dir", self.maa_custom_dir),
+        ):
+            if value is not None:
+                lines.append(f"  {label:<15} = {value}")
+        if self.maa_short_side is not None:
+            lines.append(f"  maa_short_side  = {self.maa_short_side}")
         return "\n".join(lines)
 
 

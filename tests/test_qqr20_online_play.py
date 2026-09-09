@@ -106,15 +106,18 @@ def test_game_center_state() -> None:
     assert decision.state is PageState.GAME_CENTER
 
 
-def test_game_center_taps_first_card_online_play() -> None:
+def test_game_center_taps_first_card_point_then_cycles() -> None:
     device = SimulatedDevice()
     adapter = _adapter(device)
     context = make_context(game_center_observation(), run_state=RunState.RUNNING)
 
-    step = adapter.advance(context)
+    first = adapter.advance(context)
+    second = adapter.advance(context)
 
-    assert step.actions == (ActionKind.TAP_POINT.value,)
-    assert ("tap_point", 100, 982) in device.calls
+    assert first.actions == (ActionKind.TAP_POINT.value,)
+    assert second.actions == (ActionKind.TAP_POINT.value,)
+    assert ("tap_point", 98, 981) in device.calls
+    assert ("tap_point", 254, 981) in device.calls
 
 
 def test_exit_done_never_reenters_game() -> None:

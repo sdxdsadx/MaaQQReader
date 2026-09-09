@@ -32,6 +32,12 @@ _ALLOWED_MACHINE = {
     "screenshot_dir",
     "log_dir",
     "record_dir",
+    "maa_runtime_dir",
+    "maa_resource_dir",
+    "maa_agent_dir",
+    "maa_custom_dir",
+    "maa_controller",
+    "maa_short_side",
 }
 _ALLOWED_CAPTCHA = {
     "solver",
@@ -52,6 +58,12 @@ _ENV_MACHINE = {
     "SCREENSHOT_DIR": "screenshot_dir",
     "LOG_DIR": "log_dir",
     "RECORD_DIR": "record_dir",
+    "MAA_RUNTIME_DIR": "maa_runtime_dir",
+    "MAA_RESOURCE_DIR": "maa_resource_dir",
+    "MAA_AGENT_DIR": "maa_agent_dir",
+    "MAA_CUSTOM_DIR": "maa_custom_dir",
+    "MAA_CONTROLLER": "maa_controller",
+    "MAA_SHORT_SIDE": "maa_short_side",
 }
 _ENV_CAPTCHA = {
     "CAPTCHA_SOLVER": "solver",
@@ -59,7 +71,7 @@ _ENV_CAPTCHA = {
     "CAPTCHA_VERIFY_FRAMES": "verify_frames",
     "CAPTCHA_VERIFY_INTERVAL": "verify_interval_seconds",
 }
-_INT_ENV = {"max_attempts", "verify_frames"}
+_INT_ENV = {"max_attempts", "verify_frames", "maa_short_side"}
 _FLOAT_ENV = {"verify_interval_seconds"}
 
 

@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Tuple
 
 from ..captcha.guard import CaptchaGuard, ManualCaptchaGuard
 from ..contract.conditions import StateIs, all_of, feature, state_in
@@ -209,6 +209,7 @@ class GameTaskAdapter(PlannedTaskAdapter):
         carousel_action: Optional[Action] = None,
         hall_swipe_action: Optional[Action] = None,
         game_center_online_play_action: Optional[Action] = None,
+        game_center_online_play_points: Optional[Tuple[Action, ...]] = None,
         agreement_action: Optional[Action] = None,
         agreement_action_alt: Optional[Action] = None,
         reward_game_button_action: Optional[Action] = None,
@@ -249,9 +250,20 @@ class GameTaskAdapter(PlannedTaskAdapter):
         self._hall_swipe_action = (
             hall_swipe_action or Action.swipe(360, 420, 360, 980, 500)
         )
-        self._game_center_online_play_action = (
-            game_center_online_play_action or Action.tap_point(100, 982)
+        default_game_center_points = (
+            Action.tap_point(98, 981),
+            Action.tap_point(254, 981),
+            Action.tap_point(408, 980),
+            Action.tap_point(564, 982),
         )
+        if game_center_online_play_points:
+            self._game_center_online_play_points = tuple(
+                game_center_online_play_points
+            )
+        elif game_center_online_play_action is not None:
+            self._game_center_online_play_points = (game_center_online_play_action,)
+        else:
+            self._game_center_online_play_points = default_game_center_points
         # 协议勾选框在不同游戏里高度略有差异，准备两个坐标依次尝试。
         self._agreement_actions = tuple(
             action
@@ -314,9 +326,17 @@ class GameTaskAdapter(PlannedTaskAdapter):
             # 在线玩 OCR 未命中时退到旧轮播图入口（仍在游戏大厅内）。
             return self._execute(self._carousel_action, context)
 
-        # 游戏中心：点击第一张游戏卡的「在线玩」进入游戏登录/加载页。
+        # 游戏中心：OCR 识别到「在线玩」后，按顺序点击游戏卡按钮坐标。
+        # 部分卡片是「下载游戏」详情页，点进去后恢复流程会返回 GAME_CENTER，
+        # 下一次自动换下一张卡片，直到进入可玩的登录/运行页。
         if state is PageState.GAME_CENTER:
-            return self._execute(self._game_center_online_play_action, context)
+            if self._has_text(context, self._online_play_text):
+                attempts = int(context.get("game_center_attempts", 0))
+                points = self._game_center_online_play_points
+                action = points[attempts % len(points)]
+                context.update_data(game_center_attempts=attempts + 1)
+                return self._execute(action, context)
+            return self._execute(self._carousel_action, context)
 
         # 登录/协议页：先勾选协议，再点「登录游戏 / 进入游戏」。
         if state is PageState.GAME_LOADING:
@@ -497,7 +517,12 @@ def build_game_definition(
         login_game_text=keys.game_ocr_login_game,
         carousel_action=Action.tap_point(360, 360),
         hall_swipe_action=Action.swipe(360, 420, 360, 980, 500),
-        game_center_online_play_action=Action.tap_point(100, 982),
+        game_center_online_play_points=(
+            Action.tap_point(98, 981),
+            Action.tap_point(254, 981),
+            Action.tap_point(408, 980),
+            Action.tap_point(564, 982),
+        ),
         agreement_action=Action.tap_point(157, 1032),
         agreement_action_alt=Action.tap_point(152, 1066),
         entry_scroll_action=entry_scroll_action,
