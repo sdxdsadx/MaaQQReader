@@ -7,11 +7,13 @@ import re
 from qqreader.maa.catalog import FeatureCatalog
 from qqreader.page.feature_keys import DEFAULT_FEATURE_KEYS
 from qqreader.page.states import PageState, RunState
+from qqreader.runtime.clock import FakeClock
 from qqreader.tasks.ad import AdTaskAdapter, build_ad_action_plan
 from qqreader.tasks.common import feature_key
 from tests.helpers import (
     QQ,
     SimulatedDevice,
+    ad_playing_observation,
     make_context,
     reward_observation,
 )
@@ -64,3 +66,17 @@ def test_partial_watch_uses_partial_feature_then_point() -> None:
     assert ("tap_feature", WATCH_PARTIAL_KEY) in device.calls
     assert step.actions == ("TAP_POINT",)
     assert ("tap_point", 600, 1078) in device.calls
+
+
+def test_ad_play_waits_40_seconds_before_handling_buttons() -> None:
+    clock = FakeClock()
+    device = SimulatedDevice()
+    adapter = _adapter(device)
+    context = make_context(
+        ad_playing_observation(),
+        clock=clock,
+        run_state=RunState.RUNNING,
+    )
+    step = adapter.advance(context)
+    assert step.actions == ("WAIT",)
+    assert clock.now() == 40.0

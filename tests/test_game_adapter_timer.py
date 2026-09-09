@@ -151,7 +151,6 @@ def test_ad_flow_end_to_end_with_real_adapter() -> None:
     assert result.outcome is TaskOutcome.SUCCESS
     assert ("tap_feature", HOME_REWARD_KEY) in device.calls
     assert ("tap_feature", REWARD_WATCH_KEY) in device.calls
-    assert ("tap_feature", AD_SKIP_KEY) in device.calls
     assert ("tap_feature", AD_RESULT_CLOSE_KEY) in device.calls
     assert result.final_state.value == "REWARD_HOME"
 

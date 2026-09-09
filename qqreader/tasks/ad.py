@@ -152,6 +152,7 @@ class AdTaskAdapter(PlannedTaskAdapter):
             DEFAULT_FEATURE_KEYS.ad_ocr_offer_alt,
         ),
         offer_close_action: Optional[Action] = None,
+        initial_wait_seconds: float = 40.0,
         scroll_action: Optional[Action] = None,
         max_scrolls: int = 24,
     ) -> None:
@@ -184,6 +185,7 @@ class AdTaskAdapter(PlannedTaskAdapter):
         )
         self._offer_texts = tuple(offer_texts)
         self._offer_close_action = offer_close_action or Action.press_back()
+        self._initial_wait_seconds = float(initial_wait_seconds)
         self._scroll_action = scroll_action or Action.swipe(
             360, 1000, 360, 350, 500
         )
@@ -216,6 +218,11 @@ class AdTaskAdapter(PlannedTaskAdapter):
                 context.update_data(ad_entry_scrolls=attempts + 1)
                 return self._execute(self._scroll_action, context)
         elif state is PageState.AD_PLAYING:
+            if not context.get("ad_initial_wait_done"):
+                context.update_data(ad_initial_wait_done=True)
+                return self._execute(
+                    Action.wait(self._initial_wait_seconds), context
+                )
             if self._has_text(context, self._claim_exit_text):
                 return self._execute(
                     Action.tap_feature(self._claim_exit_key), context
