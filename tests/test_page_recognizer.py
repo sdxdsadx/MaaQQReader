@@ -66,8 +66,9 @@ def test_require_confirmed_raises_state_not_confirmed() -> None:
 
 
 def test_required_feature_blocks_confirmation() -> None:
-    # 缺少必需的「我的」图标：即使其它特征齐全，HOME 也不能确认。
-    observation = home_observation(icons={})
+    # 缺少整个主页身份证据（图标 / 书架 / 底部结构都没有）时，HOME 不能确认。
+    # 注意：只缺「我的」图标时，QQR-6 的降级链会用 OCR/结构特征兜底。
+    observation = home_observation(icons={}, ocr_texts=(), structure={})
     decision = make_recognizer().evaluate(observation)
     home = decision.candidate(PageState.HOME)
     assert home is not None

@@ -2,6 +2,7 @@
 
 from .feature_keys import DEFAULT_FEATURE_KEYS, FeatureKeys
 from .features import (
+    FeatureAttempt,
     FeatureKind,
     FeatureMatch,
     FeatureSource,
@@ -13,6 +14,7 @@ from .observation import PageObservation
 from .profiles import build_default_state_definitions
 from .recognizer import (
     PageStateRecognizer,
+    RecognitionVerdict,
     StateCandidate,
     StateDecision,
     StateDefinition,
@@ -27,6 +29,7 @@ from .states import (
 
 __all__ = [
     "DEFAULT_FEATURE_KEYS",
+    "FeatureAttempt",
     "FeatureKeys",
     "FeatureKind",
     "FeatureMatch",
@@ -38,6 +41,7 @@ __all__ = [
     "PageState",
     "PageStateRecognizer",
     "REQUIRED_PAGE_STATES",
+    "RecognitionVerdict",
     "RunState",
     "StateCandidate",
     "StateDecision",

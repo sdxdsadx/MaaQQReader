@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import Tuple
 
 from .feature_keys import DEFAULT_FEATURE_KEYS, FeatureKeys
 from .features import FeatureKind, FeatureSpec, MatchMode
@@ -101,60 +101,88 @@ def _orientation(
     )
 
 
+def _ladder(
+    primary: FeatureSpec,
+    *fallbacks: FeatureSpec,
+    weight: float = 1.0,
+    required: bool = True,
+    description: str = "",
+) -> FeatureSpec:
+    """把主特征 + §3.6 降级链封装成一条逻辑特征。
+
+    主特征（模板 A）失败时，``match_feature`` 会按顺序尝试模板 B / OCR /
+    页面结构等备选；任一命中即认为该逻辑特征成立。这样「模板 A 失效但页面
+    确实存在」不会再因为单张模板匹配失败而直接判成 UNKNOWN。
+    """
+    return FeatureSpec(
+        kind=primary.kind,
+        key=primary.key,
+        values=primary.values,
+        weight=weight,
+        required=required,
+        threshold=primary.threshold,
+        mode=primary.mode,
+        description=description,
+        fallbacks=tuple(fallbacks),
+    )
+
+
 def build_default_state_definitions(
     keys: FeatureKeys = DEFAULT_FEATURE_KEYS,
 ) -> Tuple[StateDefinition, ...]:
-    """构造 AGENTS.md §3.2 要求的全部页面状态定义。"""
-    any_orientation = (Orientation.PORTRAIT.value, Orientation.LANDSCAPE.value)
+    """构造 AGENTS.md §3.2 要求的全部页面状态定义。
 
-    game_features: List[FeatureSpec] = []
-    if keys.game_package:
-        game_features.append(_app(keys.game_package, required=False))
-    game_features.extend(
-        [
-            _text(
-                FeatureKind.OCR,
-                keys.game_ocr_select_server,
-                values=(keys.game_ocr_enter, keys.game_ocr_enter_alt),
-                weight=1.5,
-                mode=MatchMode.ONE_OF,
-                description="游戏登录/选服页文案",
-            ),
-            _template(keys.game_login_button, weight=1.0),
-            _structure(keys.game_loading_marker, weight=1.0),
-            _orientation(Orientation.LANDSCAPE, values=(Orientation.PORTRAIT.value,), weight=0.3),
-        ]
-    )
+    广告与游戏的 6 个关键页面都使用「逻辑特征 + §3.6 降级链」：
+    主模板/主 OCR 失败时，自动尝试模板 B / OCR / 页面结构；任一备选命中
+    即可让该逻辑特征成立，并由其余特征（App / 方向 / 结构）做交叉确认。
+    """
+    any_orientation = (Orientation.PORTRAIT.value, Orientation.LANDSCAPE.value)
+    game_app = _app(keys.game_package or keys.qq_reader_package, required=False)
 
     return (
         StateDefinition(
             state=PageState.HOME,
             features=(
                 _app(keys.qq_reader_package),
-                _icon(keys.home_nav_my, weight=1.0, required=True),
-                _text(FeatureKind.OCR, keys.home_ocr_shelf, weight=1.0, mode=MatchMode.EQUALS),
-                _text(FeatureKind.OCR, keys.home_ocr_mine, weight=0.5),
-                _structure(keys.home_bottom_nav, weight=0.5),
+                _ladder(
+                    _icon(keys.home_nav_my, weight=1.0),
+                    _text(
+                        FeatureKind.OCR,
+                        keys.home_ocr_shelf,
+                        weight=1.0,
+                        mode=MatchMode.EQUALS,
+                    ),
+                    _text(FeatureKind.OCR, keys.home_ocr_mine, weight=0.5),
+                    _structure(keys.home_bottom_nav, weight=0.5),
+                    weight=1.5,
+                    required=True,
+                    description="主页身份：底部「我的」/ 书架 / 底部导航结构",
+                ),
                 _orientation(Orientation.PORTRAIT, weight=0.3),
             ),
             min_score=0.4,
-            min_matched=3,
+            min_matched=2,
             description="QQ 阅读主页/书架：可预测的公共起点",
         ),
         StateDefinition(
             state=PageState.REWARD_HOME,
             features=(
                 _app(keys.qq_reader_package),
-                _text(
-                    FeatureKind.OCR,
-                    keys.reward_ocr_ad_banner,
-                    values=(keys.reward_ocr_game_banner,),
+                _ladder(
+                    _text(
+                        FeatureKind.OCR,
+                        keys.reward_ocr_ad_banner,
+                        values=(keys.reward_ocr_game_banner,),
+                        weight=1.5,
+                        mode=MatchMode.ONE_OF,
+                        description="奖励页专属任务文案",
+                    ),
+                    _icon(keys.reward_header, weight=1.0),
+                    _structure(keys.reward_bottom_nav, weight=0.5),
                     weight=1.5,
-                    mode=MatchMode.ONE_OF,
-                    description="奖励页专属任务文案",
+                    required=True,
+                    description="奖励页身份：广告/游戏任务文案 / 标题栏 / 底部结构",
                 ),
-                _icon(keys.reward_header, weight=1.0),
-                _structure(keys.reward_bottom_nav, weight=0.5),
                 _orientation(Orientation.PORTRAIT, weight=0.3),
             ),
             min_score=0.4,
@@ -164,15 +192,26 @@ def build_default_state_definitions(
         StateDefinition(
             state=PageState.AD_PLAYING,
             features=(
-                _text(
-                    FeatureKind.OCR,
-                    keys.ad_ocr_countdown,
-                    values=(keys.ad_ocr_skip, keys.ad_ocr_close),
-                    weight=1.0,
-                    mode=MatchMode.ONE_OF,
+                _app(keys.qq_reader_package, required=False),
+                _ladder(
+                    _text(
+                        FeatureKind.OCR,
+                        keys.ad_ocr_countdown,
+                        values=(keys.ad_ocr_skip, keys.ad_ocr_close),
+                        weight=1.5,
+                        mode=MatchMode.ONE_OF,
+                    ),
+                    _icon(keys.ad_skip, weight=1.0),
+                    _structure(keys.ad_video_surface, weight=1.0),
+                    weight=1.5,
+                    required=True,
+                    description="广告播放身份：倒计时/跳过/关闭文案 / 跳过图标 / 视频区域",
                 ),
-                _icon(keys.ad_skip, weight=1.0),
-                _structure(keys.ad_video_surface, weight=1.0),
+                _orientation(
+                    Orientation.PORTRAIT,
+                    values=any_orientation,
+                    weight=0.3,
+                ),
             ),
             min_score=0.4,
             min_matched=2,
@@ -181,15 +220,26 @@ def build_default_state_definitions(
         StateDefinition(
             state=PageState.AD_RESULT,
             features=(
-                _text(
-                    FeatureKind.OCR,
-                    keys.ad_ocr_issued,
-                    values=(keys.ad_ocr_coupon,),
+                _app(keys.qq_reader_package, required=False),
+                _ladder(
+                    _text(
+                        FeatureKind.OCR,
+                        keys.ad_ocr_issued,
+                        values=(keys.ad_ocr_coupon,),
+                        weight=1.5,
+                        mode=MatchMode.ONE_OF,
+                    ),
+                    _icon(keys.ad_result_close, weight=1.0),
+                    _structure(keys.ad_video_surface, weight=0.5),
                     weight=1.5,
-                    mode=MatchMode.ONE_OF,
+                    required=True,
+                    description="广告结果身份：奖品已发放/优惠券 / 结果页关闭 / 视频结构",
                 ),
-                _icon(keys.ad_result_close, weight=1.0),
-                _structure(keys.ad_video_surface, weight=0.5),
+                _orientation(
+                    Orientation.PORTRAIT,
+                    values=any_orientation,
+                    weight=0.3,
+                ),
             ),
             min_score=0.4,
             min_matched=2,
@@ -215,7 +265,29 @@ def build_default_state_definitions(
         ),
         StateDefinition(
             state=PageState.GAME_LOADING,
-            features=tuple(game_features),
+            features=(
+                game_app,
+                _ladder(
+                    _text(
+                        FeatureKind.OCR,
+                        keys.game_ocr_select_server,
+                        values=(keys.game_ocr_enter, keys.game_ocr_enter_alt),
+                        weight=1.5,
+                        mode=MatchMode.ONE_OF,
+                        description="游戏登录/选服页文案",
+                    ),
+                    _template(keys.game_login_button, weight=1.0),
+                    _structure(keys.game_loading_marker, weight=1.0),
+                    weight=1.5,
+                    required=True,
+                    description="游戏加载身份：点击选服/踏入仙途/进入游戏 / 登录按钮 / 登录页结构",
+                ),
+                _orientation(
+                    Orientation.LANDSCAPE,
+                    values=any_orientation,
+                    weight=0.3,
+                ),
+            ),
             min_score=0.4,
             min_matched=2,
             description="游戏登录/加载页：点击选服 / 踏入仙途 / 进入游戏",
@@ -223,9 +295,19 @@ def build_default_state_definitions(
         StateDefinition(
             state=PageState.GAME_RUNNING,
             features=(
-                _structure(keys.game_hud, weight=1.5),
-                _text(FeatureKind.OCR, keys.game_ocr_active, weight=1.0),
-                _orientation(Orientation.LANDSCAPE, values=any_orientation, weight=0.3),
+                game_app,
+                _ladder(
+                    _structure(keys.game_hud, weight=1.5),
+                    _text(FeatureKind.OCR, keys.game_ocr_active, weight=1.0),
+                    weight=1.5,
+                    required=True,
+                    description="游戏运行身份：游戏内 HUD / 领币悬浮",
+                ),
+                _orientation(
+                    Orientation.LANDSCAPE,
+                    values=any_orientation,
+                    weight=0.3,
+                ),
             ),
             min_score=0.4,
             min_matched=2,
@@ -234,9 +316,20 @@ def build_default_state_definitions(
         StateDefinition(
             state=PageState.GAME_RESULT,
             features=(
-                _text(FeatureKind.OCR, keys.game_ocr_exit, weight=1.5),
-                _template(keys.game_exit_dialog, weight=1.0, threshold=0.7),
-                _icon(keys.game_exit_menu, weight=0.5),
+                game_app,
+                _ladder(
+                    _text(FeatureKind.OCR, keys.game_ocr_exit, weight=1.5),
+                    _template(keys.game_exit_dialog, weight=1.0, threshold=0.7),
+                    _icon(keys.game_exit_menu, weight=0.5),
+                    weight=1.5,
+                    required=True,
+                    description="游戏结果身份：退出文案 / 退出确认 / 悬浮菜单",
+                ),
+                _orientation(
+                    Orientation.PORTRAIT,
+                    values=any_orientation,
+                    weight=0.3,
+                ),
             ),
             min_score=0.4,
             min_matched=2,
