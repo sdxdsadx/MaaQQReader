@@ -458,7 +458,7 @@ class QQReaderGui:
         if not spec.implemented:
             tk.Label(
                 top,
-                text="未接入",
+                text="旧流程",
                 bg="#fef3c7",
                 fg=WARNING,
                 font=("Microsoft YaHei UI", 8, "bold"),
@@ -1015,7 +1015,7 @@ class QQReaderGui:
             for token in ("失败", "错误", "[ERR]", "[not-implemented]")
         ):
             tag = "error"
-        elif "未接入" in message:
+        elif "未接入" in message or "旧流程" in message:
             tag = "warn"
         elif any(token in message for token in ("成功", "完成")):
             tag = "success"

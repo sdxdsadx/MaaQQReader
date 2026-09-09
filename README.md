@@ -22,7 +22,7 @@ QQ 阅读每日任务自动化（MaaFramework 重构）的新仓库。
 | 验证码 | `qqreader/captcha/` | `ManualCaptchaGuard`（默认等待人工）、`VerifyingCaptchaGuard`（求解后必须重新观测确认消失） |
 | 调度 | `qqreader/runner/` | `TaskRunner`（阶段推进 / 超时 / 取消 / UNKNOWN 只重判或恢复 / 验证码优先阻塞）、`PageConfirmer`（确认阶梯）、`FileRunRecorder`（JSON 运行记录 + 关键节点截图 + 默认 30 天保留）、`TaskRegistry`、`TaskDefinition` |
 | 具体任务 | `qqreader/tasks/` | 声明式 `StateActionPlan` + `PlannedTaskAdapter`；广告 `DailyAdFlow`、游戏 `DailyGameFlow` 的契约与动作计划；HOME 使用书架 OCR「本周阅读时长」进奖励页、奖励页滚动查找「去玩游戏」并在 OCR 定位失败时退到按钮坐标 fallback；游戏大厅下划一次 → 识别「在线玩」→ 游戏中心点游戏卡「在线玩」→ 登录/协议页（勾选/登录游戏）→ `GAME_RUNNING`「领币」计时；退出流程含「退出」「关闭游戏」和返回奖励页，退出后禁止再次进入游戏；`build_default_registry` |
-| 运行时协议 | `qqreader/runtime/` | `Clock`/`CancellationToken`/`DeviceController`/`PageObserver`/`TaskAdapter`/`TaskContext`；`qqreader/maa/` 已提供 MaaFramework ctypes 适配（截图/OCR/模板/点击/滑动/前台 App）；`scripts/run_task.py` 支持 `DailyGameFlow` / `DailyAdFlow` / `LaunchQQReader` / `SmokeTest`，旧任务明确输出未接入 |
+| 运行时协议 | `qqreader/runtime/` | `Clock`/`CancellationToken`/`DeviceController`/`PageObserver`/`TaskAdapter`/`TaskContext`；`qqreader/maa/` 已提供 MaaFramework ctypes 适配（截图/OCR/模板/点击/滑动/前台 App）；`scripts/run_task.py` 支持新流程任务，旧任务转调备份里的旧 QQ 阅读 `run_maa_ad.py` |
 
 ## 运行测试
 
@@ -72,12 +72,12 @@ GUI 已迁移旧 GUI 的全部任务列表（按旧顺序）：
 ```
 
 其中 `DailyGameFlow`、`DailyAdFlow`、`LaunchQQReader`、`SmokeTest` 已接入新运行脚本；
-其余旧 pipeline 任务保留在任务树中并标记「未接入」，运行时会明确输出
-`[not-implemented]`，不会被当作成功。
+其余旧 pipeline 任务保留在任务卡片中并标记「旧流程」，运行时会转调备份里的旧
+QQ 阅读 `run_maa_ad.py`（旧 pipeline / 旧资源），不会静默跳过。
 
 GUI 支持：
 
-- 视觉：浅灰背景 + 白色卡片；顶部标题/配置；工具条与底部操作栏分离；深色日志区按 `[observe]` / 成功 / 失败 / 未接入着色；状态点显示运行/停止/完成/失败；
+- 视觉：浅灰背景 + 白色卡片；顶部标题/配置；工具条与底部操作栏分离；深色日志区按 `[observe]` / 成功 / 失败 / 旧流程着色；状态点显示运行/停止/完成/失败；
 - 左侧卡片式任务列表：按分组展示，每张卡片直接包含启用勾选、任务名称、说明、参数（重复次数/每次分钟/超时/最大步数）和上移/下移按钮；
 - 右侧为实时日志，参数修改即时保存到 `runtime/gui_tasks.json`；
 - 「串行执行」按卡片顺序依次运行所有已启用任务，`count>1` 会自动展开重复执行；
@@ -105,7 +105,7 @@ py -3.10 scripts/run_task.py --config configs/qqreader.local.json `
 py -3.10 scripts/run_task.py --config configs/qqreader.local.json `
   --task SmokeTest
 
-# 旧任务会输出未接入
+# 旧任务转调备份里的旧 QQ 阅读 run_maa_ad.py
 py -3.10 scripts/run_task.py --config configs/qqreader.local.json `
   --task DailyReadingFlow --minutes 35
 ```

@@ -62,7 +62,7 @@ class TaskSpec:
     def display_name(self) -> str:
         base = self.legacy_name or self.name
         if not self.implemented:
-            return f"{base}（未接入）"
+            return f"{base}（旧流程）"
         return base
 
     def field(self, key: str) -> TaskSettingField:
@@ -197,7 +197,7 @@ DEFAULT_TASK_CATALOG: Tuple[TaskSpec, ...] = (
         entry="DailyReadingFlow",
         implemented=False,
         default_enabled=False,
-        description="旧 pipeline 自动阅读流程；新状态机尚未接入，运行时会明确输出「未接入」。",
+        description="调用旧 QQ 阅读 pipeline 的自动阅读流程。",
         fields=(_count_field(2), _minutes_field(35), _timeout_field(240)),
     ),
     TaskSpec(
@@ -208,7 +208,7 @@ DEFAULT_TASK_CATALOG: Tuple[TaskSpec, ...] = (
         entry="DailyAudiobookFlow",
         implemented=False,
         default_enabled=False,
-        description="旧 pipeline 听书流程；新状态机尚未接入。",
+        description="调用旧 QQ 阅读 pipeline 的听书流程。",
         fields=(_count_field(1), _minutes_field(35), _timeout_field(240)),
     ),
     TaskSpec(
@@ -256,7 +256,7 @@ DEFAULT_TASK_CATALOG: Tuple[TaskSpec, ...] = (
         entry="DailyExternalAppFlow",
         implemented=False,
         default_enabled=False,
-        description="旧 pipeline 外部应用跳转流程；新状态机尚未接入。",
+        description="调用旧 QQ 阅读 pipeline 的外部应用跳转流程。",
         fields=(_count_field(1, maximum=1), _timeout_field(30)),
     ),
     TaskSpec(
@@ -267,7 +267,7 @@ DEFAULT_TASK_CATALOG: Tuple[TaskSpec, ...] = (
         entry="DailyLevelAdFlow",
         implemented=False,
         default_enabled=False,
-        description="旧 pipeline 等级页广告流程；新状态机尚未接入。",
+        description="调用旧 QQ 阅读 pipeline 的等级页广告流程。",
         fields=(_count_field(1, maximum=1), _timeout_field(30)),
     ),
     TaskSpec(
@@ -278,7 +278,7 @@ DEFAULT_TASK_CATALOG: Tuple[TaskSpec, ...] = (
         entry="ClaimOneReward",
         implemented=False,
         default_enabled=False,
-        description="旧 pipeline 奖励领取流程；新状态机尚未接入。",
+        description="调用旧 QQ 阅读 pipeline 的奖励领取流程。",
         fields=(_count_field(1, maximum=1), _timeout_field(10)),
     ),
 )
@@ -415,6 +415,6 @@ def describe_catalog(
     for group, specs in groups.items():
         lines.append(f"[{group}]")
         for spec in specs:
-            suffix = "" if spec.implemented else "（未接入）"
+            suffix = "" if spec.implemented else "（旧流程）"
             lines.append(f"  - {spec.display_name}{suffix} ({spec.key})")
     return "\n".join(lines)

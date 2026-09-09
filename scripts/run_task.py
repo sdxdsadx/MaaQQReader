@@ -6,6 +6,8 @@ GUI 串行执行每个任务时调用本脚本；也可以单独命令行使用�
 from __future__ import annotations
 
 import argparse
+import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -46,6 +48,100 @@ LEGACY_NOT_IMPLEMENTED = (
     "ClaimOneReward",
 )
 TASK_NAMES = NEW_FLOW_TASKS + SYSTEM_TASKS + LEGACY_NOT_IMPLEMENTED
+
+LEGACY_ENTRY = {
+    "DailyReadingFlow": "DirectReadingFlow",
+    "DailyAudiobookFlow": "DailyAudiobookFlow",
+    "DailyExternalAppFlow": "DailyExternalAppFlow",
+    "DailyLevelAdFlow": "DailyLevelAdFlow",
+    "ClaimOneReward": "ClaimOneReward",
+}
+LEGACY_TIMING_NODE = {
+    "DailyReadingFlow": "ReadingWaitOneMinute",
+    "DailyAudiobookFlow": "AudiobookWaitOneMinute",
+}
+
+
+def _find_legacy_runner(repo_root: Path) -> Optional[Path]:
+    for candidate in sorted(repo_root.glob("_backup_old_project_*/tools/run_maa_ad.py")):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _patch_legacy_pipeline(resource_dir: Path, node: str, minutes: float):
+    pipeline_path = resource_dir / "pipeline" / "qq_reader_trial.json"
+    if not pipeline_path.is_file():
+        return None
+    original = pipeline_path.read_bytes()
+    try:
+        data = json.loads(original.decode("utf-8"))
+        if node in data:
+            data[node]["post_delay"] = int(float(minutes) * 60000)
+            pipeline_path.write_text(
+                json.dumps(data, ensure_ascii=False, indent=4) + "\n",
+                encoding="utf-8",
+            )
+        return original
+    except (OSError, ValueError) as exc:
+        print(f"[legacy] 修改旧 pipeline 失败: {exc}", flush=True)
+        return None
+
+
+def _run_legacy_task(task: str, config: Any, minutes: Optional[float]) -> int:
+    repo_root = Path(__file__).resolve().parents[1]
+    runner = _find_legacy_runner(repo_root)
+    if runner is None:
+        print(
+            "[legacy] 找不到旧 run_maa_ad.py（应在 _backup_old_project_*/tools/）",
+            flush=True,
+        )
+        return 3
+    entry = LEGACY_ENTRY.get(task, task)
+    node = LEGACY_TIMING_NODE.get(task)
+    original = None
+    resource_dir = Path(config.machine.maa_resource_dir)
+    if node and minutes and float(minutes) > 0:
+        original = _patch_legacy_pipeline(resource_dir, node, float(minutes))
+    command = [
+        sys.executable,
+        str(runner),
+        entry,
+        "--runtime",
+        str(config.machine.maa_runtime_dir),
+        "--resource",
+        str(resource_dir),
+        "--adb",
+        str(config.machine.adb_path),
+        "--device",
+        str(config.machine.adb_address),
+        "--log-dir",
+        str(config.machine.log_dir),
+    ]
+    print("[legacy] 调用旧 QQ 阅读流程: " + " ".join(command), flush=True)
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if process.stdout is not None:
+            for line in process.stdout:
+                print(line.rstrip(), flush=True)
+        return process.wait()
+    except OSError as exc:
+        print(f"[legacy] 启动旧流程失败: {exc}", flush=True)
+        return 3
+    finally:
+        if original is not None:
+            pipeline_path = resource_dir / "pipeline" / "qq_reader_trial.json"
+            try:
+                pipeline_path.write_bytes(original)
+            except OSError:
+                pass
 
 
 class LoggingObserver:
@@ -134,14 +230,11 @@ def _run_system_task(
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
+    config = load_config(args.config)
 
     if args.task in LEGACY_NOT_IMPLEMENTED:
-        print(
-            f"[not-implemented] task={args.task} 旧 pipeline 任务尚未接入新状态机；"
-            f"已保留在 GUI 任务列表中，请勿把本次运行当作成功。",
-            flush=True,
-        )
-        return 3
+        minutes = args.minutes if args.minutes is not None else args.duration_minutes
+        return _run_legacy_task(args.task, config, minutes)
 
     if args.timeout_minutes <= 0:
         print("[配置错误] --timeout-minutes 必须 > 0", file=sys.stderr)
@@ -155,8 +248,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if game_duration <= 0:
             print("[配置错误] 游戏挂机分钟必须 > 0", file=sys.stderr)
             return 2
-
-    config = load_config(args.config)
     client = build_maa_client(config)
     try:
         client.connect()

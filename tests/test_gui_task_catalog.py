@@ -32,8 +32,8 @@ def test_catalog_migrates_old_gui_task_order() -> None:
     ]
     assert DEFAULT_TASK_CATALOG[2].legacy_name.startswith("01 每日自动阅读")
     assert DEFAULT_TASK_CATALOG[4].legacy_name.startswith("03 每日游戏")
-    assert "（未接入）" in DEFAULT_TASK_CATALOG[2].display_name
-    assert "（未接入）" not in DEFAULT_TASK_CATALOG[4].display_name
+    assert "（旧流程）" in DEFAULT_TASK_CATALOG[2].display_name
+    assert "（旧流程）" not in DEFAULT_TASK_CATALOG[4].display_name
 
 
 def test_default_settings_follow_old_defaults() -> None:
