@@ -103,6 +103,7 @@ def test_build_run_task_command(tmp_path: Path) -> None:
         "DailyGameFlow",
         settings={
             "duration_minutes": 0.5,
+            "minutes": 35,
             "timeout_minutes": 3,
             "max_steps": 400,
         },
@@ -110,6 +111,7 @@ def test_build_run_task_command(tmp_path: Path) -> None:
     assert command[1].endswith(str(Path("scripts") / "run_task.py"))
     assert command[command.index("--task") + 1] == "DailyGameFlow"
     assert command[command.index("--duration-minutes") + 1] == "0.5"
+    assert command[command.index("--minutes") + 1] == "35"
     assert command[command.index("--timeout-minutes") + 1] == "3"
     assert command[command.index("--max-steps") + 1] == "400"
 

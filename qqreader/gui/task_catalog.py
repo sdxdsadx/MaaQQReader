@@ -1,4 +1,8 @@
-"""任务目录、分级设置与串行计划（纯逻辑，不依赖 Tkinter）。"""
+"""任务目录、分级设置与串行计划（纯逻辑，不依赖 Tkinter）。
+
+任务列表按旧 GUI 的 `assets/interface.json` 顺序迁移；未接入新流程的任务会保留
+在树中，但运行时会由 ``scripts/run_task.py`` 明确输出「未接入」。
+"""
 
 from __future__ import annotations
 
@@ -48,9 +52,18 @@ class TaskSpec:
     name: str
     group: str
     description: str
-    fields: Tuple[TaskSettingField, ...] = ()
+    legacy_name: str = ""
+    entry: str = ""
+    implemented: bool = True
     default_enabled: bool = False
-    runnable: bool = True
+    fields: Tuple[TaskSettingField, ...] = ()
+
+    @property
+    def display_name(self) -> str:
+        base = self.legacy_name or self.name
+        if not self.implemented:
+            return f"{base}（未接入）"
+        return base
 
     def field(self, key: str) -> TaskSettingField:
         for item in self.fields:
@@ -66,10 +79,13 @@ class TaskSettings:
     enabled: bool
     values: Dict[str, Any] = field(default_factory=dict)
 
-    def value(self, spec: TaskSpec, key: str) -> Any:
+    def value(self, spec: TaskSpec, key: str, default: Any = None) -> Any:
         if key in self.values:
             return self.values[key]
-        return spec.field(key).default
+        try:
+            return spec.field(key).default
+        except KeyError:
+            return default
 
     def normalized(self, spec: TaskSpec) -> "TaskSettings":
         values: Dict[str, Any] = {}
@@ -98,19 +114,116 @@ class TaskSettings:
 class TaskRunPlan:
     spec: TaskSpec
     settings: TaskSettings
+    repeat_index: int = 1
+    repeat_total: int = 1
+
+
+def _count_field(default: int = 1, maximum: int = 99) -> TaskSettingField:
+    return TaskSettingField(
+        key="count",
+        label="重复次数",
+        kind="int",
+        default=default,
+        minimum=1,
+        maximum=maximum,
+        step=1,
+    )
+
+
+def _minutes_field(default: float = 1) -> TaskSettingField:
+    return TaskSettingField(
+        key="minutes",
+        label="每次分钟",
+        kind="float",
+        default=default,
+        minimum=0.1,
+        maximum=240.0,
+        step=1.0,
+        unit="分钟",
+    )
+
+
+def _timeout_field(default: float = 30) -> TaskSettingField:
+    return TaskSettingField(
+        key="timeout_minutes",
+        label="任务超时",
+        kind="float",
+        default=default,
+        minimum=0.1,
+        maximum=240.0,
+        step=1.0,
+        unit="分钟",
+    )
+
+
+def _max_steps_field(default: int = 2000) -> TaskSettingField:
+    return TaskSettingField(
+        key="max_steps",
+        label="最大步数",
+        kind="int",
+        default=default,
+        minimum=1,
+        maximum=20000,
+        step=100,
+    )
 
 
 DEFAULT_TASK_CATALOG: Tuple[TaskSpec, ...] = (
     TaskSpec(
+        key="LaunchQQReader",
+        name="启动 QQ 阅读",
+        group="启动与检查",
+        legacy_name="00 启动 QQ 阅读并关闭开屏弹窗",
+        entry="LaunchQQReader",
+        description="启动 QQ 阅读并处理已知开屏弹窗。",
+        default_enabled=False,
+        fields=(),
+    ),
+    TaskSpec(
+        key="SmokeTest",
+        name="页面识别检查",
+        group="启动与检查",
+        legacy_name="00 页面识别检查",
+        entry="SmokeTest",
+        description="连接 MAA、截图并输出当前页面状态/OCR，用于检查识别链路。",
+        default_enabled=False,
+        fields=(),
+    ),
+    TaskSpec(
+        key="DailyReadingFlow",
+        name="每日自动阅读",
+        group="阅读任务",
+        legacy_name="01 每日自动阅读（默认2次×35分钟）",
+        entry="DailyReadingFlow",
+        implemented=False,
+        default_enabled=False,
+        description="旧 pipeline 自动阅读流程；新状态机尚未接入，运行时会明确输出「未接入」。",
+        fields=(_count_field(2), _minutes_field(35), _timeout_field(240)),
+    ),
+    TaskSpec(
+        key="DailyAudiobookFlow",
+        name="每日听书",
+        group="听书任务",
+        legacy_name="02 每日听书（默认35分钟，结束后暂停）",
+        entry="DailyAudiobookFlow",
+        implemented=False,
+        default_enabled=False,
+        description="旧 pipeline 听书流程；新状态机尚未接入。",
+        fields=(_count_field(1), _minutes_field(35), _timeout_field(240)),
+    ),
+    TaskSpec(
         key="DailyGameFlow",
-        name="游戏挂机",
-        group="日常任务",
+        name="每日游戏",
+        group="游戏任务",
+        legacy_name="03 每日游戏（默认25分钟）",
+        entry="DailyGameFlow",
+        default_enabled=True,
         description=(
             "奖励页 → 去玩游戏 → 游戏大厅下划 → 在线玩 → 游戏中心 → "
             "登录/协议 → 领币计时 → 退出 → 返回奖励页"
         ),
-        default_enabled=True,
         fields=(
+            _count_field(1),
             TaskSettingField(
                 key="duration_minutes",
                 label="挂机分钟",
@@ -121,54 +234,52 @@ DEFAULT_TASK_CATALOG: Tuple[TaskSpec, ...] = (
                 step=1.0,
                 unit="分钟",
             ),
-            TaskSettingField(
-                key="timeout_minutes",
-                label="任务超时",
-                kind="float",
-                default=30.0,
-                minimum=0.1,
-                maximum=240.0,
-                step=1.0,
-                unit="分钟",
-            ),
-            TaskSettingField(
-                key="max_steps",
-                label="最大步数",
-                kind="int",
-                default=2000,
-                minimum=1,
-                maximum=20000,
-                step=100,
-            ),
+            _timeout_field(30),
+            _max_steps_field(),
         ),
     ),
     TaskSpec(
         key="DailyAdFlow",
-        name="奖励页广告",
-        group="日常任务",
-        description="奖励页视频广告：主页 → 奖励页 → 观看广告 → 返回奖励页 → 判断次数/验证码",
+        name="每日广告完整流程",
+        group="奖励任务",
+        legacy_name="04 每日广告完整流程（自动至12/12）",
+        entry="DailyAdFlow",
+        default_enabled=True,
+        description="奖励页视频广告：主页 → 奖励页 → 观看广告 → 返回奖励页 → 判断次数/验证码。",
+        fields=(_count_field(1, maximum=1), _timeout_field(45), _max_steps_field()),
+    ),
+    TaskSpec(
+        key="DailyExternalAppFlow",
+        name="外部应用每日流程",
+        group="外部应用",
+        legacy_name="05 外部应用每日流程（大众点评+百度地图）",
+        entry="DailyExternalAppFlow",
+        implemented=False,
         default_enabled=False,
-        fields=(
-            TaskSettingField(
-                key="timeout_minutes",
-                label="任务超时",
-                kind="float",
-                default=45.0,
-                minimum=0.1,
-                maximum=240.0,
-                step=1.0,
-                unit="分钟",
-            ),
-            TaskSettingField(
-                key="max_steps",
-                label="最大步数",
-                kind="int",
-                default=2000,
-                minimum=1,
-                maximum=20000,
-                step=100,
-            ),
-        ),
+        description="旧 pipeline 外部应用跳转流程；新状态机尚未接入。",
+        fields=(_count_field(1, maximum=1), _timeout_field(30)),
+    ),
+    TaskSpec(
+        key="DailyLevelAdFlow",
+        name="等级页广告每日流程",
+        group="等级广告",
+        legacy_name="06 等级页广告每日流程（赠币+积分）",
+        entry="DailyLevelAdFlow",
+        implemented=False,
+        default_enabled=False,
+        description="旧 pipeline 等级页广告流程；新状态机尚未接入。",
+        fields=(_count_field(1, maximum=1), _timeout_field(30)),
+    ),
+    TaskSpec(
+        key="ClaimOneReward",
+        name="领取全部已完成奖励",
+        group="奖励领取",
+        legacy_name="07 领取全部已完成奖励",
+        entry="ClaimOneReward",
+        implemented=False,
+        default_enabled=False,
+        description="旧 pipeline 奖励领取流程；新状态机尚未接入。",
+        fields=(_count_field(1, maximum=1), _timeout_field(10)),
     ),
 )
 
@@ -185,11 +296,31 @@ def default_settings(
     }
 
 
+def ordered_catalog(
+    catalog: Sequence[TaskSpec] = DEFAULT_TASK_CATALOG,
+    order: Optional[Sequence[str]] = None,
+) -> List[TaskSpec]:
+    """按保存的顺序返回任务；未保存的任务追加在目录顺序后面。"""
+    if not order:
+        return list(catalog)
+    by_key = {spec.key: spec for spec in catalog}
+    result: List[TaskSpec] = []
+    seen = set()
+    for key in order:
+        spec = by_key.get(key)
+        if spec is not None and key not in seen:
+            result.append(spec)
+            seen.add(key)
+    for spec in catalog:
+        if spec.key not in seen:
+            result.append(spec)
+    return result
+
+
 def load_task_settings(
     path: Path,
     catalog: Sequence[TaskSpec] = DEFAULT_TASK_CATALOG,
 ) -> Dict[str, TaskSettings]:
-    """读取 runtime/gui_tasks.json；不存在或损坏时返回默认值。"""
     defaults = default_settings(catalog)
     if not path.is_file():
         return defaults
@@ -207,12 +338,30 @@ def load_task_settings(
     return defaults
 
 
+def load_task_order(
+    path: Path,
+    catalog: Sequence[TaskSpec] = DEFAULT_TASK_CATALOG,
+) -> List[TaskSpec]:
+    if not path.is_file():
+        return list(catalog)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return list(catalog)
+    order = raw.get("order") if isinstance(raw, dict) else None
+    if not isinstance(order, list):
+        return list(catalog)
+    return ordered_catalog(catalog, [str(item) for item in order])
+
+
 def save_task_settings(
     path: Path,
     settings: Mapping[str, TaskSettings],
     catalog: Sequence[TaskSpec] = DEFAULT_TASK_CATALOG,
+    *,
+    order: Optional[Sequence[str]] = None,
 ) -> None:
-    payload = {
+    payload: Dict[str, Any] = {
         "tasks": {
             spec.key: settings.get(
                 spec.key, TaskSettings(enabled=spec.default_enabled)
@@ -220,6 +369,8 @@ def save_task_settings(
             for spec in catalog
         }
     }
+    if order is not None:
+        payload["order"] = [str(item) for item in order]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
@@ -230,16 +381,27 @@ def save_task_settings(
 def build_serial_plan(
     settings: Mapping[str, TaskSettings],
     catalog: Sequence[TaskSpec] = DEFAULT_TASK_CATALOG,
+    *,
+    order: Optional[Sequence[str]] = None,
 ) -> List[TaskRunPlan]:
-    """按目录顺序返回已启用且可运行的任务。"""
+    """按顺序展开已启用任务；`count` 次任务展开为多个串行步骤。"""
     plan: List[TaskRunPlan] = []
-    for spec in catalog:
-        if not spec.runnable:
-            continue
+    for spec in ordered_catalog(catalog, order):
         item = settings.get(spec.key)
         if item is None or not item.enabled:
             continue
-        plan.append(TaskRunPlan(spec=spec, settings=item.normalized(spec)))
+        normalized = item.normalized(spec)
+        count = int(normalized.value(spec, "count", 1) or 1)
+        count = max(1, count)
+        for index in range(count):
+            plan.append(
+                TaskRunPlan(
+                    spec=spec,
+                    settings=normalized,
+                    repeat_index=index + 1,
+                    repeat_total=count,
+                )
+            )
     return plan
 
 
@@ -253,6 +415,6 @@ def describe_catalog(
     for group, specs in groups.items():
         lines.append(f"[{group}]")
         for spec in specs:
-            suffix = "" if spec.runnable else "（未接入）"
-            lines.append(f"  - {spec.name} ({spec.key}){suffix}")
+            suffix = "" if spec.implemented else "（未接入）"
+            lines.append(f"  - {spec.display_name}{suffix} ({spec.key})")
     return "\n".join(lines)

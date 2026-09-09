@@ -10,8 +10,8 @@ QQ 阅读每日任务自动化（MaaFramework 重构）的新仓库。
 **QQR-6「广告与游戏多特征识别策略」**、**QQR-10「运行结果状态、失败原因记录与关键节点截图」**、
 **QQR-17「奖励页游戏入口 / 去玩游戏按钮」**、**QQR-18「游戏挂机完整退出链路」**、
 **QQR-19「去玩游戏识别/点击修复」**、**QQR-20「游戏大厅下划 → 在线玩 → 游戏中心 → 进入游戏」**、
-**QQR-21「GUI 重构并接入运行脚本」** 与 **QQR-22「MAA GUI 风格任务分级 + 串行执行」**
-的核心实现，并有单元测试覆盖：
+**QQR-21「GUI 重构并接入运行脚本」**、**QQR-22「MAA GUI 风格任务分级 + 串行执行」**
+与 **QQR-23「迁移旧 GUI 任务列表与功能」** 的核心实现，并有单元测试覆盖：
 
 | 层 | 模块 | 内容 |
 | --- | --- | --- |
@@ -21,7 +21,7 @@ QQ 阅读每日任务自动化（MaaFramework 重构）的新仓库。
 | 验证码 | `qqreader/captcha/` | `ManualCaptchaGuard`（默认等待人工）、`VerifyingCaptchaGuard`（求解后必须重新观测确认消失） |
 | 调度 | `qqreader/runner/` | `TaskRunner`（阶段推进 / 超时 / 取消 / UNKNOWN 只重判或恢复 / 验证码优先阻塞）、`PageConfirmer`（确认阶梯）、`FileRunRecorder`（JSON 运行记录 + 关键节点截图 + 默认 30 天保留）、`TaskRegistry`、`TaskDefinition` |
 | 具体任务 | `qqreader/tasks/` | 声明式 `StateActionPlan` + `PlannedTaskAdapter`；广告 `DailyAdFlow`、游戏 `DailyGameFlow` 的契约与动作计划；HOME 使用书架 OCR「本周阅读时长」进奖励页、奖励页滚动查找「去玩游戏」并在 OCR 定位失败时退到按钮坐标 fallback；游戏大厅下划一次 → 识别「在线玩」→ 游戏中心点游戏卡「在线玩」→ 登录/协议页（勾选/登录游戏）→ `GAME_RUNNING`「领币」计时；退出流程含「退出」「关闭游戏」和返回奖励页，退出后禁止再次进入游戏；`build_default_registry` |
-| 运行时协议 | `qqreader/runtime/` | `Clock`/`CancellationToken`/`DeviceController`/`PageObserver`/`TaskAdapter`/`TaskContext`；`qqreader/maa/` 已提供 MaaFramework ctypes 适配（截图/OCR/模板/点击/滑动/前台 App）；`scripts/run_task.py` 支持 `DailyGameFlow` / `DailyAdFlow` 单任务运行，GUI 串行调用它 |
+| 运行时协议 | `qqreader/runtime/` | `Clock`/`CancellationToken`/`DeviceController`/`PageObserver`/`TaskAdapter`/`TaskContext`；`qqreader/maa/` 已提供 MaaFramework ctypes 适配（截图/OCR/模板/点击/滑动/前台 App）；`scripts/run_task.py` 支持 `DailyGameFlow` / `DailyAdFlow` / `LaunchQQReader` / `SmokeTest`，旧任务明确输出未接入 |
 
 ## 运行测试
 
@@ -29,7 +29,7 @@ QQ 阅读每日任务自动化（MaaFramework 重构）的新仓库。
 py -3.10 -m pytest
 ```
 
-当前结果：**168 个单元测试全部通过**（18 个测试文件）。核心包 `qqreader/` 不依赖任何第三方库，仅测试需要 `pytest`。
+当前结果：**170 个单元测试全部通过**（18 个测试文件）。核心包 `qqreader/` 不依赖任何第三方库，仅测试需要 `pytest`。
 
 ## GUI 控制台（MAA GUI 风格）
 
@@ -56,13 +56,34 @@ build-gui-exe.cmd
 
 `dist\QQReaderGUI.exe` 可直接双击；它会向上查找仓库根目录的 `scripts\run_task.py`，并使用配置里的 `machine.python_executable`（未配置时自动使用 `python` 或 `py -3.10`）来运行脚本。
 
+GUI 已迁移旧 GUI 的全部任务列表（按旧顺序）：
+
+```text
+00 启动 QQ 阅读并关闭开屏弹窗
+00 页面识别检查
+01 每日自动阅读（默认 2 次 × 35 分钟）
+02 每日听书（默认 35 分钟）
+03 每日游戏（默认 25 分钟）
+04 每日广告完整流程（自动至 12/12）
+05 外部应用每日流程（大众点评 + 百度地图）
+06 等级页广告每日流程（赠币 + 积分）
+07 领取全部已完成奖励
+```
+
+其中 `DailyGameFlow`、`DailyAdFlow`、`LaunchQQReader`、`SmokeTest` 已接入新运行脚本；
+其余旧 pipeline 任务保留在任务树中并标记「未接入」，运行时会明确输出
+`[not-implemented]`，不会被当作成功。
+
 GUI 支持：
 
 - 左侧任务树：按分组展示任务，点击「启用」列勾选/取消；
-- 右侧任务设置：每个任务独立设置挂机分钟、任务超时、最大步数，设置保存到 `runtime/gui_tasks.json`；
-- 「串行执行」按任务树顺序依次运行所有已启用任务，日志中有 `[1/N]`、`[2/N]` 分隔；
+- 右侧任务设置：每个任务独立设置重复次数、每次分钟、任务超时、最大步数；
+- 「串行执行」按任务树顺序依次运行所有已启用任务，`count>1` 会自动展开重复执行；
 - 「运行选中任务」只执行当前任务；
+- 「每日默认」/「1分钟试运行」预设；
+- 上移 / 下移调整任务顺序，并保存到 `runtime/gui_tasks.json`；
 - 启动 MuMu 模拟器并自动执行 `adb connect`；
+- 「启动QQ阅读」「识别检查」快捷按钮；
 - 实时显示每个子进程的 `[observe]` OCR 日志、结果和诊断；
 - 停止当前任务并终止整个串行队列；
 - 打开配置中的 `record_dir`。
@@ -75,6 +96,16 @@ py -3.10 scripts/run_task.py --config configs/qqreader.local.json `
 
 py -3.10 scripts/run_task.py --config configs/qqreader.local.json `
   --task DailyAdFlow --timeout-minutes 5
+
+py -3.10 scripts/run_task.py --config configs/qqreader.local.json `
+  --task LaunchQQReader
+
+py -3.10 scripts/run_task.py --config configs/qqreader.local.json `
+  --task SmokeTest
+
+# 旧任务会输出未接入
+py -3.10 scripts/run_task.py --config configs/qqreader.local.json `
+  --task DailyReadingFlow --minutes 35
 ```
 
 ## 真机运行游戏流程

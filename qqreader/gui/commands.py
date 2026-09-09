@@ -72,7 +72,12 @@ def build_run_task_command(
         task_key,
     ]
     values = dict(settings or {})
-    for key in ("duration_minutes", "timeout_minutes", "max_steps"):
+    for key in (
+        "duration_minutes",
+        "minutes",
+        "timeout_minutes",
+        "max_steps",
+    ):
         if key not in values or values[key] is None:
             continue
         value = values[key]

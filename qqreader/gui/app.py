@@ -30,6 +30,7 @@ from .task_catalog import (
     TaskSpec,
     build_serial_plan,
     default_settings,
+    load_task_order,
     load_task_settings,
     save_task_settings,
 )
@@ -68,6 +69,7 @@ class QQReaderGui:
         self._log_queue: "queue.Queue[str]" = queue.Queue()
 
         self._catalog: Sequence[TaskSpec] = DEFAULT_TASK_CATALOG
+        self._ordered_catalog: List[TaskSpec] = list(self._catalog)
         self._settings: Dict[str, TaskSettings] = default_settings(self._catalog)
         self._task_items: Dict[str, str] = {}
         self._item_specs: Dict[str, TaskSpec] = {}
@@ -113,28 +115,47 @@ class QQReaderGui:
     def _build_toolbar(self) -> None:
         bar = ttk.Frame(self.root, padding=(10, 0, 10, 6))
         bar.pack(fill=tk.X)
+        self._action_buttons: List[ttk.Button] = []
         self._launch_button = ttk.Button(
             bar, text="启动模拟器", command=self._launch_emulator
         )
         self._launch_button.pack(side=tk.LEFT)
+        self._action_buttons.append(self._launch_button)
+
+        for text, command in (
+            ("启动QQ阅读", lambda: self._run_task("LaunchQQReader")),
+            ("识别检查", lambda: self._run_task("SmokeTest")),
+        ):
+            button = ttk.Button(bar, text=text, command=command)
+            button.pack(side=tk.LEFT, padx=(6, 0))
+            self._action_buttons.append(button)
+
         self._serial_button = ttk.Button(
             bar, text="串行执行", command=self._run_serial
         )
         self._serial_button.pack(side=tk.LEFT, padx=(6, 0))
+        self._action_buttons.append(self._serial_button)
         self._selected_button = ttk.Button(
             bar, text="运行选中任务", command=self._run_selected
         )
         self._selected_button.pack(side=tk.LEFT, padx=(6, 0))
+        self._action_buttons.append(self._selected_button)
         self._stop_button = ttk.Button(
             bar, text="停止", command=self._stop_process, state=tk.DISABLED
         )
         self._stop_button.pack(side=tk.LEFT, padx=(6, 0))
-        ttk.Button(
-            bar, text="保存设置", command=self._save_settings
-        ).pack(side=tk.LEFT, padx=(6, 0))
-        ttk.Button(
-            bar, text="打开记录目录", command=self._open_record_dir
-        ).pack(side=tk.LEFT, padx=(6, 0))
+
+        for text, command in (
+            ("每日默认", lambda: self._apply_preset(True)),
+            ("1分钟试运行", lambda: self._apply_preset(False)),
+            ("▲ 上移", lambda: self._move_selected(-1)),
+            ("▼ 下移", lambda: self._move_selected(1)),
+            ("保存设置", self._save_settings),
+            ("打开记录目录", self._open_record_dir),
+        ):
+            button = ttk.Button(bar, text=text, command=command)
+            button.pack(side=tk.LEFT, padx=(6, 0))
+            self._action_buttons.append(button)
 
         ttk.Label(bar, text="任务间隔").pack(side=tk.RIGHT)
         self._interval_var = tk.StringVar(value="3")
@@ -217,7 +238,7 @@ class QQReaderGui:
         self._task_items.clear()
         self._item_specs.clear()
         groups: Dict[str, str] = {}
-        for spec in self._catalog:
+        for spec in self._ordered_catalog:
             if spec.group not in groups:
                 group_iid = f"group:{spec.group}"
                 groups[spec.group] = group_iid
@@ -235,7 +256,7 @@ class QQReaderGui:
                 tk.END,
                 iid=spec.key,
                 text="",
-                values=("☑" if enabled else "☐", spec.name),
+                values=("☑" if enabled else "☐", spec.display_name),
             )
             self._task_items[spec.key] = spec.key
             self._item_specs[spec.key] = spec
@@ -282,21 +303,34 @@ class QQReaderGui:
     # ------------------------------------------------------------- 设置面板
 
     def _show_settings(self, spec: TaskSpec) -> None:
+        warning = (
+            ""
+            if spec.implemented
+            else "\n[未接入] 新状态机尚未实现，串行运行时会明确输出未接入。"
+        )
         self._settings_desc.configure(
-            text=f"{spec.name}（{spec.key}）\n{spec.description}"
+            text=f"{spec.display_name}（{spec.key}）\n{spec.description}{warning}"
         )
         for child in self._settings_body.winfo_children():
             child.destroy()
         self._field_vars.clear()
         self._enabled_var.set(self._settings[spec.key].enabled)
+        start_row = 0
+        if not spec.implemented:
+            ttk.Label(
+                self._settings_body,
+                text="旧任务：新状态机未接入",
+                foreground="#b35a00",
+            ).grid(row=start_row, column=0, columnspan=3, sticky=tk.W, pady=(0, 4))
+            start_row = 1
         ttk.Checkbutton(
             self._settings_body,
             text="启用此任务",
             variable=self._enabled_var,
             command=lambda: self._on_enabled_changed(spec),
-        ).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 6))
+        ).grid(row=start_row, column=0, columnspan=2, sticky=tk.W, pady=(0, 6))
 
-        for row, item in enumerate(spec.fields, start=1):
+        for row, item in enumerate(spec.fields, start=start_row + 1):
             ttk.Label(self._settings_body, text=item.label).grid(
                 row=row, column=0, sticky=tk.W, pady=2
             )
@@ -394,19 +428,73 @@ class QQReaderGui:
         return self.repo_root / "runtime" / "gui_tasks.json"
 
     def _load_task_settings_file(self) -> None:
-        self._settings = load_task_settings(self._settings_path(), self._catalog)
+        path = self._settings_path()
+        self._settings = load_task_settings(path, self._catalog)
+        self._ordered_catalog = load_task_order(path, self._catalog)
         self._build_task_tree()
 
     def _save_settings(self, *, silent: bool = False) -> None:
         if not self._collect_current_settings():
             return
         try:
-            save_task_settings(self._settings_path(), self._settings, self._catalog)
+            save_task_settings(
+                self._settings_path(),
+                self._settings,
+                self._catalog,
+                order=[spec.key for spec in self._ordered_catalog],
+            )
         except OSError as exc:
             self._log(f"[设置] 保存失败: {exc}")
             return
         if not silent:
             self._log(f"[设置] 已保存到 {self._settings_path()}")
+
+    def _move_selected(self, direction: int) -> None:
+        if self._busy or self._selected_spec is None:
+            return
+        current = self._selected_spec.key
+        keys = [spec.key for spec in self._ordered_catalog]
+        try:
+            index = keys.index(current)
+        except ValueError:
+            return
+        target = index + direction
+        if target < 0 or target >= len(keys):
+            return
+        keys[index], keys[target] = keys[target], keys[index]
+        by_key = {spec.key: spec for spec in self._catalog}
+        self._ordered_catalog = [by_key[key] for key in keys]
+        self._build_task_tree()
+        self._tree.selection_set(current)
+        self._tree.focus(current)
+        self._log(f"[任务] {self._selected_spec.display_name} 已{'上移' if direction < 0 else '下移'}")
+        self._save_settings(silent=True)
+
+    def _apply_preset(self, formal: bool) -> None:
+        if self._busy:
+            return
+        for spec in self._catalog:
+            settings = self._settings[spec.key]
+            for item in spec.fields:
+                if item.key == "count":
+                    settings.values["count"] = (
+                        item.default if formal else 1
+                    )
+                elif item.key == "minutes":
+                    settings.values["minutes"] = (
+                        item.default if formal else 1
+                    )
+                elif item.key == "duration_minutes":
+                    settings.values["duration_minutes"] = (
+                        item.default if formal else 1
+                    )
+        self._show_settings(self._selected_spec) if self._selected_spec else None
+        self._save_settings(silent=True)
+        self._log(
+            "[预设] 已应用每日默认配置"
+            if formal
+            else "[预设] 已应用 1 分钟试运行配置"
+        )
 
     # ------------------------------------------------------------- 模拟器
 
@@ -480,7 +568,22 @@ class QQReaderGui:
     def _run_serial(self) -> None:
         if not self._prepare_serial():
             return
-        self._serial_plan = build_serial_plan(self._settings, self._catalog)
+        self._serial_plan = build_serial_plan(
+            self._settings,
+            self._catalog,
+            order=[spec.key for spec in self._ordered_catalog],
+        )
+        self._start_serial_plan()
+
+    def _run_task(self, key: str) -> None:
+        """工具栏快捷按钮：运行单个指定任务。"""
+        spec = next((item for item in self._catalog if item.key == key), None)
+        if spec is None:
+            return
+        if not self._prepare_serial():
+            return
+        settings = self._settings[spec.key].normalized(spec)
+        self._serial_plan = [TaskRunPlan(spec=spec, settings=settings)]
         self._start_serial_plan()
 
     def _run_selected(self) -> None:
@@ -544,14 +647,22 @@ class QQReaderGui:
             return
         index = self._serial_index + 1
         total = len(self._serial_plan)
-        self._current_var.set(f"当前：{plan.spec.name} ({index}/{total})")
+        repeat = (
+            f"（重复 {plan.repeat_index}/{plan.repeat_total}）"
+            if plan.repeat_total > 1
+            else ""
+        )
+        self._current_var.set(
+            f"当前：{plan.spec.display_name} ({index}/{total})"
+        )
         self._log(
-            f"[{index}/{total}] {plan.spec.name} ({plan.spec.key}) 开始\n"
+            f"[{index}/{total}] {plan.spec.display_name} ({plan.spec.key})"
+            f"{repeat} 开始\n"
             f"      {command_preview(command)}"
         )
         self._start_process(
             command,
-            status=f"运行中：{plan.spec.name}",
+            status=f"运行中：{plan.spec.display_name}",
             on_finish=self._on_task_finished,
         )
 
@@ -563,13 +674,13 @@ class QQReaderGui:
         if code == 0:
             self._log(
                 f"[{self._serial_index + 1}/{len(self._serial_plan)}] "
-                f"{plan.spec.name} 成功"
+                f"{plan.spec.display_name} 成功"
             )
         else:
             self._serial_failures += 1
             self._log(
                 f"[{self._serial_index + 1}/{len(self._serial_plan)}] "
-                f"{plan.spec.name} 失败 exit={code}"
+                f"{plan.spec.display_name} 失败 exit={code}"
             )
         self._serial_index += 1
         self.root.after(self._interval_seconds() * 1000, self._start_next_task)
@@ -662,9 +773,8 @@ class QQReaderGui:
 
     def _set_running_ui(self, running: bool) -> None:
         state = tk.DISABLED if running else tk.NORMAL
-        self._launch_button.configure(state=state)
-        self._serial_button.configure(state=state)
-        self._selected_button.configure(state=state)
+        for button in getattr(self, "_action_buttons", []):
+            button.configure(state=state)
         self._stop_button.configure(state=tk.NORMAL if running else tk.DISABLED)
 
     def _stop_process(self) -> None:
