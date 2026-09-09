@@ -87,11 +87,10 @@ class QQReaderGui:
         self._catalog: Sequence[TaskSpec] = DEFAULT_TASK_CATALOG
         self._ordered_catalog: List[TaskSpec] = list(self._catalog)
         self._settings: Dict[str, TaskSettings] = default_settings(self._catalog)
-        self._task_items: Dict[str, str] = {}
-        self._item_specs: Dict[str, TaskSpec] = {}
         self._selected_spec: Optional[TaskSpec] = None
-        self._field_vars: Dict[str, tk.Variable] = {}
-        self._enabled_var = tk.BooleanVar(value=False)
+        self._card_enabled_vars: Dict[str, tk.BooleanVar] = {}
+        self._card_field_vars: Dict[str, Dict[str, tk.Variable]] = {}
+        self._cards_container: Optional[tk.Frame] = None
         self._serial_plan: List[TaskRunPlan] = []
         self._serial_index = 0
         self._serial_failures = 0
@@ -239,96 +238,58 @@ class QQReaderGui:
         paned = ttk.Panedwindow(self.root, orient=tk.HORIZONTAL)
         paned.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 6))
 
-        left = tk.Frame(paned, bg=CARD, highlightbackground=BORDER, highlightthickness=1)
-        paned.add(left, weight=1)
+        left = tk.Frame(paned, bg=BG)
+        paned.add(left, weight=3)
+        left_header = tk.Frame(left, bg=BG)
+        left_header.pack(fill=tk.X, padx=4, pady=(0, 6))
         tk.Label(
-            left,
+            left_header,
             text="任务列表",
-            bg=CARD,
+            bg=BG,
             fg=TEXT,
-            font=("Microsoft YaHei UI", 10, "bold"),
-            anchor="w",
-            padx=12,
-            pady=8,
-        ).pack(fill=tk.X)
-        tree_holder = tk.Frame(left, bg=CARD)
-        tree_holder.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 6))
-        self._tree = ttk.Treeview(
-            tree_holder,
-            columns=("enabled",),
-            show="tree headings",
-            selectmode="browse",
-            height=18,
-        )
-        self._tree.heading("#0", text="分组 / 任务")
-        self._tree.heading("enabled", text="启用")
-        self._tree.column("#0", width=300, stretch=True)
-        self._tree.column("enabled", width=64, anchor=tk.CENTER, stretch=False)
-        tree_scroll = ttk.Scrollbar(
-            tree_holder, orient=tk.VERTICAL, command=self._tree.yview
-        )
-        self._tree.configure(yscrollcommand=tree_scroll.set)
-        self._tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self._tree.bind("<<TreeviewSelect>>", self._on_select_task)
-        self._tree.bind("<ButtonRelease-1>", self._on_tree_click)
-        self._build_task_tree()
-
-        order_bar = tk.Frame(left, bg=CARD)
-        order_bar.pack(fill=tk.X, padx=8, pady=(0, 8))
-        ttk.Button(
-            order_bar,
-            text="▲ 上移",
-            command=lambda: self._move_selected(-1),
-            style="Toolbar.TButton",
+            font=("Microsoft YaHei UI", 11, "bold"),
         ).pack(side=tk.LEFT)
-        ttk.Button(
-            order_bar,
-            text="▼ 下移",
-            command=lambda: self._move_selected(1),
-            style="Toolbar.TButton",
-        ).pack(side=tk.LEFT, padx=(6, 0))
-
-        right = ttk.Panedwindow(paned, orient=tk.VERTICAL)
-        paned.add(right, weight=2)
-
-        settings = tk.Frame(
-            right, bg=CARD, highlightbackground=BORDER, highlightthickness=1
-        )
-        right.add(settings, weight=1)
         tk.Label(
-            settings,
-            text="任务设置",
-            bg=CARD,
-            fg=TEXT,
-            font=("Microsoft YaHei UI", 10, "bold"),
-            anchor="w",
-            padx=12,
-            pady=8,
-        ).pack(fill=tk.X)
-        self._settings_desc = ttk.Label(
-            settings,
-            text="请选择一个任务",
-            style="Muted.TLabel",
-            wraplength=760,
-            justify=tk.LEFT,
-        )
-        self._settings_desc.pack(anchor=tk.W, fill=tk.X, padx=12, pady=(0, 6))
-        self._settings_body = ttk.Frame(settings, style="Card.TFrame")
-        self._settings_body.pack(fill=tk.X, padx=12, pady=(0, 10))
+            left_header,
+            text="勾选任务并直接修改参数",
+            bg=BG,
+            fg=MUTED,
+            font=FONT_UI,
+        ).pack(side=tk.LEFT, padx=(10, 0))
 
-        log_card = tk.Frame(
-            right, bg=CARD, highlightbackground=BORDER, highlightthickness=1
+        canvas = tk.Canvas(left, bg=BG, highlightthickness=0, bd=0)
+        scroll = ttk.Scrollbar(left, orient=tk.VERTICAL, command=canvas.yview)
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self._cards_container = tk.Frame(canvas, bg=BG)
+        window_id = canvas.create_window(
+            (0, 0), window=self._cards_container, anchor="nw"
         )
-        right.add(log_card, weight=3)
-        log_header = tk.Frame(log_card, bg=CARD)
+
+        def _resize_cards(event: tk.Event) -> None:
+            canvas.itemconfigure(window_id, width=event.width)
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        canvas.bind("<Configure>", _resize_cards)
+        self._cards_container.bind(
+            "<Configure>",
+            lambda _event: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        self._build_task_cards()
+
+        right = tk.Frame(
+            paned, bg=CARD, highlightbackground=BORDER, highlightthickness=1
+        )
+        paned.add(right, weight=2)
+        log_header = tk.Frame(right, bg=CARD)
         log_header.pack(fill=tk.X, padx=12, pady=(8, 4))
         tk.Label(
             log_header,
             text="实时日志",
             bg=CARD,
             fg=TEXT,
-            font=("Microsoft YaHei UI", 10, "bold"),
+            font=("Microsoft YaHei UI", 11, "bold"),
         ).pack(side=tk.LEFT)
         ttk.Button(
             log_header,
@@ -336,7 +297,7 @@ class QQReaderGui:
             command=self._clear_log,
             style="Toolbar.TButton",
         ).pack(side=tk.RIGHT)
-        log_holder = tk.Frame(log_card, bg=LOG_BG)
+        log_holder = tk.Frame(right, bg=LOG_BG)
         log_holder.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
         self._log_text = tk.Text(
             log_holder,
@@ -429,155 +390,178 @@ class QQReaderGui:
 
     # ------------------------------------------------------------- 任务树
 
-    def _build_task_tree(self) -> None:
-        for item in self._tree.get_children():
-            self._tree.delete(item)
-        self._task_items.clear()
-        self._item_specs.clear()
-        groups: Dict[str, str] = {}
-        for spec in self._ordered_catalog:
-            if spec.group not in groups:
-                group_iid = f"group:{spec.group}"
-                groups[spec.group] = group_iid
-                self._tree.insert(
-                    "",
-                    tk.END,
-                    iid=group_iid,
-                    text=f"▸ {spec.group}",
-                    values=("",),
-                    open=True,
-                )
-            enabled = self._settings[spec.key].enabled
-            self._tree.insert(
-                groups[spec.group],
-                tk.END,
-                iid=spec.key,
-                text=spec.display_name,
-                values=("☑" if enabled else "☐",),
-            )
-            self._task_items[spec.key] = spec.key
-            self._item_specs[spec.key] = spec
-        first = next(iter(self._item_specs), None)
-        if first:
-            self._tree.selection_set(first)
-            self._tree.focus(first)
-
-    def _on_tree_click(self, event: tk.Event) -> None:
-        column = self._tree.identify_column(event.x)
-        row = self._tree.identify_row(event.y)
-        if column != "#1" or row not in self._item_specs:
+    def _build_task_cards(self) -> None:
+        if self._cards_container is None:
             return
-        self._toggle_task(row)
-
-    def _on_select_task(self, _event: Optional[tk.Event] = None) -> None:
-        selection = self._tree.selection()
-        if not selection:
-            return
-        spec = self._item_specs.get(selection[0])
-        if spec is None:
-            self._settings_desc.configure(text=f"分组：{selection[0].split(':', 1)[-1]}")
-            for child in self._settings_body.winfo_children():
-                child.destroy()
-            return
-        self._selected_spec = spec
-        self._show_settings(spec)
-
-    def _toggle_task(self, key: str) -> None:
-        settings = self._settings[key]
-        settings.enabled = not settings.enabled
-        self._tree.set(key, "enabled", "☑" if settings.enabled else "☐")
-        self._log(f"[任务] {key} {'启用' if settings.enabled else '停用'}")
-        self._save_settings(silent=True)
-
-    def _refresh_task_item(self, spec: TaskSpec) -> None:
-        if spec.key in self._task_items:
-            self._tree.set(
-                spec.key,
-                "enabled",
-                "☑" if self._settings[spec.key].enabled else "☐",
-            )
-
-    # ------------------------------------------------------------- 设置面板
-
-    def _show_settings(self, spec: TaskSpec) -> None:
-        warning = (
-            ""
-            if spec.implemented
-            else "\n[未接入] 新状态机尚未实现，串行运行时会明确输出未接入。"
-        )
-        self._settings_desc.configure(
-            text=f"{spec.display_name}（{spec.key}）\n{spec.description}{warning}"
-        )
-        for child in self._settings_body.winfo_children():
+        for child in self._cards_container.winfo_children():
             child.destroy()
-        self._field_vars.clear()
-        self._enabled_var.set(self._settings[spec.key].enabled)
-        start_row = 0
-        if not spec.implemented:
-            ttk.Label(
-                self._settings_body,
-                text="旧任务：新状态机未接入",
-                foreground=WARNING,
-                style="Card.TLabel",
-            ).grid(row=start_row, column=0, columnspan=3, sticky=tk.W, pady=(0, 6))
-            start_row = 1
-        ttk.Checkbutton(
-            self._settings_body,
-            text="启用此任务",
-            variable=self._enabled_var,
-            command=lambda: self._on_enabled_changed(spec),
-        ).grid(row=start_row, column=0, columnspan=2, sticky=tk.W, pady=(0, 8))
+        self._card_enabled_vars.clear()
+        self._card_field_vars.clear()
+        groups: Dict[str, List[TaskSpec]] = {}
+        for spec in self._ordered_catalog:
+            groups.setdefault(spec.group, []).append(spec)
+        for group, specs in groups.items():
+            self._build_group_header(group, len(specs))
+            for spec in specs:
+                self._build_task_card(spec)
+        if self._selected_spec is None and self._ordered_catalog:
+            self._selected_spec = self._ordered_catalog[0]
+        container = self._cards_container
+        container.update_idletasks()
+        canvas = container.master
+        if isinstance(canvas, tk.Canvas):
+            canvas.configure(scrollregion=canvas.bbox("all"))
 
-        for row, item in enumerate(spec.fields, start=start_row + 1):
-            ttk.Label(
-                self._settings_body, text=item.label, style="Card.TLabel"
-            ).grid(row=row, column=0, sticky=tk.W, pady=3)
-            current = self._settings[spec.key].value(spec, item.key)
+    def _build_group_header(self, group: str, count: int) -> None:
+        frame = tk.Frame(self._cards_container, bg=BG)
+        frame.pack(fill=tk.X, padx=4, pady=(10, 4))
+        tk.Label(
+            frame,
+            text=group,
+            bg=BG,
+            fg=TEXT,
+            font=("Microsoft YaHei UI", 10, "bold"),
+        ).pack(side=tk.LEFT)
+        tk.Label(
+            frame, text=f"{count} 项", bg=BG, fg=MUTED, font=FONT_UI
+        ).pack(side=tk.LEFT, padx=(8, 0))
+        tk.Frame(frame, bg=BORDER, height=1).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 0)
+        )
+
+    def _build_task_card(self, spec: TaskSpec) -> None:
+        settings = self._settings[spec.key]
+        card = tk.Frame(
+            self._cards_container,
+            bg=CARD,
+            highlightbackground=BORDER,
+            highlightthickness=1,
+        )
+        card.pack(fill=tk.X, padx=4, pady=4)
+
+        top = tk.Frame(card, bg=CARD)
+        top.pack(fill=tk.X, padx=12, pady=(10, 2))
+        enabled_var = tk.BooleanVar(value=settings.enabled)
+        self._card_enabled_vars[spec.key] = enabled_var
+        tk.Checkbutton(
+            top,
+            text=spec.display_name,
+            variable=enabled_var,
+            bg=CARD,
+            fg=TEXT,
+            activebackground=CARD,
+            selectcolor=CARD,
+            font=("Microsoft YaHei UI", 10, "bold"),
+            anchor="w",
+            command=lambda s=spec: self._on_card_enabled_changed(s),
+        ).pack(side=tk.LEFT)
+        if not spec.implemented:
+            tk.Label(
+                top,
+                text="未接入",
+                bg="#fef3c7",
+                fg=WARNING,
+                font=("Microsoft YaHei UI", 8, "bold"),
+                padx=6,
+                pady=1,
+            ).pack(side=tk.LEFT, padx=(8, 0))
+        order = tk.Frame(top, bg=CARD)
+        order.pack(side=tk.RIGHT)
+        ttk.Button(
+            order,
+            text="▲",
+            width=2,
+            command=lambda s=spec: self._move_task(s, -1),
+            style="Toolbar.TButton",
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            order,
+            text="▼",
+            width=2,
+            command=lambda s=spec: self._move_task(s, 1),
+            style="Toolbar.TButton",
+        ).pack(side=tk.LEFT, padx=(4, 0))
+
+        tk.Label(
+            card,
+            text=spec.description,
+            bg=CARD,
+            fg=MUTED,
+            font=FONT_UI,
+            wraplength=620,
+            justify=tk.LEFT,
+            anchor="w",
+        ).pack(fill=tk.X, padx=12, pady=(0, 6))
+
+        fields = tk.Frame(card, bg=CARD)
+        fields.pack(fill=tk.X, padx=12, pady=(0, 10))
+        self._card_field_vars[spec.key] = {}
+        for index, item in enumerate(spec.fields):
+            column = index * 3
+            tk.Label(
+                fields, text=item.label, bg=CARD, fg=TEXT, font=FONT_UI
+            ).grid(row=0, column=column, sticky=tk.W, padx=(0, 4))
+            current = settings.value(spec, item.key)
             if item.kind == "bool":
                 var: tk.Variable = tk.BooleanVar(value=bool(current))
-                widget = ttk.Checkbutton(self._settings_body, variable=var)
+                widget = tk.Checkbutton(
+                    fields,
+                    variable=var,
+                    bg=CARD,
+                    activebackground=CARD,
+                    selectcolor=CARD,
+                )
             else:
                 var = tk.StringVar(
                     value=f"{current:g}" if isinstance(current, float) else str(current)
                 )
                 widget = ttk.Spinbox(
-                    self._settings_body,
+                    fields,
                     from_=item.minimum if item.minimum is not None else 0,
                     to=item.maximum if item.maximum is not None else 999999,
                     increment=item.step,
-                    width=12,
+                    width=8,
                     textvariable=var,
                 )
-            widget.grid(row=row, column=1, sticky=tk.W, padx=(12, 0), pady=3)
+                var.trace_add(
+                    "write",
+                    lambda *_args, s=spec, key=item.key: self._on_card_field_changed(
+                        s, key
+                    ),
+                )
+            widget.grid(row=0, column=column + 1, sticky=tk.W, padx=(0, 12))
             if item.unit:
-                ttk.Label(
-                    self._settings_body, text=item.unit, style="Muted.TLabel"
-                ).grid(row=row, column=2, sticky=tk.W, padx=(6, 0))
-            self._field_vars[item.key] = var
+                tk.Label(
+                    fields, text=item.unit, bg=CARD, fg=MUTED, font=FONT_UI
+                ).grid(row=0, column=column + 2, sticky=tk.W, padx=(0, 12))
+            self._card_field_vars[spec.key][item.key] = var
 
-    def _on_enabled_changed(self, spec: TaskSpec) -> None:
-        self._settings[spec.key].enabled = bool(self._enabled_var.get())
-        self._refresh_task_item(spec)
+        for widget in (card, top, fields):
+            widget.bind("<Button-1>", lambda _event, s=spec: self._select_card(s))
 
-    def _collect_current_settings(self) -> bool:
-        spec = self._selected_spec
-        if spec is None:
-            return True
-        values = dict(self._settings[spec.key].values)
-        try:
-            for item in spec.fields:
-                var = self._field_vars.get(item.key)
-                if var is not None:
-                    values[item.key] = item.normalize(var.get())
-        except (tk.TclError, ValueError) as exc:
-            messagebox.showwarning("参数错误", str(exc))
-            return False
-        self._settings[spec.key] = TaskSettings(
-            enabled=bool(self._enabled_var.get()),
-            values=values,
+    def _select_card(self, spec: TaskSpec) -> None:
+        self._selected_spec = spec
+
+    def _on_card_enabled_changed(self, spec: TaskSpec) -> None:
+        var = self._card_enabled_vars.get(spec.key)
+        if var is None:
+            return
+        self._settings[spec.key].enabled = bool(var.get())
+        self._log(
+            f"[任务] {spec.display_name} {'启用' if var.get() else '停用'}"
         )
-        self._refresh_task_item(spec)
-        return True
+        self._save_settings(silent=True)
+
+    def _on_card_field_changed(self, spec: TaskSpec, key: str) -> None:
+        var = self._card_field_vars.get(spec.key, {}).get(key)
+        if var is None:
+            return
+        try:
+            value = spec.field(key).normalize(var.get())
+        except (tk.TclError, ValueError):
+            return
+        self._settings[spec.key].values[key] = value
+        self._save_settings(silent=True)
 
     # ------------------------------------------------------------- 配置
 
@@ -629,11 +613,10 @@ class QQReaderGui:
         path = self._settings_path()
         self._settings = load_task_settings(path, self._catalog)
         self._ordered_catalog = load_task_order(path, self._catalog)
-        self._build_task_tree()
+        if self._cards_container is not None:
+            self._build_task_cards()
 
     def _save_settings(self, *, silent: bool = False) -> None:
-        if not self._collect_current_settings():
-            return
         try:
             save_task_settings(
                 self._settings_path(),
@@ -647,26 +630,31 @@ class QQReaderGui:
         if not silent:
             self._log(f"[设置] 已保存到 {self._settings_path()}")
 
-    def _move_selected(self, direction: int) -> None:
-        if self._busy or self._selected_spec is None:
+    def _move_task(self, spec: TaskSpec, direction: int) -> None:
+        if self._busy:
             return
-        current = self._selected_spec.key
-        keys = [spec.key for spec in self._ordered_catalog]
+        keys = [item.key for item in self._ordered_catalog]
         try:
-            index = keys.index(current)
+            index = keys.index(spec.key)
         except ValueError:
             return
         target = index + direction
         if target < 0 or target >= len(keys):
             return
         keys[index], keys[target] = keys[target], keys[index]
-        by_key = {spec.key: spec for spec in self._catalog}
+        by_key = {item.key: item for item in self._catalog}
         self._ordered_catalog = [by_key[key] for key in keys]
-        self._build_task_tree()
-        self._tree.selection_set(current)
-        self._tree.focus(current)
-        self._log(f"[任务] {self._selected_spec.display_name} 已{'上移' if direction < 0 else '下移'}")
+        self._selected_spec = spec
+        self._build_task_cards()
+        self._log(
+            f"[任务] {spec.display_name} 已{'上移' if direction < 0 else '下移'}"
+        )
         self._save_settings(silent=True)
+
+    def _move_selected(self, direction: int) -> None:
+        if self._selected_spec is None:
+            return
+        self._move_task(self._selected_spec, direction)
 
     def _apply_preset(self, formal: bool) -> None:
         if self._busy:
@@ -675,18 +663,14 @@ class QQReaderGui:
             settings = self._settings[spec.key]
             for item in spec.fields:
                 if item.key == "count":
-                    settings.values["count"] = (
-                        item.default if formal else 1
-                    )
+                    settings.values["count"] = item.default if formal else 1
                 elif item.key == "minutes":
-                    settings.values["minutes"] = (
-                        item.default if formal else 1
-                    )
+                    settings.values["minutes"] = item.default if formal else 1
                 elif item.key == "duration_minutes":
                     settings.values["duration_minutes"] = (
                         item.default if formal else 1
                     )
-        self._show_settings(self._selected_spec) if self._selected_spec else None
+        self._build_task_cards()
         self._save_settings(silent=True)
         self._log(
             "[预设] 已应用每日默认配置"
@@ -798,8 +782,6 @@ class QQReaderGui:
     def _prepare_serial(self) -> bool:
         config = self._require_config()
         if config is None or self._busy:
-            return False
-        if not self._collect_current_settings():
             return False
         return True
 
