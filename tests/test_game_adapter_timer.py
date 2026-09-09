@@ -46,6 +46,7 @@ KEYS = DEFAULT_FEATURE_KEYS
 
 HOME_REWARD_KEY = feature_key(KEYS, KEYS.home_ocr_reward_entry)
 REWARD_WATCH_KEY = feature_key(KEYS, KEYS.reward_ocr_watch)
+AD_SKIP_KEY = feature_key(KEYS, KEYS.ad_ocr_skip)
 AD_RESULT_CLOSE_KEY = feature_key(KEYS, KEYS.ad_result_close)
 GAME_REWARD_ENTRY_KEY = feature_key(KEYS, KEYS.game_ocr_reward_entry)
 GAME_GO_PLAY_KEY = feature_key(KEYS, KEYS.game_ocr_go_play)
@@ -131,6 +132,8 @@ def test_ad_flow_end_to_end_with_real_adapter() -> None:
             observer.go("REWARD_HOME")
         elif name == REWARD_WATCH_KEY:
             observer.go("AD_PLAYING")
+        elif name == AD_SKIP_KEY:
+            observer.go("AD_RESULT")
         elif name == AD_RESULT_CLOSE_KEY:
             observer.go("REWARD_DONE")
 
@@ -148,6 +151,7 @@ def test_ad_flow_end_to_end_with_real_adapter() -> None:
     assert result.outcome is TaskOutcome.SUCCESS
     assert ("tap_feature", HOME_REWARD_KEY) in device.calls
     assert ("tap_feature", REWARD_WATCH_KEY) in device.calls
+    assert ("tap_feature", AD_SKIP_KEY) in device.calls
     assert ("tap_feature", AD_RESULT_CLOSE_KEY) in device.calls
     assert result.final_state.value == "REWARD_HOME"
 

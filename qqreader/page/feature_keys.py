@@ -30,8 +30,9 @@ class FeatureKeys:
     home_nav_my: str = "home.nav_my"                 # 固定图标：底部「我的」
     home_bottom_nav: str = "home.bottom_nav"         # 结构特征：底部导航
     home_reward_entry: str = "home.reward_entry"     # 主页/书架上的奖励页入口（模板逻辑名，待校准）
-    #: 书架奖励入口的真实 OCR 文案；用于从 HOME 自主进入奖励页。
-    home_ocr_reward_entry: str = "本周阅读时长"
+    #: 书架奖励入口 OCR；页面文案会变（如「本周阅读时长/领赠币」→
+    #: 「再读7分钟领20赠币」），用正则兼容两种。
+    home_ocr_reward_entry: str = r"本周阅读时长|再读\d+分钟领\d+赠币"
 
     # --- REWARD_HOME（奖励页）---
     reward_header: str = "reward.header"             # 固定图标：奖励页标题栏
@@ -40,6 +41,10 @@ class FeatureKeys:
     reward_ocr_ad_banner: str = "看小视频领好礼"
     reward_ocr_game_banner: str = "玩游戏领赠币"
     reward_ocr_watch: str = "立即观看"
+    #: 旧 pipeline `AdClickWatch` 的备选文案。
+    reward_ocr_watch_alt: str = "看小视频再多领"
+    #: 实际 OCR 可能只识别出「立」；作为按钮定位兜底。
+    reward_ocr_watch_partial: str = "立"
     reward_ocr_done: str = "明日再来"
 
     # --- AD_PLAYING / AD_RESULT ---
@@ -48,6 +53,13 @@ class FeatureKeys:
     ad_ocr_countdown: str = "广告"
     ad_ocr_skip: str = "跳过"
     ad_ocr_close: str = "关闭"
+    ad_ocr_continue: str = "继续观看"
+    #: 跳过广告时出现的「确定要退出吗?」弹窗按钮。
+    ad_ocr_claim_after_exit: str = "去领取奖励"
+    ad_ocr_force_exit: str = "坚持退出"
+    #: 广告详情/浏览页文案；出现时点左上角 X 关闭，不进入详情。
+    ad_ocr_offer: str = "了解详情"
+    ad_ocr_offer_alt: str = "跳转详情页或第三方应用"
     ad_result_close: str = "ad.result_close"         # 固定图标：结果页关闭
     ad_ocr_issued: str = "奖品已发放"
     ad_ocr_coupon: str = "恭喜获得优惠券"
