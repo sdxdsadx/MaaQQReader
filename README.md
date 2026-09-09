@@ -28,15 +28,32 @@ QQ 阅读每日任务自动化（MaaFramework 重构）的新仓库。
 py -3.10 -m pytest
 ```
 
-当前结果：**159 个单元测试全部通过**（17 个测试文件）。核心包 `qqreader/` 不依赖任何第三方库，仅测试需要 `pytest`。
+当前结果：**160 个单元测试全部通过**（17 个测试文件）。核心包 `qqreader/` 不依赖任何第三方库，仅测试需要 `pytest`。
 
 ## GUI 控制台
 
-```powershell
-py -3.10 -m qqreader.gui --config configs/qqreader.local.json
-# 或兼容旧入口
-py -3.10 gui/maa_qq_reader_gui.py --config configs/qqreader.local.json
+推荐直接双击仓库根目录的：
+
+```text
+启动QQReaderGUI.cmd
 ```
+
+或：
+
+```powershell
+start-gui.cmd
+# 等价于
+py -3.10 -m qqreader.gui --config configs/qqreader.local.json
+```
+
+构建单文件 exe：
+
+```powershell
+build-gui-exe.cmd
+# 产物：dist\QQReaderGUI.exe
+```
+
+`dist\QQReaderGUI.exe` 可直接双击；它会向上查找仓库根目录的 `scripts\run_game_flow.py`，并使用配置里的 `machine.python_executable`（未配置时自动使用 `python` 或 `py -3.10`）来运行脚本。
 
 GUI 支持：
 
@@ -64,7 +81,7 @@ py -3.10 scripts/run_game_flow.py --config configs/qqreader.local.json `
 ## 尚未验证（不要当成已完成）
 
 - **MaaFramework 适配器已接入主线**：`qqreader/maa/` 与配置字段已提交；真机验证使用 `scripts/run_game_flow.py`，可实时观察每次 OCR 观测。
-- **GUI 已接入新脚本**：`qqreader/gui/` + `gui/maa_qq_reader_gui.py` 已实现配置加载、启动模拟器、运行/停止 `scripts/run_game_flow.py` 和实时日志；已完成脚本化启动/运行/停止验证。
+- **GUI 已接入新脚本**：`qqreader/gui/` + `gui/maa_qq_reader_gui.py` 已实现配置加载、启动模拟器、运行/停止 `scripts/run_game_flow.py` 和实时日志；提供 `启动QQReaderGUI.cmd` / `start-gui.cmd` 双击入口，并已用 `build-gui-exe.cmd` 构建 `dist\QQReaderGUI.exe` 验证可启动。
 - **未完整跑通 22 分钟真实每日任务**：QQR-20 已在真机监督跑通「书架 HOME → 奖励页 → 去玩游戏 → 游戏大厅下划 → 在线玩 → 游戏中心点卡片 → 登录/协议 → 登录游戏 → 领币计时 → 退出/返回奖励页」；因当日游戏时长未满，奖励页显示「再玩 2 分钟即可领取」，尚未真机验证「立即领取」点击后的最终赠币到账。可再次执行 `scripts/run_game_flow.py` 等待时长满足后补验。
 - **QQR-19 入口链路已真机验证**：书架 `HOME` → OCR「本周阅读时长」→ 奖励页顶部 → 滚动查找 → `GAME_ENTRY` → 点击「去玩游戏」→ 页面变化；OCR 定位失败时的按钮坐标 fallback 由单元测试覆盖。
 - **模板、ROI、阈值、OCR 文案未重新校准**：`FeatureKeys` 与默认状态定义来自旧工程静态审计；QQR-6 已实现「主特征失效 → 模板 B / OCR / 结构特征降级」的代码路径与回归测试，但真实模板仍必须在 QQR-14 / QQR-15 中用当前设备截图重新标定后才能视为有效。

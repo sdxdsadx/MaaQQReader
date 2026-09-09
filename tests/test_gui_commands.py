@@ -34,6 +34,17 @@ def test_build_run_game_flow_command(tmp_path: Path) -> None:
     assert command[command.index("--max-steps") + 1] == "400"
 
 
+def test_build_run_command_with_python_args(tmp_path: Path) -> None:
+    command = build_run_game_flow_command(
+        "py.exe",
+        tmp_path,
+        tmp_path / "c.json",
+        python_args=("-3.10",),
+    )
+    assert command[:2] == ("py.exe", "-3.10")
+    assert command[2].endswith(str(Path("scripts") / "run_game_flow.py"))
+
+
 def test_run_command_rejects_invalid_parameters(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         build_run_game_flow_command(

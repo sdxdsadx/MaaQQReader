@@ -11,6 +11,7 @@ def build_run_game_flow_command(
     repo_root: Path,
     config_path: Path,
     *,
+    python_args: Sequence[str] = (),
     duration_minutes: float = 22.0,
     timeout_minutes: float = 30.0,
     max_steps: int = 2000,
@@ -29,6 +30,7 @@ def build_run_game_flow_command(
     script = Path(repo_root) / "scripts" / "run_game_flow.py"
     command = [
         str(python_executable),
+        *[str(part) for part in python_args],
         str(script),
         "--config",
         str(config_path),

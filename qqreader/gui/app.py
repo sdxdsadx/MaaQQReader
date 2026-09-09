@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -23,7 +24,19 @@ from .commands import (
     command_preview,
 )
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+def _detect_repo_root() -> Path:
+    """源码运行取仓库根；PyInstaller onefile 运行取 exe 所在目录或向上查找。"""
+    if getattr(sys, "frozen", False):
+        base = Path(sys.executable).resolve().parent
+        candidates = [base, *base.parents]
+        for candidate in candidates:
+            if (candidate / "scripts" / "run_game_flow.py").is_file():
+                return candidate
+        return base
+    return Path(__file__).resolve().parents[2]
+
+
+_REPO_ROOT = _detect_repo_root()
 
 
 class QQReaderGui:
@@ -220,6 +233,21 @@ class QQReaderGui:
 
     # ------------------------------------------------------------------ 运行
 
+    def _python_launcher(self, config: AppConfig) -> tuple[str, tuple[str, ...]]:
+        """返回运行 ``scripts/run_game_flow.py`` 的 Python 解释器及前缀参数。"""
+        configured = config.machine.python_executable
+        if configured:
+            return str(configured), ()
+        if getattr(sys, "frozen", False):
+            python = shutil.which("python")
+            if python:
+                return python, ()
+            py_launcher = shutil.which("py")
+            if py_launcher:
+                return py_launcher, ("-3.10",)
+            return "python", ()
+        return sys.executable, ()
+
     def _run_game_flow(self) -> None:
         config = self._require_config()
         if config is None or self._busy:
@@ -230,11 +258,20 @@ class QQReaderGui:
         except ValueError:
             messagebox.showwarning("参数", "挂机分钟/超时分钟必须是数字")
             return
+        python_executable, python_args = self._python_launcher(config)
+        script = self.repo_root / "scripts" / "run_game_flow.py"
+        if not script.is_file():
+            messagebox.showerror(
+                "运行脚本缺失",
+                f"找不到 {script}\n请把 exe 放在仓库根目录，或使用源码运行。",
+            )
+            return
         try:
             command = build_run_game_flow_command(
-                sys.executable,
+                python_executable,
                 self.repo_root,
                 Path(self._config_var.get()),
+                python_args=python_args,
                 duration_minutes=duration,
                 timeout_minutes=timeout,
             )
