@@ -228,12 +228,29 @@ class CtypesMaaClient:
     def screencap(self) -> Screenshot:
         self._require_connected()
         lib = self._lib
-        cap_id = lib.MaaControllerPostScreencap(self._controller)
-        if not cap_id:
-            raise MaaClientError("MaaControllerPostScreencap 被拒绝")
-        status = lib.MaaControllerWait(self._controller, cap_id)
-        if status != STATUS_SUCCEEDED:
-            raise MaaClientError(f"截图失败，Maa 状态码 {status}")
+        last_status: Optional[int] = None
+        for attempt in range(3):
+            cap_id = lib.MaaControllerPostScreencap(self._controller)
+            if not cap_id:
+                raise MaaClientError("MaaControllerPostScreencap 被拒绝")
+            status = lib.MaaControllerWait(self._controller, cap_id)
+            if status == STATUS_SUCCEEDED:
+                break
+            last_status = status
+            # 阅读页 FLAG_SECURE 会让 screencap 返回 4000；尝试退出/重启 QQ 阅读。
+            if self._config.controller == "adb":
+                from .adb import ensure_capture_ready
+
+                ensure_capture_ready(
+                    str(self._config.adb_path),
+                    str(self._config.adb_address),
+                    package_name=self._config.package_name,
+                    timeout=30.0,
+                )
+            if attempt < 2:
+                time.sleep(1.0)
+        else:
+            raise MaaClientError(f"截图失败，Maa 状态码 {last_status}（已重试 3 次）")
         image = ctypes.c_void_p(lib.MaaImageBufferCreate())
         try:
             if not lib.MaaControllerCachedImage(self._controller, image):

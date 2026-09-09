@@ -30,7 +30,7 @@ QQ 阅读每日任务自动化（MaaFramework 重构）的新仓库。
 py -3.10 -m pytest
 ```
 
-当前结果：**180 个单元测试全部通过**（20 个测试文件）。核心包 `qqreader/` 不依赖任何第三方库，仅测试需要 `pytest`。
+当前结果：**182 个单元测试全部通过**（21 个测试文件）。核心包 `qqreader/` 不依赖任何第三方库，仅测试需要 `pytest`。
 
 ## GUI 控制台（MAA GUI 风格）
 
@@ -91,6 +91,7 @@ GUI 支持：
 - 打开配置中的 `record_dir`。
 
 广告任务进入 `AD_PLAYING` 后默认先等待 **40 秒**，再处理跳过 / 继续观看 / 退出确认等按钮。
+奖励页只有同时识别到广告卡标题（`看小视频领好礼`）时才点击观看按钮，否则只滚动查找，避免残留 OCR 误点书籍。
 
 ### ADB / 截图预检
 
@@ -100,6 +101,9 @@ GUI 支持：
 2. 试执行 `adb exec-out screencap -p`；
 3. 如果截图为空（QQ 阅读阅读页 `ReaderPageActivity` 是 FLAG_SECURE），
    自动 `am force-stop` 后重新启动 QQ 阅读，回到可截图页面。
+
+任务运行过程中如果 MAA `screencap` 返回 4000（误入阅读页），
+`CtypesMaaClient.screencap` 也会执行同样的退出/重启并重试 3 次，避免任务直接 FAILED。
 
 这样可避免 MAA 反复报：
 

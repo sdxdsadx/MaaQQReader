@@ -195,24 +195,23 @@ class AdTaskAdapter(PlannedTaskAdapter):
         state = context.decision.state if context.decision is not None else None
         if state is PageState.REWARD_HOME:
             has_banner = self._has_text(context, self._banner_text)
-            if self._has_text(context, self._watch_text):
-                return self._tap_feature_or_point(
-                    context, self._watch_key, self._watch_point_action
-                )
-            if self._has_text(context, self._watch_alt_text):
-                return self._tap_feature_or_point(
-                    context, self._watch_alt_key, self._watch_point_action
-                )
-            if has_banner and self._has_text(context, self._watch_partial_text):
-                return self._tap_feature_or_point(
-                    context,
-                    self._watch_partial_key,
-                    self._watch_point_action,
-                )
+            # 必须先确认当前屏有广告卡，才允许点「立即观看」；否则只滚动，
+            # 避免把其他页面残留的 OCR 文案当成广告按钮误点。
             if has_banner:
-                return self._execute(
-                    Action.tap_feature(self._banner_key), context
-                )
+                if self._has_text(context, self._watch_text):
+                    return self._tap_feature_or_point(
+                        context, self._watch_key, self._watch_point_action
+                    )
+                if self._has_text(context, self._watch_alt_text):
+                    return self._tap_feature_or_point(
+                        context, self._watch_alt_key, self._watch_point_action
+                    )
+                if self._has_text(context, self._watch_partial_text):
+                    return self._tap_feature_or_point(
+                        context,
+                        self._watch_partial_key,
+                        self._watch_point_action,
+                    )
             attempts = int(context.get("ad_entry_scrolls", 0))
             if attempts < self._max_scrolls:
                 context.update_data(ad_entry_scrolls=attempts + 1)
