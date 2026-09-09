@@ -24,7 +24,7 @@ from tests.helpers import (
 
 KEYS = DEFAULT_FEATURE_KEYS
 
-HOME_REWARD_KEY = feature_key(KEYS, KEYS.home_reward_entry)
+HOME_REWARD_KEY = feature_key(KEYS, KEYS.home_ocr_reward_entry)
 GAME_REWARD_ENTRY_KEY = feature_key(KEYS, KEYS.game_ocr_reward_entry)
 GAME_GO_PLAY_KEY = feature_key(KEYS, KEYS.game_ocr_go_play)
 GAME_ENTER_KEY = feature_key(KEYS, KEYS.game_ocr_enter)
@@ -99,7 +99,9 @@ def test_reward_page_with_go_play_button_taps_button() -> None:
     assert ("tap_feature", GAME_GO_PLAY_KEY) in device.calls
 
 
-def test_reward_page_with_game_card_only_taps_reward_card() -> None:
+def test_reward_page_with_game_card_only_uses_button_point_fallback() -> None:
+    # 只识别到「玩游戏领赠币」卡片标题、OCR 没读到「去玩游戏」时，
+    # 不能点击卡片标题（通常不触发），要用旧 pipeline 标定的按钮坐标。
     device = SimulatedDevice()
     adapter = _make_entry_adapter(device)
     context = make_context(
@@ -107,10 +109,8 @@ def test_reward_page_with_game_card_only_taps_reward_card() -> None:
         run_state=RunState.RUNNING,
     )
     step = adapter.advance(context)
-    assert step.actions == (
-        f"{ActionKind.TAP_FEATURE.value}:{GAME_REWARD_ENTRY_KEY}",
-    )
-    assert ("tap_feature", GAME_REWARD_ENTRY_KEY) in device.calls
+    assert step.actions == (ActionKind.TAP_POINT.value,)
+    assert ("tap_point", 592, 606) in device.calls
 
 
 def test_reward_page_without_entry_scrolls_before_retry() -> None:
@@ -133,6 +133,16 @@ def test_game_entry_page_taps_go_play_button() -> None:
     step = adapter.advance(context)
     assert step.actions == (f"{ActionKind.TAP_FEATURE.value}:{GAME_GO_PLAY_KEY}",)
     assert ("tap_feature", GAME_GO_PLAY_KEY) in device.calls
+
+
+def test_game_entry_locator_failure_falls_back_to_button_point() -> None:
+    device = SimulatedDevice(tap_results={GAME_GO_PLAY_KEY: False})
+    adapter = _make_entry_adapter(device)
+    context = make_context(game_entry_observation(), run_state=RunState.RUNNING)
+    step = adapter.advance(context)
+    assert step.actions == (ActionKind.TAP_POINT.value,)
+    assert ("tap_feature", GAME_GO_PLAY_KEY) in device.calls
+    assert ("tap_point", 592, 606) in device.calls
 
 
 def test_game_hall_is_recognized_as_game_hall() -> None:

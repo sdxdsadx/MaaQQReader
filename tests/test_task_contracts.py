@@ -195,7 +195,9 @@ def test_planned_adapter_taps_mapped_feature() -> None:
     assert device.calls == [
         (
             "tap_feature",
-            feature_key(DEFAULT_FEATURE_KEYS, DEFAULT_FEATURE_KEYS.home_reward_entry),
+            feature_key(
+                DEFAULT_FEATURE_KEYS, DEFAULT_FEATURE_KEYS.home_ocr_reward_entry
+            ),
         )
     ]
     assert step.progress is True

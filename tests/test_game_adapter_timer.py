@@ -43,7 +43,7 @@ from tests.helpers import (
 
 KEYS = DEFAULT_FEATURE_KEYS
 
-HOME_REWARD_KEY = feature_key(KEYS, KEYS.home_reward_entry)
+HOME_REWARD_KEY = feature_key(KEYS, KEYS.home_ocr_reward_entry)
 REWARD_WATCH_KEY = feature_key(KEYS, KEYS.reward_ocr_watch)
 AD_RESULT_CLOSE_KEY = feature_key(KEYS, KEYS.ad_result_close)
 GAME_REWARD_ENTRY_KEY = feature_key(KEYS, KEYS.game_ocr_reward_entry)

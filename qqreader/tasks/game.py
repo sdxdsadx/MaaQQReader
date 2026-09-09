@@ -91,7 +91,7 @@ def build_game_action_plan(keys: FeatureKeys = DEFAULT_FEATURE_KEYS) -> StateAct
         actions={
             # 公共起点：主页先进入奖励页，再在奖励页找游戏入口。
             PageState.HOME: Action.tap_feature(
-                feature_key(keys, keys.home_reward_entry)
+                feature_key(keys, keys.home_ocr_reward_entry)
             ),
             # 奖励页直接点击「去玩游戏」按钮；若页面先出现「玩游戏领赠币」
             # 中间态，GameTaskAdapter 会先点游戏卡，再点按钮。
@@ -167,6 +167,7 @@ class GameTaskAdapter(PlannedTaskAdapter):
         claim_text: str = DEFAULT_FEATURE_KEYS.game_ocr_claim,
         carousel_action: Optional[Action] = None,
         agreement_action: Optional[Action] = None,
+        reward_game_button_action: Optional[Action] = None,
         entry_scroll_action: Optional[Action] = None,
         max_entry_scrolls: int = 4,
     ) -> None:
@@ -194,7 +195,15 @@ class GameTaskAdapter(PlannedTaskAdapter):
         self._claim_text = claim_text
         self._carousel_action = carousel_action or Action.tap_point(360, 360)
         self._agreement_action = agreement_action or Action.tap_point(157, 1032)
-        self._entry_scroll_action = entry_scroll_action
+        # 奖励页「去玩游戏」按钮的坐标 fallback（OCR 定位失败时使用）。
+        self._reward_game_button_action = (
+            reward_game_button_action or Action.tap_point(592, 606)
+        )
+        # 奖励页游戏入口可能在屏幕下方；未显式配置时使用旧 pipeline
+        # GameScrollToPlay 的坐标作为查找 fallback。
+        self._entry_scroll_action = (
+            entry_scroll_action or Action.swipe(360, 980, 360, 420, 500)
+        )
         self._max_entry_scrolls = max_entry_scrolls
 
     def advance(self, context: TaskContext) -> StepResult:
@@ -240,12 +249,14 @@ class GameTaskAdapter(PlannedTaskAdapter):
                 )
             if self._has_text(context, self._go_play_text):
                 context.update_data(game_entry_scrolls=0)
-                return self._execute(Action.tap_feature(self._go_play_key), context)
-            if self._has_text(context, self._reward_entry_text):
-                context.update_data(game_entry_scrolls=0)
-                return self._execute(
-                    Action.tap_feature(self._reward_entry_key), context
+                return self._tap_feature_or_point(
+                    context, self._go_play_key, self._reward_game_button_action
                 )
+            if self._has_text(context, self._reward_entry_text):
+                # 只识别到游戏卡标题时，OCR 可能没读到右侧按钮文字；
+                # 直接点击旧 pipeline 标定的按钮坐标 fallback。
+                context.update_data(game_entry_scrolls=0)
+                return self._execute(self._reward_game_button_action, context)
             if self._entry_scroll_action is not None:
                 attempts = int(context.get("game_entry_scrolls", 0))
                 if attempts < self._max_entry_scrolls:
@@ -264,7 +275,9 @@ class GameTaskAdapter(PlannedTaskAdapter):
                     actions=(),
                     progress=False,
                 )
-            return self._execute(Action.tap_feature(self._go_play_key), context)
+            return self._tap_feature_or_point(
+                context, self._go_play_key, self._reward_game_button_action
+            )
 
         if state is PageState.GAME_RUNNING:
             started = context.get("game_started_at")
@@ -289,6 +302,18 @@ class GameTaskAdapter(PlannedTaskAdapter):
                     progress=False,
                 )
         return super().advance(context)
+
+    def _tap_feature_or_point(
+        self,
+        context: TaskContext,
+        feature_key: str,
+        fallback: Optional[Action],
+    ) -> StepResult:
+        """先按 OCR/模板定位点击；定位失败时退到固定坐标 fallback。"""
+        step = self._execute(Action.tap_feature(feature_key), context)
+        if not step.progress and fallback is not None:
+            return self._execute(fallback, context)
+        return step
 
     @staticmethod
     def _has_text(context: TaskContext, needle: str) -> bool:

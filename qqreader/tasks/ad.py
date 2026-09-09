@@ -80,7 +80,7 @@ def build_ad_action_plan(keys: FeatureKeys = DEFAULT_FEATURE_KEYS) -> StateActio
     return StateActionPlan(
         actions={
             PageState.HOME: Action.tap_feature(
-                feature_key(keys, keys.home_reward_entry)
+                feature_key(keys, keys.home_ocr_reward_entry)
             ),
             PageState.REWARD_HOME: Action.tap_feature(
                 feature_key(keys, keys.reward_ocr_watch)

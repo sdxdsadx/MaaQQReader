@@ -143,7 +143,9 @@ def build_default_state_definitions(
         StateDefinition(
             state=PageState.HOME,
             features=(
-                _app(keys.qq_reader_package),
+                # App 特征只作加分项：真机上 ADB 前台探测可能失败，不能因此
+                # 让整个 HOME 无法确认。
+                _app(keys.qq_reader_package, required=False),
                 _ladder(
                     _icon(keys.home_nav_my, weight=1.0),
                     _text(
@@ -158,6 +160,8 @@ def build_default_state_definitions(
                     required=True,
                     description="主页身份：底部「我的」/ 书架 / 底部导航结构",
                 ),
+                # 独立第二 OCR 证据：书架/我的同时出现时无需依赖模板。
+                _text(FeatureKind.OCR, keys.home_ocr_mine, weight=0.5),
                 _orientation(Orientation.PORTRAIT, weight=0.3),
             ),
             min_score=0.4,
@@ -167,12 +171,15 @@ def build_default_state_definitions(
         StateDefinition(
             state=PageState.REWARD_HOME,
             features=(
-                _app(keys.qq_reader_package),
+                _app(keys.qq_reader_package, required=False),
                 _ladder(
                     _text(
                         FeatureKind.OCR,
                         keys.reward_ocr_ad_banner,
-                        values=(keys.reward_ocr_game_banner,),
+                        values=(
+                            keys.reward_ocr_game_banner,
+                            keys.reward_ocr_granted,
+                        ),
                         weight=1.5,
                         mode=MatchMode.ONE_OF,
                         description="奖励页专属任务文案",
@@ -181,7 +188,7 @@ def build_default_state_definitions(
                     _structure(keys.reward_bottom_nav, weight=0.5),
                     weight=1.5,
                     required=True,
-                    description="奖励页身份：广告/游戏任务文案 / 标题栏 / 底部结构",
+                    description="奖励页身份：广告/游戏任务文案 / 今日已获赠币 / 标题栏 / 底部结构",
                 ),
                 _orientation(Orientation.PORTRAIT, weight=0.3),
             ),

@@ -29,7 +29,9 @@ class FeatureKeys:
     home_ocr_mine: str = "我的"
     home_nav_my: str = "home.nav_my"                 # 固定图标：底部「我的」
     home_bottom_nav: str = "home.bottom_nav"         # 结构特征：底部导航
-    home_reward_entry: str = "home.reward_entry"     # 主页/书架上的奖励页入口
+    home_reward_entry: str = "home.reward_entry"     # 主页/书架上的奖励页入口（模板逻辑名，待校准）
+    #: 书架奖励入口的真实 OCR 文案；用于从 HOME 自主进入奖励页。
+    home_ocr_reward_entry: str = "本周阅读时长"
 
     # --- REWARD_HOME（奖励页）---
     reward_header: str = "reward.header"             # 固定图标：奖励页标题栏
