@@ -264,6 +264,37 @@ def build_default_state_definitions(
             description="验证码：图片顺序点选 / 滑动验证（求解与确认见 QQR-9）",
         ),
         StateDefinition(
+            state=PageState.GAME_ENTRY,
+            features=(
+                game_app,
+                # 「去玩游戏」是本状态最强的唯一证据；作为 required 主特征。
+                _text(
+                    FeatureKind.OCR,
+                    keys.game_ocr_go_play,
+                    weight=2.0,
+                    required=True,
+                    mode=MatchMode.CONTAINS,
+                    description="去玩游戏按钮（旧 pipeline GameFindPlayButton）",
+                ),
+                # 奖励页游戏卡文案是上下文证据；与 REWARD_HOME 同时命中时，
+                # GAME_ENTRY 的 matched_count 更高，优先选中本状态。
+                _text(
+                    FeatureKind.OCR,
+                    keys.game_ocr_reward_entry,
+                    weight=0.5,
+                    mode=MatchMode.CONTAINS,
+                ),
+                _orientation(
+                    Orientation.PORTRAIT,
+                    values=any_orientation,
+                    weight=0.3,
+                ),
+            ),
+            min_score=0.4,
+            min_matched=2,
+            description="游戏任务页：点击「去玩游戏」进入游戏大厅/加载页",
+        ),
+        StateDefinition(
             state=PageState.GAME_LOADING,
             features=(
                 game_app,

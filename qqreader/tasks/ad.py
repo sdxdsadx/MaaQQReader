@@ -24,6 +24,7 @@ from ..runtime.device import DeviceController
 from ..runtime.observer import PageObserver
 from .common import (
     captcha_condition,
+    feature_key,
     health_fatal_errors,
     ocr,
     popup_recoverable,
@@ -78,10 +79,16 @@ def build_ad_action_plan(keys: FeatureKeys = DEFAULT_FEATURE_KEYS) -> StateActio
     """广告任务的状态 → 动作计划。"""
     return StateActionPlan(
         actions={
-            PageState.HOME: Action.tap_feature(keys.home_reward_entry),
-            PageState.REWARD_HOME: Action.tap_feature(keys.reward_ocr_watch),
+            PageState.HOME: Action.tap_feature(
+                feature_key(keys, keys.home_reward_entry)
+            ),
+            PageState.REWARD_HOME: Action.tap_feature(
+                feature_key(keys, keys.reward_ocr_watch)
+            ),
             PageState.AD_PLAYING: Action.wait(5.0),
-            PageState.AD_RESULT: Action.tap_feature(keys.ad_result_close),
+            PageState.AD_RESULT: Action.tap_feature(
+                feature_key(keys, keys.ad_result_close)
+            ),
             # 误入游戏页面时先返回；真正的恢复由 recoverable_error 驱动。
             PageState.GAME_LOADING: Action.press_back(),
             PageState.GAME_RUNNING: Action.press_back(),
@@ -107,7 +114,7 @@ def build_ad_definition(
         device=device,
         plan=build_ad_action_plan(keys),
         expected_package=keys.qq_reader_package,
-        popup_feature=keys.popup_close,
+        popup_feature=feature_key(keys, keys.popup_close),
     )
     return TaskDefinition(
         contract=build_ad_contract(keys, timeout_seconds=timeout_seconds),

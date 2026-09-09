@@ -11,7 +11,7 @@ OCR ``expected``（静态审计），仅作为**初始逻辑名**；按 AGENTS.m
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Optional
 
 
@@ -64,7 +64,11 @@ class FeatureKeys:
     captcha_ocr_slider: str = "拖动滑块"              # 滑动验证码（待实机确认）
 
     # --- GAME ---
-    game_entry: str = "game.entry"                   # 奖励页/主页的游戏入口
+    game_entry: str = "game.entry"                   # 奖励页/主页的游戏入口（模板逻辑名，待实机校准）
+    #: 奖励页游戏卡 OCR；也是点击奖励页游戏入口的首选定位方式。
+    game_ocr_reward_entry: str = "玩游戏领赠币"
+    #: 奖励页游戏卡点击后出现的「去玩游戏」按钮（旧 pipeline GameFindPlayButton）。
+    game_ocr_go_play: str = "去玩游戏"
     game_ocr_hall: str = "游戏大厅"
     game_loading_marker: str = "game.loading_marker"  # 结构特征：游戏登录页
     game_login_button: str = "game.login_button"      # 局部模板：登录按钮
@@ -82,6 +86,19 @@ class FeatureKeys:
     # --- 通用弹窗 ---
     popup_close: str = "popup.close"
     popup_ocr_cancel: str = "取消"
+
+    def logical_name(self, value: str) -> str:
+        """把字段值（逻辑名或 OCR 文案）解析成适配器使用的字段名。
+
+        ``FeatureCatalog`` 以 dataclass 字段名为键保存识别资源；动作计划若
+        直接传字段值（例如 OCR 文案「去玩游戏」），定位器会查不到资源。
+        本方法返回第一个值匹配的字段名，保证 ``Action.tap_feature`` 与
+        ``MaaFeatureLocator`` 使用同一套逻辑键。
+        """
+        for field in fields(self):
+            if getattr(self, field.name) == value:
+                return field.name
+        raise KeyError(f"没有值为 {value!r} 的特征键")
 
 
 DEFAULT_FEATURE_KEYS = FeatureKeys()

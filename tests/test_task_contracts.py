@@ -25,6 +25,7 @@ from qqreader.tasks import (
     build_default_registry,
     build_game_action_plan,
     build_game_contract,
+    feature_key,
 )
 from qqreader.tasks.plan import Action
 from tests.helpers import (
@@ -146,7 +147,7 @@ def test_planned_adapter_never_taps_on_unknown() -> None:
         device=device,
         plan=build_ad_action_plan(),
         expected_package=QQ,
-        popup_feature=DEFAULT_FEATURE_KEYS.popup_close,
+        popup_feature=feature_key(DEFAULT_FEATURE_KEYS, DEFAULT_FEATURE_KEYS.popup_close),
     )
     context = make_context(PageObservation.empty(), run_state=RunState.RUNNING)
     context.data[PHASE_KEY] = RunPhase.RUNNING.value
@@ -164,7 +165,7 @@ def test_planned_adapter_bootstraps_only_once_in_start() -> None:
         device=device,
         plan=build_ad_action_plan(),
         expected_package=QQ,
-        popup_feature=DEFAULT_FEATURE_KEYS.popup_close,
+        popup_feature=feature_key(DEFAULT_FEATURE_KEYS, DEFAULT_FEATURE_KEYS.popup_close),
     )
     context = make_context(PageObservation.empty(), run_state=RunState.STARTING)
     context.data[PHASE_KEY] = RunPhase.START.value
@@ -184,14 +185,19 @@ def test_planned_adapter_taps_mapped_feature() -> None:
         device=device,
         plan=build_ad_action_plan(),
         expected_package=QQ,
-        popup_feature=DEFAULT_FEATURE_KEYS.popup_close,
+        popup_feature=feature_key(DEFAULT_FEATURE_KEYS, DEFAULT_FEATURE_KEYS.popup_close),
     )
     context = make_context(home_observation(), run_state=RunState.RUNNING)
     context.data[PHASE_KEY] = RunPhase.RUNNING.value
 
     step = adapter.advance(context)
 
-    assert device.calls == [("tap_feature", DEFAULT_FEATURE_KEYS.home_reward_entry)]
+    assert device.calls == [
+        (
+            "tap_feature",
+            feature_key(DEFAULT_FEATURE_KEYS, DEFAULT_FEATURE_KEYS.home_reward_entry),
+        )
+    ]
     assert step.progress is True
 
 
@@ -203,7 +209,7 @@ def test_recovery_action_mapping_uses_ladder() -> None:
         device=device,
         plan=build_ad_action_plan(),
         expected_package=QQ,
-        popup_feature=DEFAULT_FEATURE_KEYS.popup_close,
+        popup_feature=feature_key(DEFAULT_FEATURE_KEYS, DEFAULT_FEATURE_KEYS.popup_close),
     )
     context = make_context(home_observation(), run_state=RunState.RECOVERING)
 

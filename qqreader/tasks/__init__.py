@@ -9,6 +9,7 @@ from .ad import (
 )
 from .common import (
     captcha_condition,
+    feature_key,
     health_fatal_errors,
     popup_recoverable,
     wrong_page_recoverable,
@@ -49,6 +50,7 @@ __all__ = [
     "build_game_contract",
     "build_game_definition",
     "captcha_condition",
+    "feature_key",
     "health_fatal_errors",
     "popup_recoverable",
     "wrong_page_recoverable",

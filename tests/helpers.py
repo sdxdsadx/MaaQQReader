@@ -85,6 +85,17 @@ def captcha_observation(**overrides: object) -> PageObservation:
     return PageObservation(**base)  # type: ignore[arg-type]
 
 
+def game_entry_observation(**overrides: object) -> PageObservation:
+    """奖励页游戏卡点击后、出现「去玩游戏」按钮的中间页。"""
+    base = dict(
+        current_app=QQ,
+        orientation=Orientation.PORTRAIT,
+        ocr_texts=("玩游戏领赠币", "去玩游戏"),
+    )
+    base.update(overrides)
+    return PageObservation(**base)  # type: ignore[arg-type]
+
+
 def game_loading_observation(**overrides: object) -> PageObservation:
     base = dict(
         current_app=QQ,

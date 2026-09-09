@@ -17,6 +17,15 @@ from ..page.features import FeatureKind, FeatureSpec, MatchMode
 from ..page.states import PageState
 
 
+def feature_key(keys: FeatureKeys, value: str) -> str:
+    """把 ``FeatureKeys`` 的字段值解析成适配器使用的逻辑字段名。
+
+    动作计划应传字段名给 ``Action.tap_feature``；``MaaFeatureLocator`` 只
+    认字段名，不认 OCR 文案/模板逻辑名。
+    """
+    return keys.logical_name(value)
+
+
 def ocr(
     key: str,
     *,

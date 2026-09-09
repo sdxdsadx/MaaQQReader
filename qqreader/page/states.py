@@ -17,6 +17,8 @@ class PageState(str, Enum):
     AGENTS.md §3.2 要求至少包含下列 8 个状态；``HOME`` 是在此基础上额外
     增加的稳定公共起点——§3.4 要求广告任务从「QQ 阅读主页」开始，而
     ``start_condition`` 需要一个可预测的起点来表达这一点。
+    ``GAME_ENTRY`` 是奖励页游戏卡点击后、「去玩游戏」按钮出现的中间页；
+    它不属于规范明文要求的 8 个状态，但游戏流程必须显式经过它。
     """
 
     HOME = "HOME"
@@ -24,6 +26,7 @@ class PageState(str, Enum):
     AD_PLAYING = "AD_PLAYING"
     AD_RESULT = "AD_RESULT"
     CAPTCHA = "CAPTCHA"
+    GAME_ENTRY = "GAME_ENTRY"
     GAME_LOADING = "GAME_LOADING"
     GAME_RUNNING = "GAME_RUNNING"
     GAME_RESULT = "GAME_RESULT"

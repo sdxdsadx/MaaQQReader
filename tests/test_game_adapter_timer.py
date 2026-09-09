@@ -18,6 +18,7 @@ from qqreader.tasks import (
     build_game_action_plan,
     build_game_contract,
     build_game_definition,
+    feature_key,
 )
 from tests.helpers import (
     QQ,
@@ -25,6 +26,7 @@ from tests.helpers import (
     SimulatedDevice,
     ad_playing_observation,
     ad_result_observation,
+    game_entry_observation,
     game_loading_observation,
     game_running_observation,
     home_observation,
@@ -36,15 +38,24 @@ from tests.helpers import (
 
 KEYS = DEFAULT_FEATURE_KEYS
 
+HOME_REWARD_KEY = feature_key(KEYS, KEYS.home_reward_entry)
+REWARD_WATCH_KEY = feature_key(KEYS, KEYS.reward_ocr_watch)
+AD_RESULT_CLOSE_KEY = feature_key(KEYS, KEYS.ad_result_close)
+GAME_REWARD_ENTRY_KEY = feature_key(KEYS, KEYS.game_ocr_reward_entry)
+GAME_GO_PLAY_KEY = feature_key(KEYS, KEYS.game_ocr_go_play)
+GAME_ENTER_KEY = feature_key(KEYS, KEYS.game_ocr_enter_alt)
+GAME_EXIT_MENU_KEY = feature_key(KEYS, KEYS.game_exit_menu)
+POPUP_CLOSE_KEY = feature_key(KEYS, KEYS.popup_close)
+
 
 def _make_game_adapter(device, duration: float) -> GameTaskAdapter:
     return GameTaskAdapter(
         game_duration_seconds=duration,
-        exit_action=Action.tap_feature(KEYS.game_exit_menu),
+        exit_action=Action.tap_feature(GAME_EXIT_MENU_KEY),
         device=device,
         plan=build_game_action_plan(KEYS),
         expected_package=QQ,
-        popup_feature=KEYS.popup_close,
+        popup_feature=POPUP_CLOSE_KEY,
     )
 
 
@@ -59,7 +70,7 @@ def test_game_timer_starts_only_after_running_and_exits_after_duration() -> None
     )
     adapter.advance(loading)
     assert loading.get("game_started_at") is None
-    assert device.calls == [("tap_feature", KEYS.game_ocr_enter_alt)]
+    assert device.calls == [("tap_feature", GAME_ENTER_KEY)]
 
     running = make_context(
         game_running_observation(), contract=contract, clock=clock, run_state=RunState.RUNNING
@@ -71,12 +82,12 @@ def test_game_timer_starts_only_after_running_and_exits_after_duration() -> None
     waiting = adapter.advance(running)
     assert waiting.actions == (ActionKind.WAIT.value,)
     assert clock.now() == 10.0
-    assert ("tap_feature", KEYS.game_exit_menu) not in device.calls
+    assert ("tap_feature", GAME_EXIT_MENU_KEY) not in device.calls
 
     clock.advance(50.0)  # 累计 60s，达到挂机时长
     exiting = adapter.advance(running)
-    assert exiting.actions == (f"{ActionKind.TAP_FEATURE.value}:{KEYS.game_exit_menu}",)
-    assert ("tap_feature", KEYS.game_exit_menu) in device.calls
+    assert exiting.actions == (f"{ActionKind.TAP_FEATURE.value}:{GAME_EXIT_MENU_KEY}",)
+    assert ("tap_feature", GAME_EXIT_MENU_KEY) in device.calls
 
 
 def test_game_adapter_rejects_non_positive_duration() -> None:
@@ -98,11 +109,11 @@ def test_ad_flow_end_to_end_with_real_adapter() -> None:
     )
 
     def on_tap(name: str) -> None:
-        if name == KEYS.home_reward_entry:
+        if name == HOME_REWARD_KEY:
             observer.go("REWARD_HOME")
-        elif name == KEYS.reward_ocr_watch:
+        elif name == REWARD_WATCH_KEY:
             observer.go("AD_PLAYING")
-        elif name == KEYS.ad_result_close:
+        elif name == AD_RESULT_CLOSE_KEY:
             observer.go("REWARD_DONE")
 
     device = SimulatedDevice(on_tap_feature=on_tap)
@@ -117,9 +128,9 @@ def test_ad_flow_end_to_end_with_real_adapter() -> None:
     result = TaskRunner(definition, FakeClock()).run()
 
     assert result.outcome is TaskOutcome.SUCCESS
-    assert ("tap_feature", KEYS.home_reward_entry) in device.calls
-    assert ("tap_feature", KEYS.reward_ocr_watch) in device.calls
-    assert ("tap_feature", KEYS.ad_result_close) in device.calls
+    assert ("tap_feature", HOME_REWARD_KEY) in device.calls
+    assert ("tap_feature", REWARD_WATCH_KEY) in device.calls
+    assert ("tap_feature", AD_RESULT_CLOSE_KEY) in device.calls
     assert result.final_state.value == "REWARD_HOME"
 
 
@@ -127,7 +138,10 @@ def test_game_flow_end_to_end_with_real_adapter() -> None:
     observer = PageFlowObserver(
         pages={
             "HOME": home_observation(),
-            "REWARD_HOME": reward_observation(),
+            "REWARD_HOME": reward_observation(
+                ocr=("今日已获赠币", "玩游戏领赠币")
+            ),
+            "GAME_ENTRY": game_entry_observation(),
             "GAME_LOADING": game_loading_observation(),
             "GAME_RUNNING": game_running_observation(),
             "REWARD_DONE": reward_done_observation(),
@@ -136,13 +150,15 @@ def test_game_flow_end_to_end_with_real_adapter() -> None:
     )
 
     def on_tap(name: str) -> None:
-        if name == KEYS.game_entry:
-            observer.go(
-                "GAME_LOADING" if observer.page == "REWARD_HOME" else "REWARD_HOME"
-            )
-        elif name == KEYS.game_ocr_enter_alt:
+        if name == HOME_REWARD_KEY:
+            observer.go("REWARD_HOME")
+        elif name == GAME_REWARD_ENTRY_KEY:
+            observer.go("GAME_ENTRY")
+        elif name == GAME_GO_PLAY_KEY:
+            observer.go("GAME_LOADING")
+        elif name == GAME_ENTER_KEY:
             observer.go("GAME_RUNNING")
-        elif name == KEYS.game_exit_menu:
+        elif name == GAME_EXIT_MENU_KEY:
             observer.go("REWARD_DONE")
 
     device = SimulatedDevice(on_tap_feature=on_tap)
@@ -158,8 +174,10 @@ def test_game_flow_end_to_end_with_real_adapter() -> None:
     result = TaskRunner(definition, FakeClock()).run()
 
     assert result.outcome is TaskOutcome.SUCCESS
-    assert ("tap_feature", KEYS.game_entry) in device.calls
-    assert ("tap_feature", KEYS.game_ocr_enter_alt) in device.calls
-    assert ("tap_feature", KEYS.game_exit_menu) in device.calls
+    assert ("tap_feature", HOME_REWARD_KEY) in device.calls
+    assert ("tap_feature", GAME_REWARD_ENTRY_KEY) in device.calls
+    assert ("tap_feature", GAME_GO_PLAY_KEY) in device.calls
+    assert ("tap_feature", GAME_ENTER_KEY) in device.calls
+    assert ("tap_feature", GAME_EXIT_MENU_KEY) in device.calls
     kinds = [event.kind for event in result.diagnostics]
     assert "task.success" in kinds
