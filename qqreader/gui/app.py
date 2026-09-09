@@ -48,6 +48,22 @@ def _detect_repo_root() -> Path:
 
 _REPO_ROOT = _detect_repo_root()
 
+BG = "#f3f5f9"
+CARD = "#ffffff"
+TEXT = "#1f2937"
+MUTED = "#6b7280"
+ACCENT = "#2563eb"
+ACCENT_ACTIVE = "#1d4ed8"
+DANGER = "#dc2626"
+SUCCESS = "#16a34a"
+WARNING = "#d97706"
+BORDER = "#d7dde8"
+LOG_BG = "#0f172a"
+LOG_FG = "#e2e8f0"
+FONT_UI = ("Microsoft YaHei UI", 9)
+FONT_TITLE = ("Microsoft YaHei UI", 12, "bold")
+FONT_MONO = ("Consolas", 9)
+
 
 class QQReaderGui:
     """任务树 + 参数面板 + 串行执行的 GUI。"""
@@ -89,35 +105,118 @@ class QQReaderGui:
 
     def _build_ui(self) -> None:
         self.root.title("QQReader 每日任务控制台")
-        self.root.geometry("1180x760")
-        self.root.minsize(960, 620)
-
-        self._build_config_bar()
+        self.root.geometry("1240x800")
+        self.root.minsize(1040, 660)
+        self.root.configure(bg=BG)
+        self._configure_styles()
+        self._build_header()
         self._build_toolbar()
         self._build_main_panes()
-        self._build_status_bar()
+        self._build_action_bar()
         self.root.after(100, self._drain_log_queue)
-        self._log("GUI 已启动。左侧勾选任务，右侧设置参数，点击「串行执行」。")
+        self._log("GUI 已启动。左侧勾选任务，右侧设置参数，点击底部「串行执行」。")
 
-    def _build_config_bar(self) -> None:
-        top = ttk.Frame(self.root, padding=(10, 8, 10, 4))
-        top.pack(fill=tk.X)
-        ttk.Label(top, text="配置文件").pack(side=tk.LEFT)
+    def _configure_styles(self) -> None:
+        style = ttk.Style(self.root)
+        if "clam" in style.theme_names():
+            style.theme_use("clam")
+        style.configure(".", font=FONT_UI, background=BG, foreground=TEXT)
+        style.configure("TFrame", background=BG)
+        style.configure("Card.TFrame", background=CARD)
+        style.configure("TLabel", background=BG, foreground=TEXT)
+        style.configure("Card.TLabel", background=CARD, foreground=TEXT)
+        style.configure("Muted.TLabel", background=CARD, foreground=MUTED)
+        style.configure("Title.TLabel", font=FONT_TITLE, background=BG, foreground=TEXT)
+        style.configure(
+            "CardHeader.TLabel",
+            font=("Microsoft YaHei UI", 10, "bold"),
+            background=CARD,
+            foreground=TEXT,
+        )
+        style.configure("Toolbar.TButton", padding=(8, 5))
+        style.configure(
+            "Primary.TButton",
+            font=("Microsoft YaHei UI", 10, "bold"),
+            foreground="#ffffff",
+            background=ACCENT,
+            padding=(18, 8),
+            borderwidth=0,
+        )
+        style.map(
+            "Primary.TButton",
+            background=[("active", ACCENT_ACTIVE), ("disabled", "#93c5fd")],
+            foreground=[("disabled", "#ffffff")],
+        )
+        style.configure(
+            "Danger.TButton",
+            font=FONT_UI,
+            foreground="#ffffff",
+            background=DANGER,
+            padding=(14, 7),
+            borderwidth=0,
+        )
+        style.map(
+            "Danger.TButton",
+            background=[("active", "#b91c1c"), ("disabled", "#fca5a5")],
+        )
+        style.configure(
+            "Treeview",
+            rowheight=28,
+            font=FONT_UI,
+            background=CARD,
+            fieldbackground=CARD,
+            foreground=TEXT,
+            borderwidth=0,
+        )
+        style.configure(
+            "Treeview.Heading",
+            font=("Microsoft YaHei UI", 9, "bold"),
+            background="#e8edf5",
+            foreground=TEXT,
+            relief="flat",
+        )
+        style.map(
+            "Treeview",
+            background=[("selected", "#dbeafe")],
+            foreground=[("selected", TEXT)],
+        )
+        style.configure("TLabelframe", background=BG)
+        style.configure(
+            "TLabelframe.Label",
+            background=BG,
+            foreground=TEXT,
+            font=("Microsoft YaHei UI", 9, "bold"),
+        )
+
+    def _build_header(self) -> None:
+        header = tk.Frame(self.root, bg=BG, padx=14, pady=10)
+        header.pack(fill=tk.X)
+        ttk.Label(
+            header, text="QQReader 每日任务控制台", style="Title.TLabel"
+        ).pack(side=tk.LEFT)
+        right = ttk.Frame(header)
+        right.pack(side=tk.RIGHT)
+        ttk.Label(right, text="配置文件").pack(side=tk.LEFT)
         self._config_var = tk.StringVar()
-        ttk.Entry(top, textvariable=self._config_var).pack(
-            side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 8)
+        ttk.Entry(right, textvariable=self._config_var, width=56).pack(
+            side=tk.LEFT, padx=(6, 6)
         )
-        ttk.Button(top, text="选择…", command=self._choose_config).pack(side=tk.LEFT)
-        ttk.Button(top, text="加载", command=self._load_config_from_entry).pack(
-            side=tk.LEFT, padx=(6, 0)
-        )
+        ttk.Button(
+            right, text="选择…", command=self._choose_config, style="Toolbar.TButton"
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            right, text="加载", command=self._load_config_from_entry, style="Toolbar.TButton"
+        ).pack(side=tk.LEFT, padx=(6, 0))
 
     def _build_toolbar(self) -> None:
-        bar = ttk.Frame(self.root, padding=(10, 0, 10, 6))
-        bar.pack(fill=tk.X)
+        bar = tk.Frame(self.root, bg=BG)
+        bar.pack(fill=tk.X, padx=14, pady=(0, 8))
         self._action_buttons: List[ttk.Button] = []
         self._launch_button = ttk.Button(
-            bar, text="启动模拟器", command=self._launch_emulator
+            bar,
+            text="启动模拟器",
+            command=self._launch_emulator,
+            style="Toolbar.TButton",
         )
         self._launch_button.pack(side=tk.LEFT)
         self._action_buttons.append(self._launch_button)
@@ -125,69 +224,48 @@ class QQReaderGui:
         for text, command in (
             ("启动QQ阅读", lambda: self._run_task("LaunchQQReader")),
             ("识别检查", lambda: self._run_task("SmokeTest")),
-        ):
-            button = ttk.Button(bar, text=text, command=command)
-            button.pack(side=tk.LEFT, padx=(6, 0))
-            self._action_buttons.append(button)
-
-        self._serial_button = ttk.Button(
-            bar, text="串行执行", command=self._run_serial
-        )
-        self._serial_button.pack(side=tk.LEFT, padx=(6, 0))
-        self._action_buttons.append(self._serial_button)
-        self._selected_button = ttk.Button(
-            bar, text="运行选中任务", command=self._run_selected
-        )
-        self._selected_button.pack(side=tk.LEFT, padx=(6, 0))
-        self._action_buttons.append(self._selected_button)
-        self._stop_button = ttk.Button(
-            bar, text="停止", command=self._stop_process, state=tk.DISABLED
-        )
-        self._stop_button.pack(side=tk.LEFT, padx=(6, 0))
-
-        for text, command in (
             ("每日默认", lambda: self._apply_preset(True)),
             ("1分钟试运行", lambda: self._apply_preset(False)),
-            ("▲ 上移", lambda: self._move_selected(-1)),
-            ("▼ 下移", lambda: self._move_selected(1)),
             ("保存设置", self._save_settings),
             ("打开记录目录", self._open_record_dir),
         ):
-            button = ttk.Button(bar, text=text, command=command)
+            button = ttk.Button(
+                bar, text=text, command=command, style="Toolbar.TButton"
+            )
             button.pack(side=tk.LEFT, padx=(6, 0))
             self._action_buttons.append(button)
 
-        ttk.Label(bar, text="任务间隔").pack(side=tk.RIGHT)
-        self._interval_var = tk.StringVar(value="3")
-        ttk.Spinbox(
-            bar, from_=0, to=120, increment=1, width=5,
-            textvariable=self._interval_var,
-        ).pack(side=tk.RIGHT, padx=(6, 0))
-        ttk.Label(bar, text="秒").pack(side=tk.RIGHT)
-
     def _build_main_panes(self) -> None:
         paned = ttk.Panedwindow(self.root, orient=tk.HORIZONTAL)
-        paned.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 6))
+        paned.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 6))
 
-        left = ttk.LabelFrame(paned, text="任务列表", padding=(6, 6))
+        left = tk.Frame(paned, bg=CARD, highlightbackground=BORDER, highlightthickness=1)
         paned.add(left, weight=1)
-
-        columns = ("enabled", "name")
-        self._tree = ttk.Treeview(
+        tk.Label(
             left,
-            columns=columns,
+            text="任务列表",
+            bg=CARD,
+            fg=TEXT,
+            font=("Microsoft YaHei UI", 10, "bold"),
+            anchor="w",
+            padx=12,
+            pady=8,
+        ).pack(fill=tk.X)
+        tree_holder = tk.Frame(left, bg=CARD)
+        tree_holder.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 6))
+        self._tree = ttk.Treeview(
+            tree_holder,
+            columns=("enabled",),
             show="tree headings",
             selectmode="browse",
             height=18,
         )
         self._tree.heading("#0", text="分组 / 任务")
         self._tree.heading("enabled", text="启用")
-        self._tree.heading("name", text="任务")
-        self._tree.column("#0", width=230, stretch=True)
-        self._tree.column("enabled", width=60, anchor=tk.CENTER, stretch=False)
-        self._tree.column("name", width=150, stretch=True)
+        self._tree.column("#0", width=300, stretch=True)
+        self._tree.column("enabled", width=64, anchor=tk.CENTER, stretch=False)
         tree_scroll = ttk.Scrollbar(
-            left, orient=tk.VERTICAL, command=self._tree.yview
+            tree_holder, orient=tk.VERTICAL, command=self._tree.yview
         )
         self._tree.configure(yscrollcommand=tree_scroll.set)
         self._tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -196,39 +274,158 @@ class QQReaderGui:
         self._tree.bind("<ButtonRelease-1>", self._on_tree_click)
         self._build_task_tree()
 
+        order_bar = tk.Frame(left, bg=CARD)
+        order_bar.pack(fill=tk.X, padx=8, pady=(0, 8))
+        ttk.Button(
+            order_bar,
+            text="▲ 上移",
+            command=lambda: self._move_selected(-1),
+            style="Toolbar.TButton",
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            order_bar,
+            text="▼ 下移",
+            command=lambda: self._move_selected(1),
+            style="Toolbar.TButton",
+        ).pack(side=tk.LEFT, padx=(6, 0))
+
         right = ttk.Panedwindow(paned, orient=tk.VERTICAL)
         paned.add(right, weight=2)
 
-        settings = ttk.LabelFrame(right, text="任务设置", padding=(8, 8))
-        right.add(settings, weight=1)
-        self._settings_desc = ttk.Label(
-            settings, text="请选择一个任务", foreground="#555", wraplength=720
+        settings = tk.Frame(
+            right, bg=CARD, highlightbackground=BORDER, highlightthickness=1
         )
-        self._settings_desc.pack(anchor=tk.W, fill=tk.X)
-        self._settings_body = ttk.Frame(settings)
-        self._settings_body.pack(fill=tk.X, pady=(6, 0))
+        right.add(settings, weight=1)
+        tk.Label(
+            settings,
+            text="任务设置",
+            bg=CARD,
+            fg=TEXT,
+            font=("Microsoft YaHei UI", 10, "bold"),
+            anchor="w",
+            padx=12,
+            pady=8,
+        ).pack(fill=tk.X)
+        self._settings_desc = ttk.Label(
+            settings,
+            text="请选择一个任务",
+            style="Muted.TLabel",
+            wraplength=760,
+            justify=tk.LEFT,
+        )
+        self._settings_desc.pack(anchor=tk.W, fill=tk.X, padx=12, pady=(0, 6))
+        self._settings_body = ttk.Frame(settings, style="Card.TFrame")
+        self._settings_body.pack(fill=tk.X, padx=12, pady=(0, 10))
 
-        log_frame = ttk.LabelFrame(right, text="实时日志", padding=(6, 6))
-        right.add(log_frame, weight=3)
-        self._log_text = tk.Text(log_frame, wrap=tk.WORD, height=18, state=tk.DISABLED)
+        log_card = tk.Frame(
+            right, bg=CARD, highlightbackground=BORDER, highlightthickness=1
+        )
+        right.add(log_card, weight=3)
+        log_header = tk.Frame(log_card, bg=CARD)
+        log_header.pack(fill=tk.X, padx=12, pady=(8, 4))
+        tk.Label(
+            log_header,
+            text="实时日志",
+            bg=CARD,
+            fg=TEXT,
+            font=("Microsoft YaHei UI", 10, "bold"),
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            log_header,
+            text="清空日志",
+            command=self._clear_log,
+            style="Toolbar.TButton",
+        ).pack(side=tk.RIGHT)
+        log_holder = tk.Frame(log_card, bg=LOG_BG)
+        log_holder.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+        self._log_text = tk.Text(
+            log_holder,
+            wrap=tk.WORD,
+            height=18,
+            state=tk.DISABLED,
+            bg=LOG_BG,
+            fg=LOG_FG,
+            insertbackground="#ffffff",
+            selectbackground="#334155",
+            relief=tk.FLAT,
+            font=FONT_MONO,
+            padx=8,
+            pady=6,
+        )
         log_scroll = ttk.Scrollbar(
-            log_frame, orient=tk.VERTICAL, command=self._log_text.yview
+            log_holder, orient=tk.VERTICAL, command=self._log_text.yview
         )
         self._log_text.configure(yscrollcommand=log_scroll.set)
         self._log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         log_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self._log_text.tag_configure("info", foreground=LOG_FG)
+        self._log_text.tag_configure("observe", foreground="#7dd3fc")
+        self._log_text.tag_configure("success", foreground="#4ade80")
+        self._log_text.tag_configure("error", foreground="#f87171")
+        self._log_text.tag_configure("warn", foreground="#fbbf24")
 
-    def _build_status_bar(self) -> None:
-        bar = ttk.Frame(self.root, padding=(10, 0, 10, 8))
-        bar.pack(fill=tk.X)
-        ttk.Label(bar, text="状态：").pack(side=tk.LEFT)
+    def _build_action_bar(self) -> None:
+        bar = tk.Frame(self.root, bg=BG)
+        bar.pack(fill=tk.X, padx=14, pady=(4, 12))
+        self._serial_button = ttk.Button(
+            bar,
+            text="串行执行",
+            command=self._run_serial,
+            style="Primary.TButton",
+        )
+        self._serial_button.pack(side=tk.LEFT)
+        self._action_buttons.append(self._serial_button)
+        self._selected_button = ttk.Button(
+            bar,
+            text="运行选中任务",
+            command=self._run_selected,
+            style="Toolbar.TButton",
+        )
+        self._selected_button.pack(side=tk.LEFT, padx=(8, 0))
+        self._action_buttons.append(self._selected_button)
+        self._stop_button = ttk.Button(
+            bar,
+            text="停止",
+            command=self._stop_process,
+            state=tk.DISABLED,
+            style="Danger.TButton",
+        )
+        self._stop_button.pack(side=tk.LEFT, padx=(8, 0))
+
+        right = tk.Frame(bar, bg=BG)
+        right.pack(side=tk.RIGHT)
+        ttk.Label(right, text="任务间隔").pack(side=tk.LEFT)
+        self._interval_var = tk.StringVar(value="3")
+        ttk.Spinbox(
+            right,
+            from_=0,
+            to=120,
+            increment=1,
+            width=5,
+            textvariable=self._interval_var,
+        ).pack(side=tk.LEFT, padx=(6, 2))
+        ttk.Label(right, text="秒").pack(side=tk.LEFT)
+        ttk.Label(right, text="状态：").pack(side=tk.LEFT, padx=(18, 0))
+        self._status_dot = tk.Label(
+            right, text="●", bg=BG, fg=MUTED, font=("Segoe UI", 10)
+        )
+        self._status_dot.pack(side=tk.LEFT)
         self._status_var = tk.StringVar(value="未运行")
-        ttk.Label(
-            bar, textvariable=self._status_var, foreground="#0a6"
-        ).pack(side=tk.LEFT)
+        tk.Label(
+            right,
+            textvariable=self._status_var,
+            bg=BG,
+            fg=TEXT,
+            font=FONT_UI,
+        ).pack(side=tk.LEFT, padx=(4, 0))
         self._current_var = tk.StringVar(value="")
-        ttk.Label(bar, textvariable=self._current_var).pack(side=tk.LEFT, padx=(16, 0))
-        ttk.Button(bar, text="清空日志", command=self._clear_log).pack(side=tk.RIGHT)
+        tk.Label(
+            right,
+            textvariable=self._current_var,
+            bg=BG,
+            fg=MUTED,
+            font=FONT_UI,
+        ).pack(side=tk.LEFT, padx=(12, 0))
 
     # ------------------------------------------------------------- 任务树
 
@@ -247,7 +444,7 @@ class QQReaderGui:
                     tk.END,
                     iid=group_iid,
                     text=f"▸ {spec.group}",
-                    values=("", ""),
+                    values=("",),
                     open=True,
                 )
             enabled = self._settings[spec.key].enabled
@@ -255,8 +452,8 @@ class QQReaderGui:
                 groups[spec.group],
                 tk.END,
                 iid=spec.key,
-                text="",
-                values=("☑" if enabled else "☐", spec.display_name),
+                text=spec.display_name,
+                values=("☑" if enabled else "☐",),
             )
             self._task_items[spec.key] = spec.key
             self._item_specs[spec.key] = spec
@@ -320,20 +517,21 @@ class QQReaderGui:
             ttk.Label(
                 self._settings_body,
                 text="旧任务：新状态机未接入",
-                foreground="#b35a00",
-            ).grid(row=start_row, column=0, columnspan=3, sticky=tk.W, pady=(0, 4))
+                foreground=WARNING,
+                style="Card.TLabel",
+            ).grid(row=start_row, column=0, columnspan=3, sticky=tk.W, pady=(0, 6))
             start_row = 1
         ttk.Checkbutton(
             self._settings_body,
             text="启用此任务",
             variable=self._enabled_var,
             command=lambda: self._on_enabled_changed(spec),
-        ).grid(row=start_row, column=0, columnspan=2, sticky=tk.W, pady=(0, 6))
+        ).grid(row=start_row, column=0, columnspan=2, sticky=tk.W, pady=(0, 8))
 
         for row, item in enumerate(spec.fields, start=start_row + 1):
-            ttk.Label(self._settings_body, text=item.label).grid(
-                row=row, column=0, sticky=tk.W, pady=2
-            )
+            ttk.Label(
+                self._settings_body, text=item.label, style="Card.TLabel"
+            ).grid(row=row, column=0, sticky=tk.W, pady=3)
             current = self._settings[spec.key].value(spec, item.key)
             if item.kind == "bool":
                 var: tk.Variable = tk.BooleanVar(value=bool(current))
@@ -350,11 +548,11 @@ class QQReaderGui:
                     width=12,
                     textvariable=var,
                 )
-            widget.grid(row=row, column=1, sticky=tk.W, padx=(10, 0), pady=2)
+            widget.grid(row=row, column=1, sticky=tk.W, padx=(12, 0), pady=3)
             if item.unit:
-                ttk.Label(self._settings_body, text=item.unit).grid(
-                    row=row, column=2, sticky=tk.W, padx=(6, 0)
-                )
+                ttk.Label(
+                    self._settings_body, text=item.unit, style="Muted.TLabel"
+                ).grid(row=row, column=2, sticky=tk.W, padx=(6, 0))
             self._field_vars[item.key] = var
 
     def _on_enabled_changed(self, spec: TaskSpec) -> None:
@@ -827,13 +1025,35 @@ class QQReaderGui:
 
     def _log(self, message: str) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
+        tag = "info"
+        if "[observe" in message:
+            tag = "observe"
+        elif any(
+            token in message
+            for token in ("失败", "错误", "[ERR]", "[not-implemented]")
+        ):
+            tag = "error"
+        elif "未接入" in message:
+            tag = "warn"
+        elif any(token in message for token in ("成功", "完成")):
+            tag = "success"
         self._log_text.configure(state=tk.NORMAL)
-        self._log_text.insert(tk.END, f"[{timestamp}] {message}\n")
+        self._log_text.insert(tk.END, f"[{timestamp}] {message}\n", tag)
         self._log_text.see(tk.END)
         self._log_text.configure(state=tk.DISABLED)
 
     def _set_status(self, text: str) -> None:
         self._status_var.set(text)
+        color = MUTED
+        if any(token in text for token in ("运行中", "启动")):
+            color = ACCENT
+        elif any(token in text for token in ("失败", "错误")):
+            color = DANGER
+        elif any(token in text for token in ("完成", "成功")):
+            color = SUCCESS
+        elif "停止" in text:
+            color = WARNING
+        self._status_dot.configure(fg=color)
 
 
 def _build_parser() -> argparse.ArgumentParser:
