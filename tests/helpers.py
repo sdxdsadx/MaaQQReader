@@ -146,7 +146,18 @@ def game_hall_observation(**overrides: object) -> PageObservation:
     base = dict(
         current_app=QQ,
         orientation=Orientation.PORTRAIT,
-        ocr_texts=("精选大作", "今日必玩推荐", "排行", "分类"),
+        ocr_texts=("精选大作", "今日必玩推荐", "排行", "分类", "在线玩"),
+    )
+    base.update(overrides)
+    return PageObservation(**base)  # type: ignore[arg-type]
+
+
+def game_center_observation(**overrides: object) -> PageObservation:
+    """点击游戏大厅「在线玩」后进入的游戏中心页。"""
+    base = dict(
+        current_app=QQ,
+        orientation=Orientation.PORTRAIT,
+        ocr_texts=("游戏中心", "在线玩", "精品热门", "大家都在玩"),
     )
     base.update(overrides)
     return PageObservation(**base)  # type: ignore[arg-type]

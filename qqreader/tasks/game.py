@@ -50,6 +50,9 @@ def build_game_contract(
             PageState.REWARD_HOME,
             PageState.GAME_ENTRY,
             PageState.GAME_HALL,
+            PageState.GAME_CENTER,
+            PageState.GAME_LOADING,
+            PageState.GAME_RUNNING,
         ),
         ready_condition=state_in(
             PageState.GAME_ENTRY,
@@ -102,8 +105,10 @@ def build_game_action_plan(keys: FeatureKeys = DEFAULT_FEATURE_KEYS) -> StateAct
             PageState.GAME_ENTRY: Action.tap_feature(
                 feature_key(keys, keys.game_ocr_go_play)
             ),
-            # 游戏大厅：点击轮播图中心；GameTaskAdapter 在退出后改为返回。
+            # 游戏大厅：GameTaskAdapter 会先下划一次再点「在线玩」。
             PageState.GAME_HALL: Action.tap_point(360, 360),
+            # 游戏中心：点击第一张游戏卡的「在线玩」按钮（坐标 fallback）。
+            PageState.GAME_CENTER: Action.tap_point(100, 982),
             # 登录/协议页：GameTaskAdapter 会先勾选协议再点「进入游戏」。
             PageState.GAME_LOADING: Action.tap_feature(
                 feature_key(keys, keys.game_ocr_enter)
@@ -134,6 +139,27 @@ class GameTaskAdapter(PlannedTaskAdapter):
     后主动执行退出动作。计时状态放在 ``TaskContext.data``，不污染契约。
     """
 
+    #: 这些文案出现时，即使页面带「领币」也不算真正进入游戏运行态。
+    _RUNNING_BLOCK_TEXTS = (
+        "正在连接服务器",
+        "正在进入游戏",
+        "进入游戏",
+        "我已详细阅读并同意",
+        "用户协议",
+        "同意",
+        "拒绝",
+        "点击选服",
+        "踏入仙途",
+        "开始游戏",
+        "精选大作",
+        "今日必玩推荐",
+        "新游",
+        "活动",
+        "排行",
+        "分类",
+        "去玩游戏",
+    )
+
     def __init__(
         self,
         *,
@@ -154,6 +180,9 @@ class GameTaskAdapter(PlannedTaskAdapter):
         enter_game_key: str = DEFAULT_FEATURE_KEYS.logical_name(
             DEFAULT_FEATURE_KEYS.game_ocr_enter
         ),
+        enter_game_alt_key: str = DEFAULT_FEATURE_KEYS.logical_name(
+            DEFAULT_FEATURE_KEYS.game_ocr_enter_alt
+        ),
         exit_menu_key: str = DEFAULT_FEATURE_KEYS.logical_name(
             DEFAULT_FEATURE_KEYS.game_ocr_exit
         ),
@@ -163,10 +192,25 @@ class GameTaskAdapter(PlannedTaskAdapter):
         claim_key: str = DEFAULT_FEATURE_KEYS.logical_name(
             DEFAULT_FEATURE_KEYS.game_ocr_claim
         ),
+        online_play_key: str = DEFAULT_FEATURE_KEYS.logical_name(
+            DEFAULT_FEATURE_KEYS.game_ocr_online_play
+        ),
+        agree_key: str = DEFAULT_FEATURE_KEYS.logical_name(
+            DEFAULT_FEATURE_KEYS.game_ocr_agree
+        ),
+        login_game_key: str = DEFAULT_FEATURE_KEYS.logical_name(
+            DEFAULT_FEATURE_KEYS.game_ocr_login_game
+        ),
         agreement_text: str = DEFAULT_FEATURE_KEYS.game_ocr_agreement,
         claim_text: str = DEFAULT_FEATURE_KEYS.game_ocr_claim,
+        agree_text: str = DEFAULT_FEATURE_KEYS.game_ocr_agree,
+        online_play_text: str = DEFAULT_FEATURE_KEYS.game_ocr_online_play,
+        login_game_text: str = DEFAULT_FEATURE_KEYS.game_ocr_login_game,
         carousel_action: Optional[Action] = None,
+        hall_swipe_action: Optional[Action] = None,
+        game_center_online_play_action: Optional[Action] = None,
         agreement_action: Optional[Action] = None,
+        agreement_action_alt: Optional[Action] = None,
         reward_game_button_action: Optional[Action] = None,
         entry_scroll_action: Optional[Action] = None,
         max_entry_scrolls: int = 4,
@@ -188,13 +232,35 @@ class GameTaskAdapter(PlannedTaskAdapter):
         self._reward_entry_text = reward_entry_text
         self._go_play_text = go_play_text
         self._enter_game_key = enter_game_key
+        self._enter_game_alt_key = enter_game_alt_key
         self._exit_menu_key = exit_menu_key
         self._close_game_key = close_game_key
         self._claim_key = claim_key
+        self._online_play_key = online_play_key
+        self._agree_key = agree_key
+        self._login_game_key = login_game_key
         self._agreement_text = agreement_text
         self._claim_text = claim_text
+        self._agree_text = agree_text
+        self._online_play_text = online_play_text
+        self._login_game_text = login_game_text
         self._carousel_action = carousel_action or Action.tap_point(360, 360)
-        self._agreement_action = agreement_action or Action.tap_point(157, 1032)
+        # QQR-20：游戏大厅先下划一次，再识别「在线玩」。
+        self._hall_swipe_action = (
+            hall_swipe_action or Action.swipe(360, 420, 360, 980, 500)
+        )
+        self._game_center_online_play_action = (
+            game_center_online_play_action or Action.tap_point(100, 982)
+        )
+        # 协议勾选框在不同游戏里高度略有差异，准备两个坐标依次尝试。
+        self._agreement_actions = tuple(
+            action
+            for action in (
+                agreement_action or Action.tap_point(157, 1032),
+                agreement_action_alt or Action.tap_point(152, 1066),
+            )
+            if action is not None
+        )
         # 奖励页「去玩游戏」按钮的坐标 fallback（OCR 定位失败时使用）。
         self._reward_game_button_action = (
             reward_game_button_action or Action.tap_point(592, 606)
@@ -209,21 +275,52 @@ class GameTaskAdapter(PlannedTaskAdapter):
     def advance(self, context: TaskContext) -> StepResult:
         state = context.decision.state if context.decision is not None else None
 
-        # 游戏大厅：首次点击轮播图进入游戏；退出游戏后按返回键回奖励页。
+        # QQR-18/20：退出流程一旦启动，后续只允许「退出/关闭/返回奖励页」，
+        # 绝不能再被游戏大厅/游戏中心/登录页/运行页重新拉进游戏。
+        if context.get("game_exit_done"):
+            if state is PageState.GAME_MENU:
+                return self._execute(Action.tap_feature(self._exit_menu_key), context)
+            if state is PageState.GAME_EXIT_CONFIRM:
+                return self._execute(Action.tap_feature(self._close_game_key), context)
+            if state in (PageState.REWARD_HOME, PageState.GAME_ENTRY):
+                if self._has_text(context, self._claim_text):
+                    return self._execute(Action.tap_feature(self._claim_key), context)
+                return StepResult(
+                    "游戏已退出，奖励页暂未出现可领取按钮",
+                    actions=(),
+                    progress=False,
+                )
+            if state in (
+                PageState.GAME_HALL,
+                PageState.GAME_CENTER,
+                PageState.GAME_LOADING,
+                PageState.GAME_RUNNING,
+                PageState.GAME_RESULT,
+            ):
+                return self._execute(Action.press_back(), context)
+
+        # 游戏大厅：QQR-20 进入游戏后先下划一次，再识别「在线玩」点击进入游戏；
+        # 退出游戏后按返回键回奖励页，不再下划/点击。
         if state is PageState.GAME_HALL:
             if context.get("game_exit_done"):
                 return self._execute(Action.press_back(), context)
+            if not context.get("game_hall_swiped"):
+                context.update_data(game_hall_swiped=True)
+                return self._execute(self._hall_swipe_action, context)
+            if self._has_text(context, self._online_play_text):
+                return self._tap_feature_or_point(
+                    context, self._online_play_key, self._carousel_action
+                )
+            # 在线玩 OCR 未命中时退到旧轮播图入口（仍在游戏大厅内）。
             return self._execute(self._carousel_action, context)
 
-        # 登录/协议页：先勾选协议，再点「进入游戏」。
+        # 游戏中心：点击第一张游戏卡的「在线玩」进入游戏登录/加载页。
+        if state is PageState.GAME_CENTER:
+            return self._execute(self._game_center_online_play_action, context)
+
+        # 登录/协议页：先勾选协议，再点「登录游戏 / 进入游戏」。
         if state is PageState.GAME_LOADING:
-            if (
-                self._has_text(context, self._agreement_text)
-                and not context.get("game_agreement_clicked")
-            ):
-                context.update_data(game_agreement_clicked=True)
-                return self._execute(self._agreement_action, context)
-            return self._execute(Action.tap_feature(self._enter_game_key), context)
+            return self._handle_loading_like(context)
 
         if state is PageState.GAME_MENU:
             return self._execute(Action.tap_feature(self._exit_menu_key), context)
@@ -280,6 +377,13 @@ class GameTaskAdapter(PlannedTaskAdapter):
             )
 
         if state is PageState.GAME_RUNNING:
+            # QQR-20：游戏加载/协议页也可能出现「领币」，必须先等真正进入
+            # 游戏运行态后再开始计时，否则会提前退出。
+            if self._has_any_text(context, self._RUNNING_BLOCK_TEXTS):
+                context.update_data(game_started_at=None)
+                return self._handle_loading_like(
+                    context, note="游戏仍在加载/协议页，暂不计时"
+                )
             started = context.get("game_started_at")
             if started is None:
                 context.update_data(game_started_at=context.now)
@@ -303,6 +407,29 @@ class GameTaskAdapter(PlannedTaskAdapter):
                 )
         return super().advance(context)
 
+    def _handle_loading_like(
+        self, context: TaskContext, *, note: str = "等待游戏加载/协议页"
+    ) -> StepResult:
+        """处理登录/协议/加载页（即使被误判成 GAME_RUNNING 也走这里）。"""
+        if self._has_text(context, self._agreement_text):
+            clicks = int(context.get("game_agreement_clicks", 0))
+            if clicks < len(self._agreement_actions):
+                context.update_data(game_agreement_clicks=clicks + 1)
+                return self._execute(self._agreement_actions[clicks], context)
+        if self._has_text(context, self._login_game_text):
+            return self._execute(Action.tap_feature(self._login_game_key), context)
+        if self._has_text(context, DEFAULT_FEATURE_KEYS.game_ocr_enter_alt):
+            return self._execute(Action.tap_feature(self._enter_game_alt_key), context)
+        if self._has_text(context, DEFAULT_FEATURE_KEYS.game_ocr_enter):
+            return self._execute(Action.tap_feature(self._enter_game_key), context)
+        if (
+            self._has_text(context, self._agree_text)
+            and not context.get("game_agree_clicked")
+        ):
+            context.update_data(game_agree_clicked=True)
+            return self._execute(Action.tap_feature(self._agree_key), context)
+        return StepResult(note, actions=(), progress=False)
+
     def _tap_feature_or_point(
         self,
         context: TaskContext,
@@ -318,6 +445,12 @@ class GameTaskAdapter(PlannedTaskAdapter):
     @staticmethod
     def _has_text(context: TaskContext, needle: str) -> bool:
         return any(needle in text for text in context.observation.ocr_texts)
+
+    def _has_any_text(self, context: TaskContext, needles: tuple) -> bool:
+        return any(
+            any(needle in text for text in context.observation.ocr_texts)
+            for needle in needles
+        )
 
 
 def build_game_definition(
@@ -350,13 +483,23 @@ def build_game_definition(
         reward_entry_text=keys.game_ocr_reward_entry,
         go_play_text=keys.game_ocr_go_play,
         enter_game_key=feature_key(keys, keys.game_ocr_enter),
+        enter_game_alt_key=feature_key(keys, keys.game_ocr_enter_alt),
         exit_menu_key=feature_key(keys, keys.game_ocr_exit),
         close_game_key=feature_key(keys, keys.game_ocr_close_game),
         claim_key=feature_key(keys, keys.game_ocr_claim),
+        online_play_key=feature_key(keys, keys.game_ocr_online_play),
+        agree_key=feature_key(keys, keys.game_ocr_agree),
+        login_game_key=feature_key(keys, keys.game_ocr_login_game),
         agreement_text=keys.game_ocr_agreement,
         claim_text=keys.game_ocr_claim,
+        agree_text=keys.game_ocr_agree,
+        online_play_text=keys.game_ocr_online_play,
+        login_game_text=keys.game_ocr_login_game,
         carousel_action=Action.tap_point(360, 360),
+        hall_swipe_action=Action.swipe(360, 420, 360, 980, 500),
+        game_center_online_play_action=Action.tap_point(100, 982),
         agreement_action=Action.tap_point(157, 1032),
+        agreement_action_alt=Action.tap_point(152, 1066),
         entry_scroll_action=entry_scroll_action,
     )
     return TaskDefinition(

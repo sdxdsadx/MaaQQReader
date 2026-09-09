@@ -27,6 +27,7 @@ from tests.helpers import (
     ad_playing_observation,
     ad_result_observation,
     game_agreement_observation,
+    game_center_observation,
     game_close_confirm_observation,
     game_entry_observation,
     game_hall_observation,
@@ -52,6 +53,8 @@ GAME_ENTER_KEY = feature_key(KEYS, KEYS.game_ocr_enter)
 GAME_EXIT_MENU_KEY = feature_key(KEYS, KEYS.game_ocr_exit)
 GAME_CLOSE_GAME_KEY = feature_key(KEYS, KEYS.game_ocr_close_game)
 GAME_CLAIM_KEY = feature_key(KEYS, KEYS.game_ocr_claim)
+GAME_ONLINE_PLAY_KEY = feature_key(KEYS, KEYS.game_ocr_online_play)
+GAME_LOGIN_KEY = feature_key(KEYS, KEYS.game_ocr_login_game)
 POPUP_CLOSE_KEY = feature_key(KEYS, KEYS.popup_close)
 
 
@@ -73,11 +76,18 @@ def test_game_timer_starts_only_after_running_and_exits_after_duration() -> None
     contract = build_game_contract(KEYS)
 
     loading = make_context(
-        game_loading_observation(), contract=contract, clock=clock, run_state=RunState.RUNNING
+        game_loading_observation(
+            ocr_texts=("登录游戏",),
+            templates={},
+            structure={},
+        ),
+        contract=contract,
+        clock=clock,
+        run_state=RunState.RUNNING,
     )
     adapter.advance(loading)
     assert loading.get("game_started_at") is None
-    assert device.calls == [("tap_feature", GAME_ENTER_KEY)]
+    assert device.calls == [("tap_feature", GAME_LOGIN_KEY)]
 
     running = make_context(
         game_running_observation(), contract=contract, clock=clock, run_state=RunState.RUNNING
@@ -150,6 +160,7 @@ def test_game_flow_end_to_end_with_real_adapter() -> None:
                 ocr=("今日已获赠币", "玩游戏领赠币", "去玩游戏")
             ),
             "GAME_HALL": game_hall_observation(),
+            "GAME_CENTER": game_center_observation(),
             "GAME_AGREEMENT": game_agreement_observation(),
             "GAME_RUNNING": game_running_observation(),
             "GAME_MENU": game_menu_observation(),
@@ -165,6 +176,8 @@ def test_game_flow_end_to_end_with_real_adapter() -> None:
             observer.go("REWARD_HOME")
         elif name == GAME_GO_PLAY_KEY:
             observer.go("GAME_HALL")
+        elif name == GAME_ONLINE_PLAY_KEY:
+            observer.go("GAME_CENTER")
         elif name == GAME_ENTER_KEY:
             observer.go("GAME_RUNNING")
         elif name == GAME_EXIT_MENU_KEY:
@@ -175,7 +188,9 @@ def test_game_flow_end_to_end_with_real_adapter() -> None:
             observer.go("REWARD_DONE")
 
     def on_tap_point(x: int, y: int) -> None:
-        if (x, y) == (360, 360):
+        if (x, y) == (100, 982):
+            observer.go("GAME_AGREEMENT")
+        elif (x, y) == (360, 360):
             observer.go("GAME_AGREEMENT")
         elif (x, y) == (695, 302):
             observer.go("GAME_MENU")
@@ -202,8 +217,11 @@ def test_game_flow_end_to_end_with_real_adapter() -> None:
 
     assert result.outcome is TaskOutcome.SUCCESS
     assert ("tap_feature", HOME_REWARD_KEY) in device.calls
-    assert ("tap_point", 360, 360) in device.calls
+    assert ("swipe", 360, 420, 360, 980, 500) in device.calls
+    assert ("tap_feature", GAME_ONLINE_PLAY_KEY) in device.calls
+    assert ("tap_point", 100, 982) in device.calls
     assert ("tap_point", 157, 1032) in device.calls
+    assert ("tap_point", 152, 1066) in device.calls
     assert ("tap_feature", GAME_ENTER_KEY) in device.calls
     assert ("tap_point", 695, 302) in device.calls
     assert ("tap_feature", GAME_EXIT_MENU_KEY) in device.calls

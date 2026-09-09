@@ -151,17 +151,15 @@ def build_default_state_definitions(
                     _text(
                         FeatureKind.OCR,
                         keys.home_ocr_shelf,
+                        values=("书城",),
                         weight=1.0,
-                        mode=MatchMode.EQUALS,
+                        mode=MatchMode.ONE_OF,
                     ),
-                    _text(FeatureKind.OCR, keys.home_ocr_mine, weight=0.5),
                     _structure(keys.home_bottom_nav, weight=0.5),
                     weight=1.5,
                     required=True,
-                    description="主页身份：底部「我的」/ 书架 / 底部导航结构",
+                    description="主页身份：书架/书城 / 底部导航结构（不允许仅凭「我的」确认）",
                 ),
-                # 独立第二 OCR 证据：书架/我的同时出现时无需依赖模板。
-                _text(FeatureKind.OCR, keys.home_ocr_mine, weight=0.5),
                 _orientation(Orientation.PORTRAIT, weight=0.3),
             ),
             min_score=0.4,
@@ -308,7 +306,7 @@ def build_default_state_definitions(
                 _text(
                     FeatureKind.OCR,
                     keys.game_ocr_hall_marker,
-                    values=("今日必玩推荐", "新游", "活动", "排行", "分类", "在线玩"),
+                    values=("今日必玩推荐", "新游", "活动", "排行", "分类"),
                     weight=2.0,
                     required=True,
                     mode=MatchMode.ONE_OF,
@@ -322,7 +320,41 @@ def build_default_state_definitions(
             ),
             min_score=0.4,
             min_matched=2,
-            description="游戏大厅：点击轮播图进入任意游戏",
+            description="游戏大厅：下划一次后点击「在线玩」",
+        ),
+        StateDefinition(
+            state=PageState.GAME_CENTER,
+            features=(
+                game_app,
+                _ladder(
+                    _text(
+                        FeatureKind.OCR,
+                        keys.game_ocr_game_center,
+                        weight=2.0,
+                        required=True,
+                        mode=MatchMode.CONTAINS,
+                        description="游戏中心标题",
+                    ),
+                    _text(
+                        FeatureKind.OCR,
+                        keys.game_ocr_online_play,
+                        weight=1.0,
+                        mode=MatchMode.CONTAINS,
+                        description="在线玩入口",
+                    ),
+                    weight=2.0,
+                    required=True,
+                    description="游戏中心：游戏中心标题 / 在线玩",
+                ),
+                _orientation(
+                    Orientation.PORTRAIT,
+                    values=any_orientation,
+                    weight=0.3,
+                ),
+            ),
+            min_score=0.4,
+            min_matched=2,
+            description="游戏中心：点击游戏卡片的「在线玩」进入游戏",
         ),
         StateDefinition(
             state=PageState.GAME_LOADING,
@@ -332,7 +364,11 @@ def build_default_state_definitions(
                     _text(
                         FeatureKind.OCR,
                         keys.game_ocr_select_server,
-                        values=(keys.game_ocr_enter, keys.game_ocr_enter_alt),
+                        values=(
+                            keys.game_ocr_enter,
+                            keys.game_ocr_enter_alt,
+                            keys.game_ocr_login_game,
+                        ),
                         weight=1.5,
                         mode=MatchMode.ONE_OF,
                         description="游戏登录/选服页文案",
@@ -365,13 +401,16 @@ def build_default_state_definitions(
             state=PageState.GAME_RUNNING,
             features=(
                 game_app,
-                _ladder(
-                    _structure(keys.game_hud, weight=1.5),
-                    _text(FeatureKind.OCR, keys.game_ocr_active, weight=1.0),
-                    weight=1.5,
+                # 「领币」悬浮窗是运行态的核心证据（QQR-18/20）。
+                _text(
+                    FeatureKind.OCR,
+                    keys.game_ocr_active,
+                    weight=2.0,
                     required=True,
-                    description="游戏运行身份：游戏内 HUD / 领币悬浮",
+                    mode=MatchMode.CONTAINS,
+                    description="游戏运行身份：右侧「领币」悬浮窗",
                 ),
+                _structure(keys.game_hud, weight=0.5),
                 _orientation(
                     Orientation.LANDSCAPE,
                     values=any_orientation,
@@ -380,7 +419,7 @@ def build_default_state_definitions(
             ),
             min_score=0.4,
             min_matched=2,
-            description="游戏运行中：HUD / 领币悬浮（横竖屏均兼容）",
+            description="游戏运行中：领币悬浮 / HUD（横竖屏均兼容）",
         ),
         StateDefinition(
             state=PageState.GAME_MENU,

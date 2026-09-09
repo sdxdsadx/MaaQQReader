@@ -74,13 +74,23 @@ class FeatureKeys:
     game_ocr_hall: str = "游戏大厅"
     #: 游戏大厅真实文案（旧 pipeline GameHallRetry）；「游戏大厅」标题不一定出现。
     game_ocr_hall_marker: str = "精选大作"
+    #: 游戏大厅「在线玩」入口（QQR-20：下划一次后识别并点击）。
+    game_ocr_online_play: str = "在线玩"
     game_loading_marker: str = "game.loading_marker"  # 结构特征：游戏登录页
     game_login_button: str = "game.login_button"      # 局部模板：登录按钮
     game_ocr_select_server: str = "点击选服"
     game_ocr_enter: str = "进入游戏"
     game_ocr_enter_alt: str = "踏入仙途"
+    #: 部分小游戏登录页按钮文案（QQR-20 实测）。
+    game_ocr_login_game: str = "登录游戏"
+    #: 游戏中心页标题/标识。
+    game_ocr_game_center: str = "游戏中心"
     #: 游戏协议勾选框文案；点击其左侧坐标切换同意。
     game_ocr_agreement: str = "我已详细阅读并同意"
+    #: 游戏隐私/协议弹窗的「同意」按钮（进入部分小游戏时会弹出）。
+    game_ocr_agree: str = "同意"
+    #: 游戏隐私/协议弹窗的「拒绝」按钮（仅用于识别，不点击）。
+    game_ocr_reject: str = "拒绝"
     game_hud: str = "game.hud"                       # 结构特征：游戏内 HUD
     game_ocr_active: str = "领币"
     game_exit_menu: str = "game.exit_menu"           # 固定图标：悬浮菜单
