@@ -206,7 +206,7 @@ def test_screenshot_evidence_alone_does_not_make_task_success(tmp_path: Path) ->
         make_definition(contract, observer, FakeAdapter()),
         FakeClock(),
         recorder=recorder,
-        config=RunnerConfig(max_steps=5),
+        config=RunnerConfig(max_steps=5, poll_seconds=0.0),
     ).run()
 
     assert result.outcome is TaskOutcome.FAILED

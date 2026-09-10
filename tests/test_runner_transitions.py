@@ -160,7 +160,9 @@ def test_progress_stall_triggers_recovery_and_only_fails_after_exhaustion() -> N
     )
 
     result = TaskRunner(
-        definition, FakeClock(), config=RunnerConfig(recovery_pause_seconds=0.0)
+        definition,
+        FakeClock(),
+        config=RunnerConfig(recovery_pause_seconds=0.0, poll_seconds=0.0),
     ).run()
 
     # 卡死不会立即判失败：先走完整条恢复阶梯，阶梯耗尽且独立超时后才 FAILED。
@@ -199,7 +201,9 @@ def test_page_state_change_resets_recovery_ladder() -> None:
         contract, observer, adapter, recovery=EscalationPolicy(max_rounds=1)
     )
     result = TaskRunner(
-        definition, FakeClock(), config=RunnerConfig(recovery_pause_seconds=0.0)
+        definition,
+        FakeClock(),
+        config=RunnerConfig(recovery_pause_seconds=0.0, poll_seconds=0.0),
     ).run()
 
     assert result.outcome is TaskOutcome.TIMEOUT

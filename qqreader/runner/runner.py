@@ -57,6 +57,11 @@ class RunnerConfig:
     recovery_pause_seconds: float = 0.25
     #: 页面无法确认时每轮确认后的等待，避免在 UNKNOWN 上空转（也绝不允许盲点）。
     unknown_pause_seconds: float = 0.5
+    #: 主循环基础轮询间隔（QQR-35）：无动作/重观察轮次每轮至少等待该间隔，
+    #: 避免截图+OCR 每秒空转轰炸模拟器。
+    poll_seconds: float = 10.0
+    #: 实际触控动作（点击/滑动/返回）后的反馈观察间隔。
+    action_feedback_seconds: float = 2.0
     #: 确认到弹窗遮挡时最多定向关闭几次；之后交给恢复阶梯继续升级。
     max_popup_dismissals: int = 1
     #: 页面确认阶梯开关（QQR-5 / §3.6）：识别失败先确认，再决定是否恢复。
@@ -73,6 +78,10 @@ class RunnerConfig:
             raise ValueError("recovery_pause_seconds 必须 >= 0")
         if self.unknown_pause_seconds < 0:
             raise ValueError("unknown_pause_seconds 必须 >= 0")
+        if self.poll_seconds < 0:
+            raise ValueError("poll_seconds 必须 >= 0")
+        if self.action_feedback_seconds < 0:
+            raise ValueError("action_feedback_seconds 必须 >= 0")
         if self.max_popup_dismissals < 1:
             raise ValueError("max_popup_dismissals 必须 >= 1")
 
@@ -440,6 +449,15 @@ class TaskRunner:
                 actions=list(step.actions),
                 progress=step.progress,
             )
+
+            # 7) 节奏控制（QQR-35）：触控动作后用短间隔快速观察反馈；
+            #    WAIT 自带等待时长不额外节流；其余无动作轮次按基础轮询间隔
+            #    节流，避免每秒一次的截图+OCR 空转。
+            actions = [str(a) for a in step.actions]
+            if any(a.startswith(("TAP", "PRESS_BACK", "SWIPE")) for a in actions):
+                self._clock.sleep(self._config.action_feedback_seconds, self._token)
+            elif not any(a.startswith("WAIT") for a in actions):
+                self._clock.sleep(self._config.poll_seconds, self._token)
 
     # ------------------------------------------------------------ 验证码处理
 
