@@ -103,3 +103,65 @@ def test_game_entry_after_exit_claims_instead_of_reentering() -> None:
     claim_key = feature_key(KEYS, KEYS.game_ocr_claim)
     assert step.actions == (f"{ActionKind.TAP_FEATURE.value}:{claim_key}",)
     assert ("tap_feature", claim_key) in device.calls
+
+
+def _exit_done_adapter() -> tuple[GameTaskAdapter, SimulatedDevice]:
+    device = SimulatedDevice()
+    adapter = GameTaskAdapter(
+        game_duration_seconds=60.0,
+        exit_action=Action.tap_point(695, 302),
+        device=device,
+        plan=build_game_action_plan(KEYS),
+        expected_package=KEYS.qq_reader_package,
+        popup_feature=feature_key(KEYS, KEYS.popup_close),
+    )
+    return adapter, device
+
+
+def test_claim_scrolls_when_button_below_fold() -> None:
+    """QQR-36：退出后「立即领取」在视口外时先滚动查找，找到即领取。"""
+    adapter, device = _exit_done_adapter()
+    # 奖励页但当前视口没有「立即领取」。
+    observation = PageObservation(
+        current_app=QQ,
+        orientation=Orientation.PORTRAIT,
+        ocr_texts=("今日已获赠币", "去玩游戏", "获奖记录"),
+    )
+    context = make_context(observation, run_state=RunState.RUNNING)
+    context.update_data(game_exit_done=True)
+
+    step = adapter.advance(context)
+
+    # 第一轮：按钮不在屏幕内 → 执行滚动动作。
+    assert step.actions == (f"{ActionKind.SWIPE.value}",)
+    assert ("swipe", 360, 980, 360, 420, 500) in device.calls
+
+    # 下一轮：滚动后按钮出现在屏幕内 → 点击领取，并清零滚动计数。
+    found = PageObservation(
+        current_app=QQ,
+        orientation=Orientation.PORTRAIT,
+        ocr_texts=("今日已获赠币", "去玩游戏", "立即领取"),
+    )
+    found_ctx = make_context(found, run_state=RunState.RUNNING)
+    found_ctx.update_data(game_exit_done=True, claim_scrolls=2)
+    claim_key = feature_key(KEYS, KEYS.game_ocr_claim)
+    step2 = adapter.advance(found_ctx)
+    assert step2.actions == (f"{ActionKind.TAP_FEATURE.value}:{claim_key}",)
+
+
+def test_claim_scroll_budget_exhausted_returns_to_waiting() -> None:
+    """QQR-36：滚动次数用尽（如今日已领）后回到等待语义，不死循环。"""
+    adapter, _ = _exit_done_adapter()
+    observation = PageObservation(
+        current_app=QQ,
+        orientation=Orientation.PORTRAIT,
+        ocr_texts=("今日已获赠币", "去玩游戏", "获奖记录"),
+    )
+    context = make_context(observation, run_state=RunState.RUNNING)
+    context.update_data(game_exit_done=True, claim_scrolls=3)
+
+    step = adapter.advance(context)
+
+    assert step.actions == ()
+    assert step.progress is False
+    assert "暂未出现可领取按钮" in step.description

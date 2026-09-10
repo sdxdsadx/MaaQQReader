@@ -216,6 +216,7 @@ class GameTaskAdapter(PlannedTaskAdapter):
         reward_game_button_action: Optional[Action] = None,
         entry_scroll_action: Optional[Action] = None,
         max_entry_scrolls: int = 4,
+        max_claim_scrolls: int = 3,
     ) -> None:
         super().__init__(
             device=device,
@@ -284,9 +285,25 @@ class GameTaskAdapter(PlannedTaskAdapter):
             entry_scroll_action or Action.swipe(360, 980, 360, 420, 500)
         )
         self._max_entry_scrolls = max_entry_scrolls
+        # QQR-36：退出游戏后「立即领取」可能在屏幕下方（视口外），
+        # 与进游戏入口一样需要滚动查找兜底，不能只盯当前屏幕死等。
+        self._claim_scroll_action = self._entry_scroll_action
+        self._max_claim_scrolls = max_claim_scrolls
 
     def advance(self, context: TaskContext) -> StepResult:
         state = context.decision.state if context.decision is not None else None
+
+        def _claim_or_scroll(ctx: TaskContext, missing_hint: str) -> StepResult:
+            """QQR-36：退出游戏后找「立即领取」——屏幕内直接点，视口外滚动查找，
+            滚动次数用尽后（可能今日已领/按钮不存在）才回到等待语义。"""
+            if self._has_text(ctx, self._claim_text):
+                ctx.update_data(claim_scrolls=0)
+                return self._execute(Action.tap_feature(self._claim_key), ctx)
+            attempts = int(ctx.get("claim_scrolls", 0))
+            if attempts < self._max_claim_scrolls:
+                ctx.update_data(claim_scrolls=attempts + 1)
+                return self._execute(self._claim_scroll_action, ctx)
+            return StepResult(missing_hint, actions=(), progress=False)
 
         # QQR-18/20：退出流程一旦启动，后续只允许「退出/关闭/返回奖励页」，
         # 绝不能再被游戏大厅/游戏中心/登录页/运行页重新拉进游戏。
@@ -296,12 +313,8 @@ class GameTaskAdapter(PlannedTaskAdapter):
             if state is PageState.GAME_EXIT_CONFIRM:
                 return self._execute(Action.tap_feature(self._close_game_key), context)
             if state in (PageState.REWARD_HOME, PageState.GAME_ENTRY):
-                if self._has_text(context, self._claim_text):
-                    return self._execute(Action.tap_feature(self._claim_key), context)
-                return StepResult(
-                    "游戏已退出，奖励页暂未出现可领取按钮",
-                    actions=(),
-                    progress=False,
+                return _claim_or_scroll(
+                    context, "游戏已退出，奖励页暂未出现可领取按钮"
                 )
             if state in (
                 PageState.GAME_HALL,
@@ -356,14 +369,8 @@ class GameTaskAdapter(PlannedTaskAdapter):
         # QQR-18：游戏退出后回到奖励页，则尝试领取游戏赠币。
         if state is PageState.REWARD_HOME:
             if context.get("game_exit_done"):
-                if self._has_text(context, self._claim_text):
-                    return self._execute(
-                        Action.tap_feature(self._claim_key), context
-                    )
-                return StepResult(
-                    "游戏已退出，奖励页暂未出现可领取按钮",
-                    actions=(),
-                    progress=False,
+                return _claim_or_scroll(
+                    context, "游戏已退出，奖励页暂未出现可领取按钮"
                 )
             if self._has_text(context, self._go_play_text):
                 context.update_data(game_entry_scrolls=0)
@@ -384,14 +391,8 @@ class GameTaskAdapter(PlannedTaskAdapter):
             # 奖励页游戏卡也可能被识别成 GAME_ENTRY；游戏退出后这里必须
             # 走「领取赠币」而不是再次进入游戏。
             if context.get("game_exit_done"):
-                if self._has_text(context, self._claim_text):
-                    return self._execute(
-                        Action.tap_feature(self._claim_key), context
-                    )
-                return StepResult(
-                    "游戏已退出，奖励页暂未出现可领取按钮",
-                    actions=(),
-                    progress=False,
+                return _claim_or_scroll(
+                    context, "游戏已退出，奖励页暂未出现可领取按钮"
                 )
             return self._tap_feature_or_point(
                 context, self._go_play_key, self._reward_game_button_action
