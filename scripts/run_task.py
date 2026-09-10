@@ -23,6 +23,7 @@ for _stream in (sys.stdout, sys.stderr):
         reconfigure(encoding="utf-8", errors="replace")
 
 from qqreader.config import load_config
+from qqreader.errors import ContractViolation
 from qqreader.maa.catalog import FeatureCatalog
 from qqreader.maa.device import MaaDeviceController
 from qqreader.maa.factory import build_maa_client
@@ -33,6 +34,7 @@ from qqreader.page.profiles import build_default_state_definitions
 from qqreader.page.recognizer import PageStateRecognizer
 from qqreader.recovery.policy import EscalationPolicy
 from qqreader.runner.recording import FileRunRecorder, RecordingConfig
+from qqreader.runner.retry import BackoffPolicy, RetryExhaustedError, run_with_retry
 from qqreader.runner.runner import RunnerConfig, TaskRunner
 from qqreader.runtime.clock import RealClock
 from qqreader.tasks.ad import AD_TASK_NAME, build_ad_definition
@@ -192,6 +194,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--minutes", type=float, default=None)
     parser.add_argument("--timeout-minutes", type=float, default=30.0)
     parser.add_argument("--max-steps", type=int, default=2000)
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=3,
+        help="可重试瞬断错误的最大重试次数",
+    )
     parser.add_argument("--quiet", action="store_true")
     return parser
 
@@ -239,10 +247,11 @@ def _run_system_task(
     return 0
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
-    args = _build_parser().parse_args(argv)
-    config = load_config(args.config)
+def _retry_log(message: str) -> None:
+    print(f"[retry] {message}", flush=True)
 
+
+def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
     if args.task in LEGACY_NOT_IMPLEMENTED:
         minutes = args.minutes if args.minutes is not None else args.duration_minutes
         return _run_legacy_task(args.task, config, minutes)
@@ -261,7 +270,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 2
     client = build_maa_client(config)
     try:
-        client.connect()
+        # 连接阶段可能遇到 adb 断连等瞬断：按退避策略重试，致命错误直接上抛。
+        run_with_retry(client.connect, policy, log=_retry_log)
         keys, observer, device, recognizer = _build_runtime(
             client, verbose=not args.quiet
         )
@@ -306,12 +316,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             f"duration={game_duration if game_duration is not None else '-'}min",
             flush=True,
         )
-        result = TaskRunner(
-            definition,
-            RealClock(),
-            config=RunnerConfig(max_steps=args.max_steps),
-            recorder=recorder,
-        ).run()
+        # 任务主循环可能因瞬断中断：整体退避重试，每次重试重建 runner。
+        result = run_with_retry(
+            lambda: TaskRunner(
+                definition,
+                RealClock(),
+                config=RunnerConfig(max_steps=args.max_steps),
+                recorder=recorder,
+            ).run(),
+            policy,
+            log=_retry_log,
+        )
         print("[result] " + result.summary(), flush=True)
         print("[outcome] " + result.outcome.value, flush=True)
         print("[reason] " + result.reason, flush=True)
@@ -322,6 +337,39 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0 if result.succeeded else 2
     finally:
         client.close()
+
+
+# 退出码语义：0=成功；2=瞬断重试耗尽；3=致命错误/未预期异常。
+# （2 同时保留 run_task 原有的「任务未成功 / 参数配置错误」失败路径。）
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    args = _build_parser().parse_args(argv)
+    try:
+        policy = BackoffPolicy(max_retries=args.max_retries)
+        # 配置缺失等致命错误由 is_retryable 判定为不可重试，直接上抛。
+        config = run_with_retry(
+            lambda: load_config(args.config), policy, log=_retry_log
+        )
+        return _main(args, policy, config)
+    except RetryExhaustedError as exc:
+        print("[outcome] retry_exhausted", flush=True)
+        print(
+            f"[reason] 可重试瞬断错误退避重试耗尽：共尝试 {exc.attempts} 次仍失败",
+            flush=True,
+        )
+        print(f"[error] {type(exc.last_error).__name__}: {exc.last_error}", flush=True)
+        return 2
+    except ContractViolation as exc:
+        print("[outcome] fatal_contract_violation", flush=True)
+        print(f"[reason] 违反运行契约，任务终止: {exc}", flush=True)
+        return 3
+    except FileNotFoundError as exc:
+        print("[outcome] fatal_config_missing", flush=True)
+        print(f"[reason] 配置文件缺失或路径不可达: {exc}", flush=True)
+        return 3
+    except Exception as exc:
+        print("[outcome] unexpected_failure", flush=True)
+        print(f"[reason] 未预期异常，任务终止: {type(exc).__name__}: {exc}", flush=True)
+        return 3
 
 
 if __name__ == "__main__":  # pragma: no cover
