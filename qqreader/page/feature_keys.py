@@ -51,6 +51,7 @@ class FeatureKeys:
     ad_video_surface: str = "ad.video_surface"       # 结构特征：视频播放区域
     ad_skip: str = "ad.skip"                         # 固定图标：跳过/关闭按钮
     ad_ocr_countdown: str = "广告"
+    ad_ocr_live: str = "进入直播间|上滑浏览获取奖励|需要下滑浏览更多才能领取奖励"
     ad_ocr_skip: str = "跳过"
     ad_ocr_close: str = "关闭"
     ad_ocr_continue: str = "继续观看"

@@ -33,9 +33,11 @@ class MaaFeatureLocator:
         self._catalog = catalog
         self._observer = observer
         self._cache: Dict[str, Optional[Box]] = {}
+        self._cache_screenshot: Optional[Screenshot] = None
 
     def invalidate(self) -> None:
         self._cache.clear()
+        self._cache_screenshot = None
 
     def screenshot(self) -> Screenshot:
         if self._observer is not None:
@@ -45,12 +47,17 @@ class MaaFeatureLocator:
         return self._client.screencap()
 
     def locate(self, key: str) -> Optional[Box]:
+        shot = self.screenshot()
+        # A hit (or miss) belongs to one observed frame, never to the task.
+        if shot is not self._cache_screenshot:
+            self._cache.clear()
+            self._cache_screenshot = shot
         if key in self._cache:
             return self._cache[key]
         asset = self._catalog.get(key)
         if asset is None:
             return None
-        box = self._locate_asset(asset)
+        box = self._locate_asset(asset, shot)
         self._cache[key] = box
         return box
 
@@ -61,8 +68,7 @@ class MaaFeatureLocator:
         x, y, w, h = box
         return x + w // 2, y + h // 2
 
-    def _locate_asset(self, asset: FeatureAsset) -> Optional[Box]:
-        shot = self.screenshot()
+    def _locate_asset(self, asset: FeatureAsset, shot: Screenshot) -> Optional[Box]:
         if asset.kind is FeatureKind.OCR:
             if not asset.text:
                 return None

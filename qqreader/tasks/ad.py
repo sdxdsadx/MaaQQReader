@@ -33,7 +33,7 @@ from .common import (
     popup_recoverable,
     wrong_page_recoverable,
 )
-from .plan import Action, PlannedTaskAdapter, StateActionPlan
+from .plan import Action, ActionKind, PlannedTaskAdapter, StateActionPlan
 
 AD_TASK_NAME = "DailyAdFlow"
 DEFAULT_AD_TIMEOUT_SECONDS = 45 * 60
@@ -49,16 +49,17 @@ def build_ad_contract(
     return TaskContract(
         name=AD_TASK_NAME,
         description="奖励页视频广告：主页 → 奖励页 → 逐轮观看 → 12/12 或明日再来",
-        start_condition=state_in(PageState.HOME, PageState.REWARD_HOME),
+        start_condition=state_in(PageState.HOME, PageState.REWARD_HOME, PageState.GAME_ENTRY),
         ready_condition=all_of(
-            StateIs(PageState.REWARD_HOME),
+            state_in(PageState.REWARD_HOME, PageState.GAME_ENTRY),
             any_of(
                 feature(ocr(keys.reward_ocr_watch)),
                 feature(ocr(keys.reward_ocr_ad_banner)),
             ),
         ),
         progress_condition=state_in(
-            PageState.AD_PLAYING, PageState.AD_RESULT, PageState.REWARD_HOME
+            PageState.AD_PLAYING, PageState.AD_RESULT, PageState.REWARD_HOME,
+            PageState.GAME_ENTRY,
         ),
         captcha_condition=captcha_condition(keys),
         success_condition=any_of(
@@ -230,7 +231,18 @@ class AdTaskAdapter(PlannedTaskAdapter):
 
     def advance(self, context: TaskContext) -> StepResult:
         state = context.decision.state if context.decision is not None else None
-        if state is PageState.REWARD_HOME:
+        settle = float(context.get("ad_exit_settle_until", 0)) - context.now
+        if settle > 0:
+            # Close is asynchronous: a fresh screenshot can still contain the
+            # outgoing ad. Never queue Back while that close is in flight.
+            return self._execute(Action.wait(settle), context)
+        # GAME_ENTRY is the same reward page when its game row is visible.
+        if state in (PageState.REWARD_HOME, PageState.GAME_ENTRY):
+            context.update_data(
+                ad_initial_wait_done=False, ad_play_waits=0,
+                ad_scroll_phase="wait", ad_scroll_swipes=0,
+                ad_live_exit_pending=False,
+            )
             has_banner = self._has_text(context, self._banner_text)
             # 必须先确认当前屏有广告卡，才允许点「立即观看」；否则只滚动，
             # 避免把其他页面残留的 OCR 文案当成广告按钮误点。
@@ -244,21 +256,18 @@ class AdTaskAdapter(PlannedTaskAdapter):
                         context, self._watch_alt_key, self._watch_point_action
                     )
                 if self._has_text(context, self._watch_partial_text):
-                    return self._tap_feature_or_point(
-                        context,
-                        self._watch_partial_key,
-                        self._watch_point_action,
-                    )
+                    # The floating lottery covers the watch button. A lone
+                    # 「立」also matches「立即分享」; move the card and reobserve.
+                    return self._execute(self._scroll_action, context)
             attempts = int(context.get("ad_entry_scrolls", 0))
             if attempts < self._max_scrolls:
                 context.update_data(ad_entry_scrolls=attempts + 1)
                 return self._execute(self._scroll_action, context)
         elif state is PageState.AD_PLAYING:
-            if any(
+            is_live = any(
                 self._has_text(context, item) for item in self._live_texts
-            ):
-                return self._handle_live_ad(context)
-            if not context.get("ad_initial_wait_done"):
+            )
+            if not is_live and not context.get("ad_initial_wait_done"):
                 context.update_data(ad_initial_wait_done=True)
                 return self._execute(
                     Action.wait(self._initial_wait_seconds), context
@@ -278,6 +287,11 @@ class AdTaskAdapter(PlannedTaskAdapter):
                     Action.tap_feature(self._accelerate_key), context
                 )
             if self._has_text(context, self._continue_text):
+                if is_live:
+                    context.update_data(
+                        ad_scroll_phase="wait", ad_scroll_swipes=0,
+                        ad_live_exit_pending=False,
+                    )
                 return self._execute(
                     Action.tap_feature(self._continue_key), context
                 )
@@ -285,6 +299,10 @@ class AdTaskAdapter(PlannedTaskAdapter):
                 return self._execute(
                     Action.tap_feature(self._force_exit_key), context
                 )
+            # Modal buttons remain actionable even when the live ad is visible
+            # behind the overlay. Reobserve after each action before scrolling.
+            if is_live:
+                return self._handle_live_ad(context)
             if any(self._has_text(context, item) for item in self._offer_texts):
                 return self._execute(self._offer_close_action, context)
             if self._has_text(context, self._skip_text):
@@ -306,12 +324,27 @@ class AdTaskAdapter(PlannedTaskAdapter):
                 return self._execute(Action.tap_feature(self._close_key), context)
         return super().advance(context)
 
+    def _execute(self, action: Action, context: TaskContext) -> StepResult:
+        step = super()._execute(action, context)
+        if step.progress and context.state in (PageState.AD_PLAYING, PageState.AD_RESULT):
+            is_exit = action.kind in (ActionKind.PRESS_BACK, ActionKind.TAP_POINT)
+            is_exit = is_exit or (
+                action.kind is ActionKind.TAP_FEATURE
+                and action.target in (self._close_key, self._claim_exit_key,
+                                      self._force_exit_key, self._skip_key)
+            )
+            if is_exit:
+                context.update_data(ad_exit_settle_until=context.now + 3.0)
+        return step
+
     def _handle_live_ad(self, context: TaskContext) -> StepResult:
         """直播间/浏览类广告：每 5 秒下滑一次，达到最大次数后退出。"""
         phase = context.get("ad_scroll_phase", "wait")
         swipes = int(context.get("ad_scroll_swipes", 0))
         if swipes >= self._max_live_scroll_swipes:
-            context.update_data(ad_scroll_phase="wait", ad_scroll_swipes=0)
+            if context.get("ad_live_exit_pending"):
+                return self._execute(Action.press_back(), context)
+            context.update_data(ad_live_exit_pending=True)
             return self._execute(self._live_exit_action, context)
         if phase == "wait":
             context.update_data(ad_scroll_phase="swipe")
@@ -336,8 +369,8 @@ class AdTaskAdapter(PlannedTaskAdapter):
         fallback: Action,
     ) -> StepResult:
         step = self._execute(Action.tap_feature(feature_key), context)
-        if not step.progress:
-            return self._execute(fallback, context)
+        # OCR text alone cannot validate a fixed screen coordinate after scroll.
+        # A localization miss must not turn into an unrelated click.
         return step
 
     @staticmethod

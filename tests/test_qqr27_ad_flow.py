@@ -55,7 +55,7 @@ def test_reward_watch_uses_ocr_feature() -> None:
     assert ("tap_feature", WATCH_KEY) in device.calls
 
 
-def test_partial_watch_uses_partial_feature_then_point() -> None:
+def test_partial_watch_moves_obscured_card_before_reobserving() -> None:
     device = SimulatedDevice(tap_results={WATCH_PARTIAL_KEY: False})
     adapter = _adapter(device)
     context = make_context(
@@ -63,9 +63,9 @@ def test_partial_watch_uses_partial_feature_then_point() -> None:
         run_state=RunState.RUNNING,
     )
     step = adapter.advance(context)
-    assert ("tap_feature", WATCH_PARTIAL_KEY) in device.calls
-    assert step.actions == ("TAP_POINT",)
-    assert ("tap_point", 600, 1078) in device.calls
+    assert ("tap_feature", WATCH_PARTIAL_KEY) not in device.calls
+    assert step.actions == ("SWIPE",)
+    assert ("tap_point", 600, 1078) not in device.calls
 
 
 def test_ad_play_waits_40_seconds_before_handling_buttons() -> None:

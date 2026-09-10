@@ -208,6 +208,14 @@ def build_default_state_definitions(
                     ),
                     _icon(keys.ad_skip, weight=1.0),
                     _structure(keys.ad_video_surface, weight=1.0),
+                    _text(FeatureKind.OCR, keys.ad_ocr_live, mode=MatchMode.REGEX),
+                    _text(FeatureKind.OCR, keys.ad_ocr_accelerate, mode=MatchMode.REGEX),
+                    _text(FeatureKind.OCR, keys.ad_ocr_completed, mode=MatchMode.REGEX),
+                    _text(
+                        FeatureKind.OCR, keys.ad_ocr_continue,
+                        values=(keys.ad_ocr_claim_after_exit, keys.ad_ocr_force_exit),
+                        mode=MatchMode.ONE_OF,
+                    ),
                     weight=1.5,
                     required=True,
                     description="广告播放身份：倒计时/跳过/关闭文案 / 跳过图标 / 视频区域",
@@ -320,7 +328,8 @@ def build_default_state_definitions(
                 _text(
                     FeatureKind.OCR,
                     keys.game_ocr_hall_marker,
-                    values=("今日必玩推荐", "新游", "活动", "排行", "分类"),
+                    # 「活动」alone also occurs in live ad creative copy.
+                    values=("今日必玩推荐", "新游", "排行", "分类"),
                     weight=2.0,
                     required=True,
                     mode=MatchMode.ONE_OF,
