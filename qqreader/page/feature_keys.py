@@ -60,6 +60,10 @@ class FeatureKeys:
     #: 广告详情/浏览页文案；出现时点左上角 X 关闭，不进入详情。
     ad_ocr_offer: str = "了解详情"
     ad_ocr_offer_alt: str = "跳转详情页或第三方应用"
+    #: 广告播放中要求点击「我要加速」才能继续观看。
+    ad_ocr_accelerate: str = "我要加速|去加速|点击加速|加速观看"
+    #: 广告完成弹窗文案；旧 pipeline 会点左上角关闭。
+    ad_ocr_completed: str = "恭喜获得奖励|恭喜完成任务"
     ad_result_close: str = "ad.result_close"         # 固定图标：结果页关闭
     ad_ocr_issued: str = "奖品已发放"
     ad_ocr_coupon: str = "恭喜获得优惠券"

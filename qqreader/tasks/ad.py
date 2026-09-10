@@ -138,6 +138,12 @@ class AdTaskAdapter(PlannedTaskAdapter):
         force_exit_key: str = feature_key(
             DEFAULT_FEATURE_KEYS, DEFAULT_FEATURE_KEYS.ad_ocr_force_exit
         ),
+        accelerate_key: str = feature_key(
+            DEFAULT_FEATURE_KEYS, DEFAULT_FEATURE_KEYS.ad_ocr_accelerate
+        ),
+        completed_key: str = feature_key(
+            DEFAULT_FEATURE_KEYS, DEFAULT_FEATURE_KEYS.ad_ocr_completed
+        ),
         watch_text: str = DEFAULT_FEATURE_KEYS.reward_ocr_watch,
         watch_alt_text: str = DEFAULT_FEATURE_KEYS.reward_ocr_watch_alt,
         banner_text: str = DEFAULT_FEATURE_KEYS.reward_ocr_ad_banner,
@@ -146,6 +152,8 @@ class AdTaskAdapter(PlannedTaskAdapter):
         close_text: str = DEFAULT_FEATURE_KEYS.ad_ocr_close,
         claim_exit_text: str = DEFAULT_FEATURE_KEYS.ad_ocr_claim_after_exit,
         force_exit_text: str = DEFAULT_FEATURE_KEYS.ad_ocr_force_exit,
+        accelerate_text: str = DEFAULT_FEATURE_KEYS.ad_ocr_accelerate,
+        completed_text: str = DEFAULT_FEATURE_KEYS.ad_ocr_completed,
         watch_partial_text: str = "立",
         watch_point_action: Optional[Action] = None,
         offer_texts: tuple = (
@@ -153,6 +161,7 @@ class AdTaskAdapter(PlannedTaskAdapter):
             DEFAULT_FEATURE_KEYS.ad_ocr_offer_alt,
         ),
         offer_close_action: Optional[Action] = None,
+        completed_close_action: Optional[Action] = None,
         initial_wait_seconds: float = 40.0,
         scroll_action: Optional[Action] = None,
         max_scrolls: int = 24,
@@ -172,6 +181,8 @@ class AdTaskAdapter(PlannedTaskAdapter):
         self._close_key = close_key
         self._claim_exit_key = claim_exit_key
         self._force_exit_key = force_exit_key
+        self._accelerate_key = accelerate_key
+        self._completed_key = completed_key
         self._watch_text = watch_text
         self._watch_alt_text = watch_alt_text
         self._banner_text = banner_text
@@ -180,12 +191,21 @@ class AdTaskAdapter(PlannedTaskAdapter):
         self._close_text = close_text
         self._claim_exit_text = claim_exit_text
         self._force_exit_text = force_exit_text
+        self._accelerate_texts = tuple(
+            part for part in accelerate_text.split("|") if part
+        )
+        self._completed_texts = tuple(
+            part for part in completed_text.split("|") if part
+        )
         self._watch_partial_text = watch_partial_text
         self._watch_point_action = watch_point_action or Action.tap_point(
             600, 1078
         )
         self._offer_texts = tuple(offer_texts)
         self._offer_close_action = offer_close_action or Action.press_back()
+        self._completed_close_action = completed_close_action or Action.tap_point(
+            48, 70
+        )
         self._initial_wait_seconds = float(initial_wait_seconds)
         self._scroll_action = scroll_action or Action.swipe(
             360, 1000, 360, 350, 500
@@ -226,6 +246,16 @@ class AdTaskAdapter(PlannedTaskAdapter):
             if self._has_text(context, self._claim_exit_text):
                 return self._execute(
                     Action.tap_feature(self._claim_exit_key), context
+                )
+            if any(
+                self._has_text(context, item) for item in self._completed_texts
+            ):
+                return self._execute(self._completed_close_action, context)
+            if any(
+                self._has_text(context, item) for item in self._accelerate_texts
+            ):
+                return self._execute(
+                    Action.tap_feature(self._accelerate_key), context
                 )
             if self._has_text(context, self._continue_text):
                 return self._execute(
@@ -299,6 +329,8 @@ def build_ad_definition(
         close_key=feature_key(keys, keys.ad_ocr_close),
         claim_exit_key=feature_key(keys, keys.ad_ocr_claim_after_exit),
         force_exit_key=feature_key(keys, keys.ad_ocr_force_exit),
+        accelerate_key=feature_key(keys, keys.ad_ocr_accelerate),
+        completed_key=feature_key(keys, keys.ad_ocr_completed),
         watch_text=keys.reward_ocr_watch,
         watch_alt_text=keys.reward_ocr_watch_alt,
         banner_text=keys.reward_ocr_ad_banner,
@@ -307,6 +339,8 @@ def build_ad_definition(
         close_text=keys.ad_ocr_close,
         claim_exit_text=keys.ad_ocr_claim_after_exit,
         force_exit_text=keys.ad_ocr_force_exit,
+        accelerate_text=keys.ad_ocr_accelerate,
+        completed_text=keys.ad_ocr_completed,
     )
     if captcha_guard is None:
         captcha_guard = build_default_captcha_guard(
