@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from ..captcha.factory import build_default_captcha_guard
@@ -163,6 +164,17 @@ class AdTaskAdapter(PlannedTaskAdapter):
         offer_close_action: Optional[Action] = None,
         completed_close_action: Optional[Action] = None,
         initial_wait_seconds: float = 40.0,
+        live_texts: tuple = (
+            "进入直播间",
+            "直播中",
+            "需要下滑",
+            "上滑或点击",
+            "扭一扭或点击",
+            "下滑",
+        ),
+        live_scroll_wait_seconds: float = 5.0,
+        max_live_scroll_swipes: int = 8,
+        live_exit_action: Optional[Action] = None,
         scroll_action: Optional[Action] = None,
         max_scrolls: int = 24,
     ) -> None:
@@ -207,6 +219,10 @@ class AdTaskAdapter(PlannedTaskAdapter):
             48, 70
         )
         self._initial_wait_seconds = float(initial_wait_seconds)
+        self._live_texts = tuple(live_texts)
+        self._live_scroll_wait_seconds = float(live_scroll_wait_seconds)
+        self._max_live_scroll_swipes = int(max_live_scroll_swipes)
+        self._live_exit_action = live_exit_action or Action.tap_point(55, 118)
         self._scroll_action = scroll_action or Action.swipe(
             360, 1000, 360, 350, 500
         )
@@ -238,6 +254,10 @@ class AdTaskAdapter(PlannedTaskAdapter):
                 context.update_data(ad_entry_scrolls=attempts + 1)
                 return self._execute(self._scroll_action, context)
         elif state is PageState.AD_PLAYING:
+            if any(
+                self._has_text(context, item) for item in self._live_texts
+            ):
+                return self._handle_live_ad(context)
             if not context.get("ad_initial_wait_done"):
                 context.update_data(ad_initial_wait_done=True)
                 return self._execute(
@@ -285,6 +305,33 @@ class AdTaskAdapter(PlannedTaskAdapter):
             if self._has_text(context, self._close_text):
                 return self._execute(Action.tap_feature(self._close_key), context)
         return super().advance(context)
+
+    def _handle_live_ad(self, context: TaskContext) -> StepResult:
+        """直播间/浏览类广告：每 5 秒下滑一次，等待结束后退出。"""
+        remaining = self._remaining_seconds(context)
+        if remaining is not None and remaining <= 2:
+            return self._execute(self._live_exit_action, context)
+
+        phase = context.get("ad_scroll_phase", "wait")
+        swipes = int(context.get("ad_scroll_swipes", 0))
+        if swipes >= self._max_live_scroll_swipes:
+            context.update_data(ad_scroll_phase="wait", ad_scroll_swipes=0)
+            return self._execute(self._live_exit_action, context)
+        if phase == "wait":
+            context.update_data(ad_scroll_phase="swipe")
+            return self._execute(
+                Action.wait(self._live_scroll_wait_seconds), context
+            )
+        context.update_data(ad_scroll_phase="wait", ad_scroll_swipes=swipes + 1)
+        return self._execute(self._scroll_action, context)
+
+    @staticmethod
+    def _remaining_seconds(context: TaskContext) -> Optional[int]:
+        for text in context.observation.ocr_texts:
+            match = re.search(r"(\d+)\s*(?:秒|s)", text)
+            if match:
+                return int(match.group(1))
+        return None
 
     def _tap_feature_or_point(
         self,
