@@ -307,11 +307,7 @@ class AdTaskAdapter(PlannedTaskAdapter):
         return super().advance(context)
 
     def _handle_live_ad(self, context: TaskContext) -> StepResult:
-        """直播间/浏览类广告：每 5 秒下滑一次，等待结束后退出。"""
-        remaining = self._remaining_seconds(context)
-        if remaining is not None and remaining <= 2:
-            return self._execute(self._live_exit_action, context)
-
+        """直播间/浏览类广告：每 5 秒下滑一次，达到最大次数后退出。"""
         phase = context.get("ad_scroll_phase", "wait")
         swipes = int(context.get("ad_scroll_swipes", 0))
         if swipes >= self._max_live_scroll_swipes:

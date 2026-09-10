@@ -40,13 +40,13 @@ def test_live_ad_waits_then_swipes() -> None:
     assert ("swipe", 360, 1000, 360, 350, 500) in device.calls
 
 
-def test_live_ad_exits_when_countdown_low() -> None:
+def test_live_ad_does_not_exit_when_countdown_low() -> None:
     device = SimulatedDevice()
     adapter = _adapter(device)
     context = _context(ocr_texts=("广告", "进入直播间", "2秒"))
     step = adapter.advance(context)
-    assert step.actions == ("TAP_POINT",)
-    assert ("tap_point", 55, 118) in device.calls
+    assert step.actions != ("TAP_POINT",)
+    assert ("tap_point", 55, 118) not in device.calls
 
 
 def test_live_ad_exits_after_max_swipes() -> None:
