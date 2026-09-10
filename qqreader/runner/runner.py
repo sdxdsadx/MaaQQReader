@@ -186,6 +186,8 @@ class TaskRunner:
     def _run(self, context: TaskContext, diagnostics: List[DiagnosticEvent]) -> TaskResult:
         phase = RunPhase.START
         stalls = 0
+        frozen_screen_rounds = 0
+        last_ocr_signature: tuple = ()
         iterations = 0
         while True:
             iterations += 1
@@ -454,6 +456,27 @@ class TaskRunner:
             #    WAIT 自带等待时长不额外节流；其余无动作轮次按基础轮询间隔
             #    节流，避免每秒一次的截图+OCR 空转。
             actions = [str(a) for a in step.actions]
+            # QQR-FIX1 安全网：页面状态「已确认」但画面完全冻结（OCR 签名连续
+            # N 轮不变且无任何触控动作，例如公告弹窗被误归入挂机态）时，
+            # 强制走一次恢复链，防止无限空转直到超时。
+            ocr_signature = tuple(context.observation.ocr_texts)
+            if any(a.startswith(("TAP", "PRESS_BACK", "SWIPE")) for a in actions):
+                frozen_screen_rounds = 0
+            elif ocr_signature and ocr_signature == last_ocr_signature:
+                frozen_screen_rounds += 1
+            else:
+                frozen_screen_rounds = 0
+            last_ocr_signature = ocr_signature
+            if frozen_screen_rounds >= 18:
+                frozen_screen_rounds = 0
+                self._record(
+                    diagnostics,
+                    context,
+                    "safety.frozen_screen",
+                    "页面 OCR 连续 18 轮无变化且无触控动作，触发恢复",
+                )
+                self._recover(context, diagnostics, "progress_stall")
+                continue
             if any(a.startswith(("TAP", "PRESS_BACK", "SWIPE")) for a in actions):
                 self._clock.sleep(self._config.action_feedback_seconds, self._token)
             elif not any(a.startswith("WAIT") for a in actions):

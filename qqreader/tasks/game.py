@@ -54,18 +54,21 @@ def build_game_contract(
             PageState.GAME_CENTER,
             PageState.GAME_LOADING,
             PageState.GAME_RUNNING,
+            PageState.GAME_ANNOUNCEMENT,
         ),
         ready_condition=state_in(
             PageState.GAME_ENTRY,
             PageState.GAME_HALL,
             PageState.GAME_LOADING,
             PageState.GAME_RUNNING,
+            PageState.GAME_ANNOUNCEMENT,
         ),
         progress_condition=state_in(
             PageState.GAME_ENTRY,
             PageState.GAME_HALL,
             PageState.GAME_LOADING,
             PageState.GAME_RUNNING,
+            PageState.GAME_ANNOUNCEMENT,
             PageState.GAME_MENU,
             PageState.GAME_EXIT_CONFIRM,
             PageState.GAME_RESULT,
@@ -110,6 +113,10 @@ def build_game_action_plan(keys: FeatureKeys = DEFAULT_FEATURE_KEYS) -> StateAct
             PageState.GAME_HALL: Action.tap_point(360, 360),
             # 游戏中心：点击第一张游戏卡的「在线玩」按钮（坐标 fallback）。
             PageState.GAME_CENTER: Action.tap_point(100, 982),
+            # 公告弹窗：优先尝试点「跳过」，OCR 未命中时由 advance 分支按返回键兜底。
+            PageState.GAME_ANNOUNCEMENT: Action.tap_feature(
+                feature_key(keys, keys.game_ocr_announcement_skip)
+            ),
             # 登录/协议页：GameTaskAdapter 会先勾选协议再点「进入游戏」。
             PageState.GAME_LOADING: Action.tap_feature(
                 feature_key(keys, keys.game_ocr_enter)
@@ -290,8 +297,20 @@ class GameTaskAdapter(PlannedTaskAdapter):
         self._claim_scroll_action = self._entry_scroll_action
         self._max_claim_scrolls = max_claim_scrolls
 
+    def _announcement_dismiss_action(self, context: TaskContext) -> Action:
+        """公告弹窗关闭动作：有「跳过」点跳过，否则按返回键。"""
+        keys = DEFAULT_FEATURE_KEYS
+        skip_text = keys.game_ocr_announcement_skip
+        if self._has_text(context, skip_text):
+            return Action.tap_feature(feature_key(keys, skip_text))
+        return Action.press_back()
+
     def advance(self, context: TaskContext) -> StepResult:
         state = context.decision.state if context.decision is not None else None
+
+        # 更新公告弹窗：OCR 命中「跳过」就点它，否则按返回键关闭（真机 2026-09-11）。
+        if state is PageState.GAME_ANNOUNCEMENT:
+            return self._execute(self._announcement_dismiss_action(context), context)
 
         def _claim_or_scroll(ctx: TaskContext, missing_hint: str) -> StepResult:
             """QQR-36：退出游戏后找「立即领取」——屏幕内直接点，视口外滚动查找，

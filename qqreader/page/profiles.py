@@ -421,6 +421,35 @@ def build_default_state_definitions(
             description="游戏登录/加载页：点击选服 / 踏入仙途 / 进入游戏",
         ),
         StateDefinition(
+            state=PageState.GAME_ANNOUNCEMENT,
+            features=(
+                game_app,
+                _text(
+                    FeatureKind.OCR,
+                    keys.game_ocr_announcement,
+                    weight=2.0,
+                    required=True,
+                    mode=MatchMode.CONTAINS,
+                    description="游戏更新公告弹窗标题",
+                ),
+                _text(
+                    FeatureKind.OCR,
+                    keys.game_ocr_announcement_alt,
+                    weight=1.0,
+                    mode=MatchMode.CONTAINS,
+                    description="公告正文小节标题（备用证据）",
+                ),
+                _orientation(
+                    Orientation.PORTRAIT,
+                    values=any_orientation,
+                    weight=0.3,
+                ),
+            ),
+            min_score=0.4,
+            min_matched=2,
+            description="游戏更新公告弹窗：需关闭后才能进入挂机",
+        ),
+        StateDefinition(
             state=PageState.GAME_RUNNING,
             features=(
                 game_app,

@@ -110,6 +110,12 @@ class FeatureKeys:
     game_ocr_agree: str = "同意"
     #: 游戏隐私/协议弹窗的「拒绝」按钮（仅用于识别，不点击）。
     game_ocr_reject: str = "拒绝"
+    #: 游戏更新公告弹窗标题 OCR（真机 2026-09-11 实测）。
+    game_ocr_announcement: str = "亲爱的仙使大人"
+    #: 公告弹窗正文特征（备用证据）。
+    game_ocr_announcement_alt: str = "一、全新功能"
+    #: 公告弹窗右上角「跳过」按钮文案。
+    game_ocr_announcement_skip: str = "跳过"
     game_hud: str = "game.hud"                       # 结构特征：游戏内 HUD
     game_ocr_active: str = "领币"
     game_exit_menu: str = "game.exit_menu"           # 固定图标：悬浮菜单
