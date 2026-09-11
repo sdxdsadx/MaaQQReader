@@ -105,13 +105,15 @@ def test_modal_confirm_clicks_capped_no_deadloop() -> None:
         adapter.advance(context)
 
     confirm_calls = [c for c in device.calls if c == ("tap_feature", CONFIRM_KEY)]
-    assert len(confirm_calls) == 3
-    assert context.get("game_confirm_clicks") == 3
-    # 达上限后连「进入游戏」也不许点（模态框盖屏时点了也无效）——防死循环关键。
+    # 5 次 advance 循环语义：3 次确定 → back 换卡（重置配额）→ 第 4 次确定。
+    assert len(confirm_calls) == 4
+    assert ("press_back",) in device.calls
+    assert context.get("game_confirm_clicks") == 1
+    # 「进入游戏」永远不许在模态框观测下点击——防死循环关键。
     assert ("tap_feature", ENTER_KEY) not in device.calls
     assert ("tap_point", 157, 1032) not in device.calls
-    # issue #13 修订：置 game_enter_blocked → fatal 规则快速 FAILED（不空转到超时）。
-    assert context.get("game_enter_blocked") is True
+    # 尚有卡可换（game_center_attempts 未试尽）→ 不置阻断标志。
+    assert context.get("game_enter_blocked") is None
 
 
 def test_modal_then_agreement_then_enter_sequence() -> None:
@@ -179,14 +181,25 @@ def test_modal_garbled_text_still_triggers_via_confirm_enter_combo() -> None:
 
 
 def test_enter_blocked_fatal_rule_fires() -> None:
-    """r41 回归：确定配额耗尽且弹窗仍复现 → game_enter_blocked →
-    health_fatal_errors 的 fatal 规则命中（快速 FAILED，不空转 40 分钟）。"""
+    """r41 回归（修订）：确定配额耗尽 → 先换卡（back）轮换；全部卡试尽后
+    game_enter_blocked → fatal 规则命中（快速 FAILED，不空转 40 分钟）。"""
     from qqreader.tasks.common import health_fatal_errors
 
-    adapter, _ = _adapter_and_device()
+    adapter, device = _adapter_and_device()
     context = make_context(modal_observation(), run_state=RunState.RUNNING)
+    # 3 次确定耗尽 → back 换卡 ×4（game_center_attempts 0→4）→ 全部试尽置标志。
+    # 每轮观测不变（模拟一直坏卡），模态框观测会被判 GAME_LOADING，
+    # back 后 GAME_CENTER 分支只在状态为 GAME_CENTER 时轮换——这里直接
+    # 模拟「回到 GAME_CENTER」的观测驱动换卡逻辑。
     for _ in range(4):
-        adapter.advance(context)  # 3 次确定 + 第 4 次触发阻断标志
+        adapter.advance(context)  # 3 次确定 + 第 4 次触发 back 换卡（重置配额）
+    assert context.get("game_enter_blocked") is None
+    assert ("press_back",) in device.calls
+
+    # 模拟全部卡试尽（game_center_attempts 达 4）：再耗尽一轮确定后置标志。
+    context.update_data(game_center_attempts=4)
+    for _ in range(4):
+        adapter.advance(context)  # 3 次确定 + 第 4 次触发阻断
     assert context.get("game_enter_blocked") is True
 
     fatal = [s for s in health_fatal_errors(KEYS) if s.name == "game_enter_blocked"]
