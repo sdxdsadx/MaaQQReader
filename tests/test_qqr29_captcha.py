@@ -64,17 +64,19 @@ def test_slide_solver_swipes_to_gap() -> None:
     )
     assert result.solved is True
     assert device.calls
-    # 拟人滑动：主段 + 回正段（两次 swipe），主段坐标仍指向缺口（含过冲抖动）。
-    assert len(device.calls) == 2
+    # 拟人滑动 + 探针标定：主段（探针 20-40px）+ 回正 + 主滑 + 回正 = 4 次 swipe。
+    assert len(device.calls) == 4
     x0, y0, x1, y1, duration = device.calls[0]
     assert x0 == 190 and y0 == 1000
-    assert abs(x1 - 440) <= 10 and abs(y1 - 1000) <= 4
-    assert 350 <= duration <= 900
-    # 回正段：小幅拉回对齐拼图。
-    x0b, y0b, x1b, y1b, dur_b = device.calls[1]
-    assert x0b == x1 and y0b == y1
-    assert abs(x1b - 440) <= 2 and y1b == 1000
-    assert 150 <= dur_b <= 350
+    probe_px = x1 - 190
+    assert 20 <= probe_px <= 50  # probe(20-40) + 拟人过冲(3-8)
+    assert 150 <= duration <= 900
+    # 主滑段：从探针终点滑向缺口（修正距离 = (raw-probe)/scale，scale≥1）。
+    sx2, sy2, x1b, y1b, dur_b = device.calls[2]
+    assert abs(sx2 - x1) <= 10 and abs(sy2 - 1000) <= 4  # 回正段目标有 ±1px 抖动
+    corrected = x1b - sx2
+    assert corrected <= (440 - 190) + 10  # 修正距离 ≈ 原始屏幕差（合成图 scale=1）
+    assert 150 <= dur_b <= 900
 
 
 def test_slide_captcha_ocr_confirms_captcha_state() -> None:

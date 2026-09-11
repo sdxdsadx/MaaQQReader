@@ -331,13 +331,42 @@ class SlideCaptchaSolver:
             )
         sx, sy = detection.slider_center
         tx, ty = detection.target
-        self._humanize_swipe(sx, sy, tx, ty, detection.distance)
+        raw_distance = detection.distance
+
+        # issue #16 终修：轨道→拼图区比例尺换算。
+        # 实测（r2/r3 截图差分）：按钮滑 206px，拼图头实际移动 441px，
+        # scale≈2.14——「屏幕坐标差」不等于「拼图位移」。先滑一小段探针
+        # 距离，差分测出实际 scale，再按修正距离滑动到缺口。
+        probe = max(20, min(40, raw_distance // 5))
+        self._humanize_swipe(sx, sy, sx + probe, sy, probe)
+        time.sleep(0.5)
+        data2 = self._capture(context)
+        if not data2:
+            self._humanize_swipe(sx + probe, sy, tx, ty, raw_distance - probe)
+            return SolveResult(
+                True,
+                f"已滑动 {raw_distance}px（标定失败，退化直滑）",
+                data={"distance": raw_distance, "scaled": False},
+            )
+        d2 = detect_slide(data2)
+        if d2.found:
+            # slider_center 前移量 = 按钮位移；据此求 scale（拼图头/按钮）。
+            head_shift = d2.slider_center[0] - sx - probe
+            # head_shift 是拼图头在「检测坐标系」的位移。scale = 1 + 修正。
+            scale = 1.0 + max(0.0, head_shift) / float(probe)
+        else:
+            scale = 1.0
+        corrected = int(round((raw_distance - probe) / scale))
+        self._humanize_swipe(sx + probe, sy, sx + probe + corrected, sy, corrected)
         return SolveResult(
             True,
-            f"已滑动 {detection.distance}px（拟人轨迹）",
+            f"已滑动 {probe}+{corrected}px（比例尺 {scale:.2f}，原始 {raw_distance}px）",
             data={
                 "slider_center": detection.slider_center,
                 "target": detection.target,
-                "distance": detection.distance,
+                "distance": raw_distance,
+                "probe": probe,
+                "corrected": corrected,
+                "scale": round(scale, 3),
             },
         )
