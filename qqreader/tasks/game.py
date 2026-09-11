@@ -516,13 +516,22 @@ class GameTaskAdapter(PlannedTaskAdapter):
     ) -> Optional[StepResult]:
         """issue #13：游戏自带协议模态框（「请先同意…」+「确定」）处理闭环。
 
-        OCR 命中模态框文案时按逻辑特征点「确定」（OCR 框中心点击）；每次
-        advance 都基于最新观测复核弹窗是否消失，未消失则重试，达
-        ``max_confirm_clicks`` 上限后停止一切点击（绝不点「进入游戏」），
-        防止 693 步死循环。无模态框证据时返回 ``None``，调用链继续原有
-        分支（勾选行 → 登录/进入游戏）。
+        触发信号（二选一）：
+        1. OCR 读到模态框正文「请先同意」；
+        2. 「确定」与「进入游戏」同屏——正常进入游戏页没有「确定」按钮，
+           该组合即模态框存在的稳定信号。r40 实测正文可能被 OCR 压字
+           （读成「-42」），组合信号作为正文识别失败时的兜底。
+
+        OCR 命中后按逻辑特征点「确定」（OCR 框中心点击）；每次 advance 都
+        基于最新观测复核弹窗是否消失，未消失则重试，达 ``max_confirm_clicks``
+        上限后停止一切点击（绝不点「进入游戏」），防止 693 步死循环。
+        无模态框证据时返回 ``None``，调用链继续原有分支（勾选行 → 进入游戏）。
         """
-        if not self._has_text(context, self._modal_text):
+        modal_text_visible = self._has_text(context, self._modal_text)
+        confirm_enter_combo = self._has_text(
+            context, DEFAULT_FEATURE_KEYS.game_ocr_confirm
+        ) and self._has_text(context, DEFAULT_FEATURE_KEYS.game_ocr_enter)
+        if not (modal_text_visible or confirm_enter_combo):
             return None
         clicks = int(context.get("game_confirm_clicks", 0))
         if clicks >= self._max_confirm_clicks:

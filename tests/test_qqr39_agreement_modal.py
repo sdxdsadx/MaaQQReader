@@ -45,6 +45,25 @@ def enter_page_observation() -> PageObservation:
     )
 
 
+def modal_garbled_observation() -> PageObservation:
+    """r40 实测：模态框正文被 OCR 压字（读成「-42」），仅「确定」可读。
+
+    「确定」与「进入游戏」同屏 → 组合信号仍必须触发模态框处理。
+    """
+    return PageObservation(
+        current_app=QQ,
+        orientation=Orientation.PORTRAIT,
+        ocr_texts=(
+            "提示",
+            "-42",
+            "确定",
+            "梦幻2服",
+            "进入游戏",
+            "我已详细阅读并同意",
+        ),
+    )
+
+
 def _adapter_and_device() -> tuple[GameTaskAdapter, SimulatedDevice]:
     device = SimulatedDevice()
     adapter = GameTaskAdapter(
@@ -140,3 +159,18 @@ def test_agreement_page_without_modal_keeps_legacy_behavior() -> None:
     adapter.advance(context)
     assert ("tap_feature", ENTER_KEY) in device.calls
     assert ("tap_feature", CONFIRM_KEY) not in device.calls
+
+
+def test_modal_garbled_text_still_triggers_via_confirm_enter_combo() -> None:
+    """r40 回归：正文压字读不出「请先同意」时，「确定」+「进入游戏」同屏
+    组合信号必须触发点确定，否则继续 693 步死循环。"""
+    adapter, device = _adapter_and_device()
+    context = make_context(modal_garbled_observation(), run_state=RunState.RUNNING)
+    assert context.state is PageState.GAME_LOADING
+
+    step = adapter.advance(context)
+
+    assert step.actions == (f"{ActionKind.TAP_FEATURE.value}:{CONFIRM_KEY}",)
+    assert ("tap_feature", CONFIRM_KEY) in device.calls
+    assert ("tap_feature", ENTER_KEY) not in device.calls
+    assert context.get("game_confirm_clicks") == 1
