@@ -118,6 +118,10 @@ class FeatureKeys:
     game_ocr_announcement_alt: str = "一、全新功能"
     #: 公告弹窗右上角「跳过」按钮文案。
     game_ocr_announcement_skip: str = "跳过"
+    #: 新区游戏「进入游戏」页弹出的协议模态框标题片段（issue #13 真机 OCR）。
+    game_ocr_agreement_modal: str = "请先同意"
+    #: 协议模态框的「确定」按钮文案（按 OCR 框中心点击，勿用固定坐标）。
+    game_ocr_confirm: str = "确定"
     game_hud: str = "game.hud"                       # 结构特征：游戏内 HUD
     game_ocr_active: str = "领币"
     game_exit_menu: str = "game.exit_menu"           # 固定图标：悬浮菜单

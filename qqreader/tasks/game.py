@@ -233,6 +233,11 @@ class GameTaskAdapter(PlannedTaskAdapter):
         entry_scroll_action: Optional[Action] = None,
         max_entry_scrolls: int = 4,
         max_claim_scrolls: int = 3,
+        confirm_key: str = DEFAULT_FEATURE_KEYS.logical_name(
+            DEFAULT_FEATURE_KEYS.game_ocr_confirm
+        ),
+        modal_text: str = DEFAULT_FEATURE_KEYS.game_ocr_agreement_modal,
+        max_confirm_clicks: int = 3,
     ) -> None:
         super().__init__(
             device=device,
@@ -305,6 +310,10 @@ class GameTaskAdapter(PlannedTaskAdapter):
         # 与进游戏入口一样需要滚动查找兜底，不能只盯当前屏幕死等。
         self._claim_scroll_action = self._entry_scroll_action
         self._max_claim_scrolls = max_claim_scrolls
+        # issue #13：协议模态框「确定」按钮（OCR 定位点击）与勾选闭环参数。
+        self._confirm_key = confirm_key
+        self._modal_text = modal_text
+        self._max_confirm_clicks = max_confirm_clicks
 
     def _announcement_dismiss_action(self, context: TaskContext) -> Action:
         """公告弹窗关闭动作：有「跳过」点跳过，否则按返回键。"""
@@ -480,6 +489,9 @@ class GameTaskAdapter(PlannedTaskAdapter):
         self, context: TaskContext, *, note: str = "等待游戏加载/协议页"
     ) -> StepResult:
         """处理登录/协议/加载页（即使被误判成 GAME_RUNNING 也走这里）。"""
+        modal_step = self._handle_agreement_modal(context)
+        if modal_step is not None:
+            return modal_step
         if self._has_text(context, self._agreement_text):
             clicks = int(context.get("game_agreement_clicks", 0))
             if clicks < len(self._agreement_actions):
@@ -498,6 +510,29 @@ class GameTaskAdapter(PlannedTaskAdapter):
             context.update_data(game_agree_clicked=True)
             return self._execute(Action.tap_feature(self._agree_key), context)
         return StepResult(note, actions=(), progress=False)
+
+    def _handle_agreement_modal(
+        self, context: TaskContext
+    ) -> Optional[StepResult]:
+        """issue #13：游戏自带协议模态框（「请先同意…」+「确定」）处理闭环。
+
+        OCR 命中模态框文案时按逻辑特征点「确定」（OCR 框中心点击）；每次
+        advance 都基于最新观测复核弹窗是否消失，未消失则重试，达
+        ``max_confirm_clicks`` 上限后停止一切点击（绝不点「进入游戏」），
+        防止 693 步死循环。无模态框证据时返回 ``None``，调用链继续原有
+        分支（勾选行 → 登录/进入游戏）。
+        """
+        if not self._has_text(context, self._modal_text):
+            return None
+        clicks = int(context.get("game_confirm_clicks", 0))
+        if clicks >= self._max_confirm_clicks:
+            return StepResult(
+                "协议模态框「确定」点击已达上限，停止点击防死循环",
+                actions=(),
+                progress=False,
+            )
+        context.update_data(game_confirm_clicks=clicks + 1)
+        return self._execute(Action.tap_feature(self._confirm_key), context)
 
     def _tap_feature_or_point(
         self,
@@ -571,6 +606,7 @@ def build_game_definition(
         online_play_key=feature_key(keys, keys.game_ocr_online_play),
         agree_key=feature_key(keys, keys.game_ocr_agree),
         login_game_key=feature_key(keys, keys.game_ocr_login_game),
+        confirm_key=feature_key(keys, keys.game_ocr_confirm),
         agreement_text=keys.game_ocr_agreement,
         claim_text=keys.game_ocr_claim,
         agree_text=keys.game_ocr_agree,
