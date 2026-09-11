@@ -37,7 +37,7 @@ def test_detect_slide_finds_track_slider_and_gap() -> None:
     assert detection.target[0] > detection.slider_center[0]
 
 
-def test_slide_solver_swipes_to_gap() -> None:
+def test_slide_solver_swipes_to_gap(monkeypatch) -> None:
     class _Shot:
         data = _synthetic_slide_png()
 
@@ -57,24 +57,30 @@ def test_slide_solver_swipes_to_gap() -> None:
         def swipe(self, x0, y0, x1, y1, duration_ms=300):
             self.calls.append((x0, y0, x1, y1, duration_ms))
 
+    # 拦截 sendevent 注入：记录轨迹总位移，验证指向缺口且不真正执行 adb。
+    sent = []
+
+    def fake_track(self, sx, sy, track, dy):
+        sent.append(track)
+
+    monkeypatch.setattr(SlideCaptchaSolver, "_sendevent_track", fake_track)
+
     device = _Device()
     solver = SlideCaptchaSolver(observer=_Observer(), device=device)
     result = solver.solve(
         make_context(PageObservation.empty(), run_state=RunState.CAPTCHA)
     )
     assert result.solved is True
-    assert device.calls
-    # 迭代逼近：合成图每次截图结果一致 → 每轮「主滑+回正」后 screen_delta
-    # 恒为 78px（head_bias 引入）→ 补滑两轮直到迭代上限。共 3 轮 = 6 次 swipe。
-    assert len(device.calls) == 6
-    # 首滑：raw/scale = 250/2.14 ≈ 117。
-    x0, y0, x1, y1, duration = device.calls[0]
-    assert x0 == 190 and y0 == 1000
-    assert 100 <= x1 - 190 <= 135
-    assert 150 <= duration <= 900
-    # 每段都是拟人（主+回正），最后按钮位置应逼近缺口 440。
-    last = device.calls[-1]
-    assert abs(last[2] - 440) <= 30
+    # sendevent 拟人轨迹：合成图 raw=250 → 轨迹终点 = 起点+250（ease 累计=250，
+    # 加过冲回调后最终停在 raw）。验证轨迹存在且总位移指向缺口。
+    assert sent, "sendevent 轨迹未被调用"
+    track = sent[0]
+    total_dx = sum(d for d, _ in track)
+    assert abs(total_dx - 250) <= 12  # ease 累计 + 过冲 - 回调 ≈ raw
+    assert all(dt >= 14 for _, dt in track)  # 每步有自然延时
+    assert len(track) >= 12  # 足够多的变速步
+    # 旧 device.swipe 路径不再作为主滑动使用。
+    assert device.calls == []
 
 
 def test_slide_captcha_ocr_confirms_captcha_state() -> None:

@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import random
+import re
 import tempfile
 import time
 from dataclasses import dataclass
@@ -303,24 +304,94 @@ class SlideCaptchaSolver:
         return None
 
     def _humanize_swipe(self, sx: int, sy: int, tx: int, ty: int, distance: int) -> None:
-        """拟人滑动：分段轨迹 + 过冲回正 + 轻微抖动 + 随机时长。
+        """拟人滑动：sendevent 原始触摸流（变速 + 抖动 + 过冲回调）。
 
-        r2 实测：匀速直线 600ms 滑动两次都被行为检测拒绝（滑了 206px 仍判
-        失败）。改为先快后慢的分段 swipe：主段快速接近（含 3~8px 随机过冲），
-        停顿一拍后微调回正；纵向抖动 ±2px 模拟手指不稳。
+        活体实验（runtime/logs live_sendevent，2026-09-11）实证：MAA/adb
+        input swipe 的匀速直线轨迹被行为指纹识别拒绝（回弹）；sendevent
+        注入「ease-out 变速 + y 抖动 + 过冲微回调」原始事件流一次通过。
+        dx = tx - sx 为目标位移。
         """
-        base = max(350, min(900, int(distance * 2.2)))
-        duration = base + random.randint(-60, 120)
-        overshoot = random.randint(3, 8)
-        jx = random.randint(-2, 2)
-        jy = random.randint(-2, 2)
-        # 主段：快速滑到目标 + 过冲
-        self._device.swipe(sx, sy, tx + overshoot, ty + jy, duration)
-        time.sleep(random.uniform(0.08, 0.18))
-        # 回正段：慢速小幅拉回，像人手对齐拼图
-        self._device.swipe(
-            tx + overshoot, ty + jy, tx + random.randint(-1, 1), ty, random.randint(180, 320)
+        dx = tx - sx
+        dy = ty - sy
+        track = self._human_track(dx)
+        self._sendevent_track(sx, sy, track, dy)
+
+    def _adb_shell(self, config: Any, script: str) -> None:
+        import subprocess
+
+        subprocess.run(
+            [config.machine.adb_path, "-s", config.machine.adb_address,
+             "shell", script],
+            capture_output=True, timeout=20,
         )
+
+    def _human_track(self, dx: int) -> list:
+        """ease-out 变速轨迹: [(x_offset, dt_ms), ...]，含过冲与回调。"""
+        pts = []
+        over = random.randint(4, 9) * (1 if dx > 0 else -1)
+        n = max(12, min(40, abs(dx) // 6))
+        for i in range(1, n + 1):
+            f = i / n
+            ease = 1 - (1 - f) ** 2
+            dt = random.randint(14, 34)
+            pts.append((int(dx * ease) - int(dx * (1 - (i - 1) / n) ** 2) * 0, dt))
+        # 上面的 ease 序列直接用绝对位置更稳，重新生成:
+        pts = []
+        prev = 0
+        for i in range(1, n + 1):
+            f = i / n
+            ease = 1 - (1 - f) ** 2
+            x = int(dx * ease)
+            pts.append((x - prev, random.randint(14, 34)))
+            prev = x
+        pts.append((over, random.randint(20, 40)))
+        pts.append((-over, random.randint(25, 50)))
+        return pts
+
+    def _sendevent_track(self, sx: int, sy: int, track: list, dy: int) -> None:
+        from ..config import load_config  # 局部导入避免循环
+
+        config = load_config("configs/qqreader.local.json")
+        adb = config.machine.adb_path
+        dev = config.machine.adb_address
+
+        import subprocess
+
+        r = subprocess.run(
+            [adb, "-s", dev, "shell", "getevent", "-pl"],
+            capture_output=True, text=True, timeout=20,
+        )
+        tdev = None
+        cur = None
+        for line in r.stdout.splitlines():
+            m = re.search(r"add device \d+: (/dev/input/event\d+)", line)
+            if m:
+                cur = m.group(1)
+            if cur and "ABS_MT_POSITION_X" in line:
+                tdev = cur
+                break
+        if not tdev:
+            # 无触屏设备：退化为设备 swipe（可能被行为检测拒绝）
+            self._device.swipe(sx, sy, sx + sum(d for d, _ in track), sy,
+                               self._swipe_duration_ms)
+            return
+
+        def send(events):
+            script = "".join(f"sendevent {tdev} {t} {c} {v}; " for t, c, v in events)
+            subprocess.run([adb, "-s", dev, "shell", script],
+                           capture_output=True, timeout=20)
+
+        x = sx
+        y = sy
+        send([(3, 57, 0), (3, 53, x), (3, 54, y), (1, 330, 1), (0, 0, 0)])
+        time.sleep(0.05)
+        for ddx, dt in track:
+            x += ddx
+            y = sy + random.randint(-2, 2)
+            send([(3, 53, x), (3, 54, y), (0, 0, 0)])
+            time.sleep(dt / 1000.0)
+        time.sleep(random.uniform(0.08, 0.2))
+        send([(3, 57, -1), (1, 330, 0), (0, 0, 0)])
 
     def solve(self, context: "TaskContext") -> SolveResult:
         data = self._capture(context)
@@ -339,51 +410,20 @@ class SlideCaptchaSolver:
         sx, sy = detection.slider_center
         gap_x = detection.slider_center[0] + detection.distance
 
-        # issue #16 终修（迭代式逼近）：
-        # 屏幕上「按钮中心→缺口」的距离 raw 不等于按钮应滑距离：
-        #   按钮 d_button → 拼图头位移 d_head = d_button × scale（≈2.14）
-        #   且拼图头起点 head0 ≠ 按钮中心（r2 实测偏 29px）
-        # → 对齐条件 head0 + d_button×scale = gap_x，一次换算有两个未知量。
-        # 策略：保守首滑（低估），然后截图差分定位拼图头实际位置，按
-        # 「屏幕差 ÷ scale」迭代补滑，最多 2 次逼近。
-        first = int(round(detection.distance / self._puzzle_scale))
-        if first < 10:
-            first = int(round(detection.distance * 0.5))
-        self._humanize_swipe(sx, sy, sx + first, sy, first)
-        total = first
-        attempts = []
-        for _ in range(2):
-            time.sleep(0.6)
-            frame = self._capture(context)
-            if not frame:
-                break
-            d2 = detect_slide(frame)
-            if not d2.found:
-                break  # 验证码可能已通过
-            # 拼图头当前屏幕位置：按钮中心跟踪不可靠（r4 实证恒 1:1），
-            # 改用滑块轨道上的蓝色按钮新位置 + 保留的 head0 偏置先验。
-            # head_bias = 拼图头起点相对按钮中心的偏置，默认 29px（r2 实测）。
-            head_now = d2.slider_center[0] + self._head_bias + (total * (self._puzzle_scale - 1.0)) / self._puzzle_scale
-            screen_delta = gap_x - head_now
-            if abs(screen_delta) < 6:
-                break  # 已对齐
-            add = int(round(screen_delta / self._puzzle_scale))
-            if add == 0:
-                break
-            attempts.append(add)
-            cur_x = sx + total
-            self._humanize_swipe(cur_x, sy, cur_x + add, sy, abs(add))
-            total += add
+        # issue #16 终修（活体实验定案 2026-09-11）：
+        # 之前的「比例尺 2.14/5.44」「迭代补滑」全是错带测量的伪影。真相：
+        #   1. 拼图头与按钮 1:1 同步移动（sendevent 连拍实证）
+        #   2. 单段 swipe 的匀速直线轨迹被行为指纹识别 → 校验拒绝 → 回弹
+        #   3. sendevent 注入「ease-out 变速 + y 抖动 + 过冲回调」原始
+        #      触摸事件流一次通过（live_sendevent.py 实证 ✅）
+        # 直接滑动 raw 距离（按钮中心→缺口），用拟人轨迹注入。
+        self._humanize_swipe(sx, sy, sx + detection.distance, sy, detection.distance)
         return SolveResult(
             True,
-            f"已滑动 {total}px（首滑 {first}，补滑 {attempts}，比例尺 {self._puzzle_scale:.2f}）",
+            f"已滑动 {detection.distance}px（sendevent 拟人轨迹）",
             data={
                 "slider_center": detection.slider_center,
                 "gap_x": gap_x,
-                "raw_distance": detection.distance,
-                "first": first,
-                "adjustments": attempts,
-                "total": total,
-                "scale": round(self._puzzle_scale, 3),
+                "distance": detection.distance,
             },
         )
