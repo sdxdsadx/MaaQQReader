@@ -106,6 +106,14 @@ def health_fatal_errors(keys: FeatureKeys) -> Tuple[FatalErrorSpec, ...]:
             ),
             hint="确认 QQ 阅读已安装且包名正确",
         ),
+        FatalErrorSpec(
+            name="game_enter_blocked",
+            when=predicate(
+                lambda ctx: bool(ctx.get("game_enter_blocked")),
+                "游戏进入被阻断（协议/错误模态框确认后仍复现）",
+            ),
+            hint="目标游戏当前无法进入（游戏侧问题，如错误码弹窗）；游戏区会轮换，次日重跑即可",
+        ),
     )
 
 

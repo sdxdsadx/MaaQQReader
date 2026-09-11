@@ -97,7 +97,7 @@ def test_modal_confirm_taps_determine() -> None:
 
 
 def test_modal_confirm_clicks_capped_no_deadloop() -> None:
-    """同一模态框观测反复 advance：确定最多点 3 次，之后不再点任何按钮。"""
+    """同一模态框观测反复 advance：确定最多点 3 次，之后置阻断标志等 fatal。"""
     adapter, device = _adapter_and_device()
     context = make_context(modal_observation(), run_state=RunState.RUNNING)
 
@@ -110,6 +110,8 @@ def test_modal_confirm_clicks_capped_no_deadloop() -> None:
     # 达上限后连「进入游戏」也不许点（模态框盖屏时点了也无效）——防死循环关键。
     assert ("tap_feature", ENTER_KEY) not in device.calls
     assert ("tap_point", 157, 1032) not in device.calls
+    # issue #13 修订：置 game_enter_blocked → fatal 规则快速 FAILED（不空转到超时）。
+    assert context.get("game_enter_blocked") is True
 
 
 def test_modal_then_agreement_then_enter_sequence() -> None:
@@ -174,3 +176,20 @@ def test_modal_garbled_text_still_triggers_via_confirm_enter_combo() -> None:
     assert ("tap_feature", CONFIRM_KEY) in device.calls
     assert ("tap_feature", ENTER_KEY) not in device.calls
     assert context.get("game_confirm_clicks") == 1
+
+
+def test_enter_blocked_fatal_rule_fires() -> None:
+    """r41 回归：确定配额耗尽且弹窗仍复现 → game_enter_blocked →
+    health_fatal_errors 的 fatal 规则命中（快速 FAILED，不空转 40 分钟）。"""
+    from qqreader.tasks.common import health_fatal_errors
+
+    adapter, _ = _adapter_and_device()
+    context = make_context(modal_observation(), run_state=RunState.RUNNING)
+    for _ in range(4):
+        adapter.advance(context)  # 3 次确定 + 第 4 次触发阻断标志
+    assert context.get("game_enter_blocked") is True
+
+    fatal = [s for s in health_fatal_errors(KEYS) if s.name == "game_enter_blocked"]
+    assert len(fatal) == 1
+    result = fatal[0].when.evaluate(context)
+    assert result.satisfied is True

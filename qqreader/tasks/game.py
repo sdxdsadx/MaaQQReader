@@ -535,8 +535,13 @@ class GameTaskAdapter(PlannedTaskAdapter):
             return None
         clicks = int(context.get("game_confirm_clicks", 0))
         if clicks >= self._max_confirm_clicks:
+            # issue #13 修订：r41 实测「确定」点满 3 次弹窗仍复现——那是游戏
+            # 侧错误框（r40/41 正文 OCR 读成「-42」，实为错误码），目标游戏
+            # 当前无法进入。置阻断标志，由 fatal 规则快速 FAILED 收场，
+            # 绝不空转到超时；游戏区会轮换，次日重跑即可。
+            context.update_data(game_enter_blocked=True)
             return StepResult(
-                "协议模态框「确定」点击已达上限，停止点击防死循环",
+                "协议模态框「确定」点击已达上限且弹窗仍复现——游戏进入被阻断，等待 fatal 收场",
                 actions=(),
                 progress=False,
             )
