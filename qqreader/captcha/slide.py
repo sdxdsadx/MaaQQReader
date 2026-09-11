@@ -277,6 +277,7 @@ class SlideCaptchaSolver:
         device: "DeviceController",
         swipe_duration_ms: int = 600,
         puzzle_scale: float = 2.14,
+        head_bias: int = 29,
     ) -> None:
         self._observer = observer
         self._device = device
@@ -284,6 +285,8 @@ class SlideCaptchaSolver:
         # QQ阅读验证码：滑块轨道可视宽 414px，拼图区显示宽 193px，
         # 拼图头位移/按钮位移 ≈ 2.14（r2/r3 截图差分实测 441/206=2.141）。
         self._puzzle_scale = puzzle_scale
+        # 拼图头起点相对按钮中心的屏幕偏置（r2 实测 197-168=29px）。
+        self._head_bias = head_bias
 
     def _capture(self, context: "TaskContext") -> Optional[bytes]:
         observation = self._observer.observe(context)
@@ -334,26 +337,53 @@ class SlideCaptchaSolver:
                 },
             )
         sx, sy = detection.slider_center
-        tx, ty = detection.target
-        raw_distance = detection.distance
+        gap_x = detection.slider_center[0] + detection.distance
 
-        # issue #16 终修：轨道→拼图区比例尺换算。
-        # 实测（r2/r3 截图差分）：按钮滑 206px，拼图头实际移动 441px——
-        # 「屏幕坐标差」≠「拼图位移」。按钮位移永远 1:1（蓝色按钮就在轨道上），
-        # 拼图头才被缩放，而检测器只能测到按钮 → 探针标定测不出真实 scale
-        # （r4 实证 scale 恒测得 1.00）。改用实测先验 scale≈2.14
-        # （轨道可视宽 414 / 拼图区显示宽 193），修正距离 = raw / scale。
-        scale = self._puzzle_scale
-        corrected = int(round(raw_distance / scale))
-        self._humanize_swipe(sx, sy, sx + corrected, sy, corrected)
+        # issue #16 终修（迭代式逼近）：
+        # 屏幕上「按钮中心→缺口」的距离 raw 不等于按钮应滑距离：
+        #   按钮 d_button → 拼图头位移 d_head = d_button × scale（≈2.14）
+        #   且拼图头起点 head0 ≠ 按钮中心（r2 实测偏 29px）
+        # → 对齐条件 head0 + d_button×scale = gap_x，一次换算有两个未知量。
+        # 策略：保守首滑（低估），然后截图差分定位拼图头实际位置，按
+        # 「屏幕差 ÷ scale」迭代补滑，最多 2 次逼近。
+        first = int(round(detection.distance / self._puzzle_scale))
+        if first < 10:
+            first = int(round(detection.distance * 0.5))
+        self._humanize_swipe(sx, sy, sx + first, sy, first)
+        total = first
+        attempts = []
+        for _ in range(2):
+            time.sleep(0.6)
+            frame = self._capture(context)
+            if not frame:
+                break
+            d2 = detect_slide(frame)
+            if not d2.found:
+                break  # 验证码可能已通过
+            # 拼图头当前屏幕位置：按钮中心跟踪不可靠（r4 实证恒 1:1），
+            # 改用滑块轨道上的蓝色按钮新位置 + 保留的 head0 偏置先验。
+            # head_bias = 拼图头起点相对按钮中心的偏置，默认 29px（r2 实测）。
+            head_now = d2.slider_center[0] + self._head_bias + (total * (self._puzzle_scale - 1.0)) / self._puzzle_scale
+            screen_delta = gap_x - head_now
+            if abs(screen_delta) < 6:
+                break  # 已对齐
+            add = int(round(screen_delta / self._puzzle_scale))
+            if add == 0:
+                break
+            attempts.append(add)
+            cur_x = sx + total
+            self._humanize_swipe(cur_x, sy, cur_x + add, sy, abs(add))
+            total += add
         return SolveResult(
             True,
-            f"已滑动 {corrected}px（比例尺 {scale:.2f}，原始 {raw_distance}px）",
+            f"已滑动 {total}px（首滑 {first}，补滑 {attempts}，比例尺 {self._puzzle_scale:.2f}）",
             data={
                 "slider_center": detection.slider_center,
-                "target": detection.target,
-                "distance": raw_distance,
-                "corrected": corrected,
-                "scale": round(scale, 3),
+                "gap_x": gap_x,
+                "raw_distance": detection.distance,
+                "first": first,
+                "adjustments": attempts,
+                "total": total,
+                "scale": round(self._puzzle_scale, 3),
             },
         )

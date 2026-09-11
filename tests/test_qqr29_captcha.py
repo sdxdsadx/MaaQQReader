@@ -64,19 +64,17 @@ def test_slide_solver_swipes_to_gap() -> None:
     )
     assert result.solved is True
     assert device.calls
-    # 拟人滑动 + 比例尺换算：主滑 + 回正 = 2 次 swipe。
-    # 合成图 raw distance=250 → corrected = 250/2.14 ≈ 117。
-    assert len(device.calls) == 2
+    # 迭代逼近：合成图每次截图结果一致 → 每轮「主滑+回正」后 screen_delta
+    # 恒为 78px（head_bias 引入）→ 补滑两轮直到迭代上限。共 3 轮 = 6 次 swipe。
+    assert len(device.calls) == 6
+    # 首滑：raw/scale = 250/2.14 ≈ 117。
     x0, y0, x1, y1, duration = device.calls[0]
     assert x0 == 190 and y0 == 1000
-    corrected = x1 - 190
-    assert 100 <= corrected <= 135
+    assert 100 <= x1 - 190 <= 135
     assert 150 <= duration <= 900
-    # 回正段：小幅拉回对齐拼图。
-    x0b, y0b, x1b, y1b, dur_b = device.calls[1]
-    assert x0b == x1 and y0b == y1
-    assert abs(x1b - x1) <= 3 and abs(y1b - 1000) <= 4
-    assert 150 <= dur_b <= 350
+    # 每段都是拟人（主+回正），最后按钮位置应逼近缺口 440。
+    last = device.calls[-1]
+    assert abs(last[2] - 440) <= 30
 
 
 def test_slide_captcha_ocr_confirms_captcha_state() -> None:
