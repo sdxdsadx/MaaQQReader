@@ -3,6 +3,8 @@
 AGENTS.md §3.9 要求日志/记录能区分
 ``SUCCESS / FAILED / TIMEOUT / BLOCKED_BY_CAPTCHA / SKIPPED``；
 取消语义额外使用 ``CANCELLED``（取消不是失败）。
+``DEVICE_ERROR`` 表示设备级失败（如 MAA 截屏级联失败 / adb 链路断开），
+与任务逻辑失败 ``FAILED`` 区分。
 
 QQR-10 还要求每次任务记录包含任务名、开始/结束时间、结果状态、失败原因
 （含恢复尝试历史）与关键节点截图路径，因此本模块同时承载这些**纯数据**，
@@ -23,6 +25,7 @@ class TaskOutcome(str, Enum):
 
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
+    DEVICE_ERROR = "DEVICE_ERROR"
     TIMEOUT = "TIMEOUT"
     BLOCKED_BY_CAPTCHA = "BLOCKED_BY_CAPTCHA"
     SKIPPED = "SKIPPED"
