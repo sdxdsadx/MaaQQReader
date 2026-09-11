@@ -11,7 +11,12 @@ from typing import Optional, Tuple
 
 from ..captcha.factory import build_default_captcha_guard
 from ..captcha.guard import CaptchaGuard, ManualCaptchaGuard
-from ..contract.conditions import GameCoinGrew, StateIs, all_of, state_in
+from ..contract.conditions import (
+    StateIs,
+    all_of,
+    game_flow_completed,
+    state_in,
+)
 from ..contract.contract import TaskContract, TimeoutSpec
 from ..page.feature_keys import DEFAULT_FEATURE_KEYS, FeatureKeys
 from ..page.recognizer import PageStateRecognizer
@@ -74,11 +79,14 @@ def build_game_contract(
             PageState.REWARD_HOME,
         ),
         captcha_condition=captcha_condition(keys),
-        # issue #11：奖励页不存在「玩游戏领赠币+已领取」文案；成功依据改为
-        # 「今日已获赠币」数值较进游戏前基线增长（数值由 adapter 捕获入 context）。
+        # issue #11 修订：实测「在线玩」游戏流程不发放 QQ阅读赠币（r36/r37
+        # 两轮全链路证据：计数器恒为 100，+70 卡是「充值领赠币」任务）。
+        # 成功语义回归任务本质：进游戏→挂机计时→自动退出→回到奖励页，
+        # 流程闭环即 success。赠币计数（game_coin_baseline/after）仍由
+        # adapter 捕获，但只作遥测证据，不作门禁条件。
         success_condition=all_of(
             StateIs(PageState.REWARD_HOME),
-            GameCoinGrew(),
+            game_flow_completed(),
         ),
         recoverable_error=(
             popup_recoverable(keys),

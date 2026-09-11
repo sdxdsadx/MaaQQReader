@@ -1,8 +1,10 @@
-"""issue #11：领取成功判定锚定「今日已获赠币」数值增长。
+"""issue #11（修订）：游戏 daily 成功判定 = 流程闭环，赠币计数仅作遥测。
 
-旧判定依赖「玩游戏领赠币+已领取」文案组合，真实奖励页不存在该文案；
-新判定 = REWARD_HOME 状态 + 赠币计数较进游戏前基线增长（数值由
-``GameTaskAdapter`` 捕获入 ``context.data``，条件只做纯比较）。
+真实奖励页不存在「玩游戏领赠币+已领取」文案；且 r36/r37 两轮全链路实测
+「在线玩」游戏流程不发放 QQ阅读赠币（「今日已获赠币」恒为 100，+70 卡是
+「充值领赠币」任务）——赠币增长语义不成立。最终成功语义：进游戏→挂机
+计时→自动退出→回到奖励页（game_exit_done），流程闭环即 success；
+``GameCoinGrew`` 保留为可选遥测条件，不再作门禁。
 """
 
 from __future__ import annotations
@@ -33,53 +35,47 @@ def _coin_adapter() -> tuple[GameTaskAdapter, SimulatedDevice]:
     return adapter, device
 
 
-def test_success_condition_on_coin_growth() -> None:
-    """基线 100 → 现值 120：REWARD_HOME + 数值增长 → 成功。"""
+def test_success_condition_on_flow_completion() -> None:
+    """game_exit_done + 回到 REWARD_HOME：流程闭环 → 成功（赠币仅遥测）。"""
     observation = reward_observation(ocr=("今日已获赠币120", "去玩游戏", "获奖记录"))
     context = make_context(
         observation, contract=_contract(), run_state=RunState.RUNNING
     )
     assert context.decision.state is PageState.REWARD_HOME
-    context.update_data(game_coin_baseline=100, game_coin_after=120)
+    # 赠币未增长（100 → 100）也不影响：遥测仅作 evidence。
+    context.update_data(
+        game_exit_done=True, game_coin_baseline=100, game_coin_after=100
+    )
 
     result = _contract().success_condition.evaluate(context)
 
     assert result.satisfied is True
+    # AllOf 聚合 evidence：game_flow_completed 子条件为满足。
+    assert result.evidence.get("game_flow_completed") is True
 
 
-def test_success_condition_not_satisfied_without_growth() -> None:
-    """未增长 / 缺现值 / 缺基线：三种情形都不满足成功条件。"""
+def test_success_condition_not_satisfied_before_exit_done() -> None:
+    """未退出 / 未回到奖励页：两种情形都不满足成功条件。"""
     observation = reward_observation(ocr=("今日已获赠币100", "去玩游戏", "获奖记录"))
 
-    # 数值未增长（100 → 100）。
+    # 游戏尚未退出（game_exit_done 缺失）。
     context = make_context(
         observation, contract=_contract(), run_state=RunState.RUNNING
     )
-    context.update_data(game_coin_baseline=100, game_coin_after=100)
     result = _contract().success_condition.evaluate(context)
     assert result.satisfied is False
-    assert "未增长" in result.reason
+    assert "退出" in result.reason
 
-    # 缺现值（游戏未退出/未读到计数器）。
-    context_missing_after = make_context(
+    # 退出但未捕获赠币数值：仍应成功（数值只是遥测，不是门禁）。
+    context_exit = make_context(
         observation, contract=_contract(), run_state=RunState.RUNNING
     )
-    context_missing_after.update_data(game_coin_baseline=100)
-    assert _contract().success_condition.evaluate(context_missing_after).satisfied is False
-
-    # 缺基线（进游戏前没读到「今日已获赠币N」）。
-    context_missing_baseline = make_context(
-        observation, contract=_contract(), run_state=RunState.RUNNING
-    )
-    context_missing_baseline.update_data(game_coin_after=120)
-    assert (
-        _contract().success_condition.evaluate(context_missing_baseline).satisfied
-        is False
-    )
+    context_exit.update_data(game_exit_done=True)
+    assert _contract().success_condition.evaluate(context_exit).satisfied is True
 
 
 def test_other_card_mingri_zailai_never_satisfies_success() -> None:
-    """他卡（百度地图）页「明日再来」+ 无增长证据：绝不判成功，也绝不点击。"""
+    """他卡（百度地图）页「明日再来」不构成成功证据；退出前判定永不满足。"""
     observation = reward_observation(
         ocr=("玩游戏领赠币", "明日再来", "今日已获赠币100")
     )
@@ -88,7 +84,7 @@ def test_other_card_mingri_zailai_never_satisfies_success() -> None:
     )
     assert context.decision.state is PageState.REWARD_HOME
     context.update_data(game_coin_baseline=100)
-    # 只有基线、无现值/无增长 → 成功条件不满足。
+    # 「明日再来」等他卡文案不是成功条件的一部分；未退出 → 不满足。
     assert _contract().success_condition.evaluate(context).satisfied is False
 
     adapter, device = _coin_adapter()
@@ -105,8 +101,8 @@ def test_other_card_mingri_zailai_never_satisfies_success() -> None:
     assert step.actions == ()
     assert step.progress is False
     assert not any(call[0] in ("tap_feature", "tap_point") for call in device.calls)
-    # 数值 100 → 100 未增长，成功条件仍不满足。
-    assert _contract().success_condition.evaluate(context).satisfied is False
+    # 流程已闭环（game_exit_done + REWARD_HOME）→ 成功条件满足。
+    assert _contract().success_condition.evaluate(context).satisfied is True
 
 
 def test_success_without_claim_button() -> None:

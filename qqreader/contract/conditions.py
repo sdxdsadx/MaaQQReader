@@ -258,6 +258,35 @@ def game_coin_grew() -> Condition:
     return GameCoinGrew()
 
 
+@dataclass(frozen=True)
+class GameFlowCompleted(Condition):
+    """游戏 daily 流程闭环即成功（issue #11 修订）。
+
+    实测「在线玩」游戏流程不发放 QQ阅读赠币（r36/r37 全链路证据：计数器
+    恒为 100），赠币增长语义不成立。任务本质是「进游戏→挂机计时→自动
+    退出→回到奖励页」，完成即 success。判定依据：adapter 在退出流程
+    完成后写入 ``context.data["game_exit_done"]``，且当前状态已回到
+    REWARD_HOME。赠币基线/现值仍由 adapter 捕获，仅作遥测证据。
+    """
+
+    def evaluate(self, context: "TaskContext") -> ConditionResult:
+        exit_done = bool(context.get("game_exit_done"))
+        if not exit_done:
+            return ConditionResult.no("游戏退出流程尚未完成")
+        return ConditionResult.yes(
+            "游戏已退出并回到奖励页，daily 流程闭环",
+            game_coin_baseline=context.get("game_coin_baseline"),
+            game_coin_after=context.get("game_coin_after"),
+        )
+
+    def describe(self) -> str:
+        return "game_flow_completed"
+
+
+def game_flow_completed() -> Condition:
+    return GameFlowCompleted()
+
+
 def build_popup_condition(keys: FeatureKeys = DEFAULT_FEATURE_KEYS) -> Condition:
     """默认「普通弹窗遮挡」条件。
 

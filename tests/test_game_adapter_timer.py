@@ -233,6 +233,7 @@ def test_game_flow_end_to_end_with_real_adapter() -> None:
     assert ("tap_feature", GAME_EXIT_MENU_KEY) in device.calls
     assert ("tap_feature", GAME_CLOSE_GAME_KEY) in device.calls
     assert ("press_back",) in device.calls
-    assert ("tap_feature", GAME_CLAIM_KEY) in device.calls
+    # issue #11 修订：回到奖励页（game_exit_done）当步即判成功，
+    # 不再要求「立即领取」点击（该按钮在真实奖励页不存在）。
     kinds = [event.kind for event in result.diagnostics]
     assert "task.success" in kinds
