@@ -160,7 +160,8 @@ def test_game_flow_end_to_end_with_real_adapter() -> None:
         pages={
             "HOME": home_observation(),
             "REWARD_HOME": reward_observation(
-                ocr=("今日已获赠币", "玩游戏领赠币", "去玩游戏")
+                # issue #11：进游戏前基线 100（「今日已获赠币100」）。
+                ocr=("今日已获赠币100", "玩游戏领赠币", "去玩游戏")
             ),
             "GAME_HALL": game_hall_observation(),
             "GAME_CENTER": game_center_observation(),

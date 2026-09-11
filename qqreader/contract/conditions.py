@@ -225,6 +225,39 @@ def predicate(
     return CallableCondition(_evaluate, description)
 
 
+@dataclass(frozen=True)
+class GameCoinGrew(Condition):
+    """「今日已获赠币」数值较进游戏前基线增长（issue #11）。
+
+    adapter 在首次 REWARD_HOME 观测把数值存入 ``context.data["game_coin_baseline"]``，
+    游戏退出后在 ``context.data["game_coin_after"]`` 捕获现值；本条件只做数值比较。
+    缺基线或现值、或未增长时都不满足，evidence 带上数值便于诊断。
+    """
+
+    def evaluate(self, context: "TaskContext") -> ConditionResult:
+        baseline = context.get("game_coin_baseline")
+        after = context.get("game_coin_after")
+        if baseline is None or after is None:
+            return ConditionResult.no(
+                "缺少赠币基线或现值观测",
+                game_coin_baseline=baseline,
+                game_coin_after=after,
+            )
+        grew = int(after) > int(baseline)
+        return ConditionResult(
+            grew,
+            f"今日已获赠币 {baseline} → {after}（{'增长' if grew else '未增长'}）",
+            {"game_coin_baseline": baseline, "game_coin_after": after},
+        )
+
+    def describe(self) -> str:
+        return "game_coin_grew"
+
+
+def game_coin_grew() -> Condition:
+    return GameCoinGrew()
+
+
 def build_popup_condition(keys: FeatureKeys = DEFAULT_FEATURE_KEYS) -> Condition:
     """默认「普通弹窗遮挡」条件。
 

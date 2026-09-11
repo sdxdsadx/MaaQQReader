@@ -189,7 +189,8 @@ def game_result_observation(**overrides: object) -> PageObservation:
 def reward_done_observation(
     text: str = "玩游戏领赠币 明日再来", **overrides: object
 ) -> PageObservation:
-    return reward_observation(ocr=(text, "今日已获赠币"), **overrides)
+    # issue #11：「今日已获赠币」带数值文本，供基线/现值增长判定使用。
+    return reward_observation(ocr=(text, "今日已获赠币120"), **overrides)
 
 
 def reward_claim_observation(**overrides: object) -> PageObservation:

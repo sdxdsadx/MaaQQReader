@@ -6,14 +6,14 @@
 
 from __future__ import annotations
 
+import re
 from typing import Optional, Tuple
 
 from ..captcha.factory import build_default_captcha_guard
 from ..captcha.guard import CaptchaGuard, ManualCaptchaGuard
-from ..contract.conditions import StateIs, all_of, feature, state_in
+from ..contract.conditions import GameCoinGrew, StateIs, all_of, state_in
 from ..contract.contract import TaskContract, TimeoutSpec
 from ..page.feature_keys import DEFAULT_FEATURE_KEYS, FeatureKeys
-from ..page.features import MatchMode
 from ..page.recognizer import PageStateRecognizer
 from ..page.states import PageState
 from ..recovery.policy import RecoveryStrategy
@@ -25,7 +25,6 @@ from .common import (
     captcha_condition,
     feature_key,
     health_fatal_errors,
-    ocr,
     popup_recoverable,
     wrong_page_recoverable,
 )
@@ -75,9 +74,11 @@ def build_game_contract(
             PageState.REWARD_HOME,
         ),
         captcha_condition=captcha_condition(keys),
+        # issue #11：奖励页不存在「玩游戏领赠币+已领取」文案；成功依据改为
+        # 「今日已获赠币」数值较进游戏前基线增长（数值由 adapter 捕获入 context）。
         success_condition=all_of(
             StateIs(PageState.REWARD_HOME),
-            feature(ocr(keys.game_success_regex, mode=MatchMode.REGEX)),
+            GameCoinGrew(),
         ),
         recoverable_error=(
             popup_recoverable(keys),
@@ -313,8 +314,19 @@ class GameTaskAdapter(PlannedTaskAdapter):
             return self._execute(self._announcement_dismiss_action(context), context)
 
         def _claim_or_scroll(ctx: TaskContext, missing_hint: str) -> StepResult:
-            """QQR-36：退出游戏后找「立即领取」——屏幕内直接点，视口外滚动查找，
-            滚动次数用尽后（可能今日已领/按钮不存在）才回到等待语义。"""
+            """issue #11：退出游戏后先读「今日已获赠币」计数器——数值较进游戏前
+            增长即视为领取成功（不再依赖页面按钮文案）；「立即领取」出现仍直接点；
+            都没有时才滚动查找。绝不点「去玩游戏」，绝不做下拉刷新手势。"""
+            baseline = ctx.get("game_coin_baseline")
+            current = self._read_granted_coin(ctx)
+            if baseline is not None and current is not None:
+                ctx.update_data(game_coin_after=current)
+                if current > int(baseline):
+                    return StepResult(
+                        f"今日已获赠币 {baseline} → {current}，领取成功",
+                        actions=(),
+                        progress=True,
+                    )
             if self._has_text(ctx, self._claim_text):
                 ctx.update_data(claim_scrolls=0)
                 return self._execute(Action.tap_feature(self._claim_key), ctx)
@@ -387,6 +399,10 @@ class GameTaskAdapter(PlannedTaskAdapter):
         # 两者都不在屏幕内时，先按旧 pipeline 的坐标滚动查找。
         # QQR-18：游戏退出后回到奖励页，则尝试领取游戏赠币。
         if state is PageState.REWARD_HOME:
+            if context.get("game_coin_baseline") is None:
+                baseline = self._read_granted_coin(context)
+                if baseline is not None:
+                    context.update_data(game_coin_baseline=baseline)
             if context.get("game_exit_done"):
                 return _claim_or_scroll(
                     context, "游戏已退出，奖励页暂未出现可领取按钮"
@@ -409,6 +425,10 @@ class GameTaskAdapter(PlannedTaskAdapter):
         elif state is PageState.GAME_ENTRY:
             # 奖励页游戏卡也可能被识别成 GAME_ENTRY；游戏退出后这里必须
             # 走「领取赠币」而不是再次进入游戏。
+            if context.get("game_coin_baseline") is None:
+                baseline = self._read_granted_coin(context)
+                if baseline is not None:
+                    context.update_data(game_coin_baseline=baseline)
             if context.get("game_exit_done"):
                 return _claim_or_scroll(
                     context, "游戏已退出，奖励页暂未出现可领取按钮"
@@ -486,6 +506,17 @@ class GameTaskAdapter(PlannedTaskAdapter):
     @staticmethod
     def _has_text(context: TaskContext, needle: str) -> bool:
         return any(needle in text for text in context.observation.ocr_texts)
+
+    _COIN_PATTERN = re.compile(DEFAULT_FEATURE_KEYS.reward_ocr_granted_regex)
+
+    @classmethod
+    def _read_granted_coin(cls, context: TaskContext) -> Optional[int]:
+        """从 OCR 文本提取「今日已获赠币N」的 N；未读到返回 None。"""
+        for text in context.observation.ocr_texts:
+            match = cls._COIN_PATTERN.search(text)
+            if match:
+                return int(match.group(1))
+        return None
 
     def _has_any_text(self, context: TaskContext, needles: tuple) -> bool:
         return any(

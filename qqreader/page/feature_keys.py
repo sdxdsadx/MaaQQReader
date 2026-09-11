@@ -38,6 +38,8 @@ class FeatureKeys:
     reward_header: str = "reward.header"             # 固定图标：奖励页标题栏
     reward_bottom_nav: str = "reward.bottom_nav"     # 结构特征
     reward_ocr_granted: str = "今日已获赠币"
+    #: 「今日已获赠币N」数值提取正则（issue #11：数值增长作为领取成功依据）。
+    reward_ocr_granted_regex: str = r"今日已获赠币\s*(\d+)"
     reward_ocr_ad_banner: str = "看小视频领好礼"
     reward_ocr_game_banner: str = "玩游戏领赠币"
     reward_ocr_watch: str = "立即观看"
@@ -125,8 +127,6 @@ class FeatureKeys:
     game_exit_dialog: str = "game.exit_dialog"       # 局部模板：退出确认
     #: 奖励页游戏赠币领取按钮；游戏时长满足后出现。
     game_ocr_claim: str = "立即领取"
-    #: 旧工程「玩游戏领赠币 + 已领取/明日再来」完成判定（静态审计，待实机校准）。
-    game_success_regex: str = r"玩游戏领赠币.*(?:已领取|明日再来)"
 
     # --- 通用弹窗 ---
     popup_close: str = "popup.close"
