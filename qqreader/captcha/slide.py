@@ -13,7 +13,9 @@
 
 from __future__ import annotations
 
+import random
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
@@ -293,6 +295,26 @@ class SlideCaptchaSolver:
                 return Path(saved).read_bytes()
         return None
 
+    def _humanize_swipe(self, sx: int, sy: int, tx: int, ty: int, distance: int) -> None:
+        """拟人滑动：分段轨迹 + 过冲回正 + 轻微抖动 + 随机时长。
+
+        r2 实测：匀速直线 600ms 滑动两次都被行为检测拒绝（滑了 206px 仍判
+        失败）。改为先快后慢的分段 swipe：主段快速接近（含 3~8px 随机过冲），
+        停顿一拍后微调回正；纵向抖动 ±2px 模拟手指不稳。
+        """
+        base = max(350, min(900, int(distance * 2.2)))
+        duration = base + random.randint(-60, 120)
+        overshoot = random.randint(3, 8)
+        jx = random.randint(-2, 2)
+        jy = random.randint(-2, 2)
+        # 主段：快速滑到目标 + 过冲
+        self._device.swipe(sx, sy, tx + overshoot, ty + jy, duration)
+        time.sleep(random.uniform(0.08, 0.18))
+        # 回正段：慢速小幅拉回，像人手对齐拼图
+        self._device.swipe(
+            tx + overshoot, ty + jy, tx + random.randint(-1, 1), ty, random.randint(180, 320)
+        )
+
     def solve(self, context: "TaskContext") -> SolveResult:
         data = self._capture(context)
         if not data:
@@ -309,10 +331,10 @@ class SlideCaptchaSolver:
             )
         sx, sy = detection.slider_center
         tx, ty = detection.target
-        self._device.swipe(sx, sy, tx, ty, self._swipe_duration_ms)
+        self._humanize_swipe(sx, sy, tx, ty, detection.distance)
         return SolveResult(
             True,
-            f"已滑动 {detection.distance}px",
+            f"已滑动 {detection.distance}px（拟人轨迹）",
             data={
                 "slider_center": detection.slider_center,
                 "target": detection.target,

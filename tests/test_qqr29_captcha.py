@@ -64,10 +64,17 @@ def test_slide_solver_swipes_to_gap() -> None:
     )
     assert result.solved is True
     assert device.calls
+    # 拟人滑动：主段 + 回正段（两次 swipe），主段坐标仍指向缺口（含过冲抖动）。
+    assert len(device.calls) == 2
     x0, y0, x1, y1, duration = device.calls[0]
     assert x0 == 190 and y0 == 1000
-    assert x1 == 440 and y1 == 1000
-    assert duration == 600
+    assert abs(x1 - 440) <= 10 and abs(y1 - 1000) <= 4
+    assert 350 <= duration <= 900
+    # 回正段：小幅拉回对齐拼图。
+    x0b, y0b, x1b, y1b, dur_b = device.calls[1]
+    assert x0b == x1 and y0b == y1
+    assert abs(x1b - 440) <= 2 and y1b == 1000
+    assert 150 <= dur_b <= 350
 
 
 def test_slide_captcha_ocr_confirms_captcha_state() -> None:
