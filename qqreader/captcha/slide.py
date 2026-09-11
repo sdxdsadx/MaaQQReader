@@ -276,10 +276,14 @@ class SlideCaptchaSolver:
         observer: "PageObserver",
         device: "DeviceController",
         swipe_duration_ms: int = 600,
+        puzzle_scale: float = 2.14,
     ) -> None:
         self._observer = observer
         self._device = device
         self._swipe_duration_ms = swipe_duration_ms
+        # QQ阅读验证码：滑块轨道可视宽 414px，拼图区显示宽 193px，
+        # 拼图头位移/按钮位移 ≈ 2.14（r2/r3 截图差分实测 441/206=2.141）。
+        self._puzzle_scale = puzzle_scale
 
     def _capture(self, context: "TaskContext") -> Optional[bytes]:
         observation = self._observer.observe(context)
@@ -334,38 +338,21 @@ class SlideCaptchaSolver:
         raw_distance = detection.distance
 
         # issue #16 终修：轨道→拼图区比例尺换算。
-        # 实测（r2/r3 截图差分）：按钮滑 206px，拼图头实际移动 441px，
-        # scale≈2.14——「屏幕坐标差」不等于「拼图位移」。先滑一小段探针
-        # 距离，差分测出实际 scale，再按修正距离滑动到缺口。
-        probe = max(20, min(40, raw_distance // 5))
-        self._humanize_swipe(sx, sy, sx + probe, sy, probe)
-        time.sleep(0.5)
-        data2 = self._capture(context)
-        if not data2:
-            self._humanize_swipe(sx + probe, sy, tx, ty, raw_distance - probe)
-            return SolveResult(
-                True,
-                f"已滑动 {raw_distance}px（标定失败，退化直滑）",
-                data={"distance": raw_distance, "scaled": False},
-            )
-        d2 = detect_slide(data2)
-        if d2.found:
-            # slider_center 前移量 = 按钮位移；据此求 scale（拼图头/按钮）。
-            head_shift = d2.slider_center[0] - sx - probe
-            # head_shift 是拼图头在「检测坐标系」的位移。scale = 1 + 修正。
-            scale = 1.0 + max(0.0, head_shift) / float(probe)
-        else:
-            scale = 1.0
-        corrected = int(round((raw_distance - probe) / scale))
-        self._humanize_swipe(sx + probe, sy, sx + probe + corrected, sy, corrected)
+        # 实测（r2/r3 截图差分）：按钮滑 206px，拼图头实际移动 441px——
+        # 「屏幕坐标差」≠「拼图位移」。按钮位移永远 1:1（蓝色按钮就在轨道上），
+        # 拼图头才被缩放，而检测器只能测到按钮 → 探针标定测不出真实 scale
+        # （r4 实证 scale 恒测得 1.00）。改用实测先验 scale≈2.14
+        # （轨道可视宽 414 / 拼图区显示宽 193），修正距离 = raw / scale。
+        scale = self._puzzle_scale
+        corrected = int(round(raw_distance / scale))
+        self._humanize_swipe(sx, sy, sx + corrected, sy, corrected)
         return SolveResult(
             True,
-            f"已滑动 {probe}+{corrected}px（比例尺 {scale:.2f}，原始 {raw_distance}px）",
+            f"已滑动 {corrected}px（比例尺 {scale:.2f}，原始 {raw_distance}px）",
             data={
                 "slider_center": detection.slider_center,
                 "target": detection.target,
                 "distance": raw_distance,
-                "probe": probe,
                 "corrected": corrected,
                 "scale": round(scale, 3),
             },
