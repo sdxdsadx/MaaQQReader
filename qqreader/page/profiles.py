@@ -328,12 +328,14 @@ def build_default_state_definitions(
                 _text(
                     FeatureKind.OCR,
                     keys.game_ocr_hall_marker,
-                    # 「活动」alone also occurs in live ad creative copy.
-                    values=("今日必玩推荐", "新游", "排行", "分类"),
+                    # issue #10：裸「排行」「分类」会被书城页「排行榜」按子串
+                    # 误命中（ONE_OF 是子串匹配），导致书城页被判成 GAME_HALL；
+                    # 只保留游戏大厅强锚点。
+                    values=("今日必玩推荐", "新游", "游戏大厅"),
                     weight=2.0,
                     required=True,
                     mode=MatchMode.ONE_OF,
-                    description="游戏大厅：精选大作 / 今日必玩推荐 / 排行 / 分类",
+                    description="游戏大厅：精选大作 / 今日必玩推荐 / 新游 / 游戏大厅",
                 ),
                 _orientation(
                     Orientation.PORTRAIT,
@@ -401,10 +403,13 @@ def build_default_state_definitions(
                     _text(
                         FeatureKind.OCR,
                         keys.game_ocr_hall_marker,
-                        values=("今日必玩推荐", "新游", "活动", "排行", "分类"),
+                        # issue #10：与 GAME_HALL 同源收紧——裸「活动」「排行」
+                        # 「分类」会命中直播广告/书城页通用文案（且本状态的
+                        # orientation 兼容竖屏），只留游戏大厅强锚点。
+                        values=("今日必玩推荐", "新游", "游戏大厅"),
                         weight=1.0,
                         mode=MatchMode.ONE_OF,
-                        description="游戏大厅推荐/分类文案",
+                        description="游戏大厅强锚点文案（精选大作/今日必玩推荐/新游）",
                     ),
                     weight=1.5,
                     required=True,
