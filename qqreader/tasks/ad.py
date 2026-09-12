@@ -243,7 +243,7 @@ class AdTaskAdapter(PlannedTaskAdapter):
             return self._execute(Action.wait(settle), context)
         # UNKNOWN 兜底：连续 6 次未识别（游戏中心等异常页）时按返回键
         # 逐层退出，直到回到 HOME/书架可识别页。
-        if state is None or state is PageState.GAME_CENTER:
+        if state in (None, PageState.GAME_CENTER, PageState.GAME_HALL):
             unknowns = int(context.get("ad_unknown_backs", 0))
             if unknowns >= 6 and unknowns < 14:
                 context.update_data(ad_unknown_backs=unknowns + 1)
