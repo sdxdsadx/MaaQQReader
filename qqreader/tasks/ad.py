@@ -215,7 +215,11 @@ class AdTaskAdapter(PlannedTaskAdapter):
             600, 1078
         )
         self._offer_texts = tuple(offer_texts)
-        self._offer_close_action = offer_close_action or Action.press_back()
+        # issue #2: offerwall 页 press_back 无效（r1 实测 800 observe 卡死），
+        # 必须点左上角 X；点不掉再 BACK 兜底。
+        self._offer_close_action = offer_close_action or Action.tap_point(55, 118)
+        self._offer_close_fallback = Action.press_back()
+        self._offer_close_tries = 0
         self._completed_close_action = completed_close_action or Action.tap_point(
             48, 70
         )
@@ -304,7 +308,12 @@ class AdTaskAdapter(PlannedTaskAdapter):
             if is_live:
                 return self._handle_live_ad(context)
             if any(self._has_text(context, item) for item in self._offer_texts):
-                return self._execute(self._offer_close_action, context)
+                # issue #2: X 优先，连续 2 次无效转 BACK 兜底，再无效重计。
+                tries = self._offer_close_tries
+                self._offer_close_tries = 0 if tries >= 3 else tries + 1
+                if tries < 2:
+                    return self._execute(self._offer_close_action, context)
+                return self._execute(self._offer_close_fallback, context)
             if self._has_text(context, self._skip_text):
                 return self._execute(Action.tap_feature(self._skip_key), context)
             if self._has_text(context, self._close_text):
