@@ -6,9 +6,13 @@
 
 设计约束（AGENTS.md §3.8）：
 
-* 只负责「提交一次滑动」；是否真的通过由 ``VerifyingCaptchaGuard`` 复核；
-* 检测不到轨道/滑块/缺口时返回 ``solved=False``，绝不盲滑；
-* 缺少 OpenCV/numpy 时返回明确原因，由 guard 进入人工等待。
+* 求解循环（2026-09-12 活体实证）：单次滑动被拒后拼图会**重新随机化**
+  （实测 dist 244→340），因此失败后必须在新鲜帧上重检测再滑，禁止在
+  旧坐标上盲补；每轮滑动后等待 ``settle_seconds`` 再复查；
+* OCR 复查到验证码文案（安全验证/拖动滑块等）仍在时，返回 ``solved=False``，
+  绝不谎报成功；OCR 不可用（无文本帧）时提交一次滑动并交由 guard 复核；
+* 检测不到轨道/滑块/缺口时等待后复检一次，仍失败返回 ``solved=False``，
+  绝不盲滑；缺少 OpenCV/numpy 时返回明确原因，由 guard 进入人工等待。
 """
 
 from __future__ import annotations
@@ -22,8 +26,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 from .guard import SolveResult
+from ..runtime.clock import RealClock
 
 if TYPE_CHECKING:  # pragma: no cover
+    from ..runtime.clock import Clock
     from ..runtime.context import TaskContext
     from ..runtime.device import DeviceController
     from ..runtime.observer import PageObserver
@@ -271,6 +277,9 @@ def detect_slide(image_bytes: bytes) -> SlideDetection:
 class SlideCaptchaSolver:
     """基于 ``PageObserver`` 截图 + ``DeviceController.swipe`` 的滑块求解器。"""
 
+    # OCR 复查判定「验证码仍在」的文案特征（与 captcha_condition 特征键同源）。
+    CAPTCHA_TEXT_KEYS = ("安全验证", "拖动下方滑块", "拖动滑块", "滑动验证", "完成拼图")
+
     def __init__(
         self,
         *,
@@ -279,6 +288,10 @@ class SlideCaptchaSolver:
         swipe_duration_ms: int = 600,
         puzzle_scale: float = 2.14,
         head_bias: int = 29,
+        max_rounds: int = 6,
+        settle_seconds: float = 2.5,
+        redetect_wait_seconds: float = 2.0,
+        clock: Optional["Clock"] = None,
     ) -> None:
         self._observer = observer
         self._device = device
@@ -288,6 +301,14 @@ class SlideCaptchaSolver:
         self._puzzle_scale = puzzle_scale
         # 拼图头起点相对按钮中心的屏幕偏置（r2 实测 197-168=29px）。
         self._head_bias = head_bias
+        # 求解循环节奏（2026-09-12 活体实证固化）：
+        # 单次滑动被拒后拼图重新随机化，必须「重检测→再滑」迭代而非盲补。
+        if max_rounds < 1:
+            raise ValueError("max_rounds 必须 >= 1")
+        self._max_rounds = max_rounds
+        self._settle_seconds = settle_seconds      # 滑动后等待校验动画
+        self._redetect_wait_seconds = redetect_wait_seconds  # 检测失败后的过渡等待
+        self._clock: "Clock" = clock if clock is not None else RealClock()
 
     def _capture(self, context: "TaskContext") -> Optional[bytes]:
         observation = self._observer.observe(context)
@@ -393,37 +414,97 @@ class SlideCaptchaSolver:
         time.sleep(random.uniform(0.08, 0.2))
         send([(3, 57, -1), (1, 330, 0), (0, 0, 0)])
 
+    def _observe_texts(self, context: "TaskContext") -> Tuple[str, ...]:
+        """重新观测当前帧并返回 OCR 文案（observe 已更新 context.observation）。"""
+        observation = self._observer.observe(context)
+        context.update_observation(observation, getattr(context, "decision", None))
+        return tuple(observation.ocr_texts)
+
     def solve(self, context: "TaskContext") -> SolveResult:
-        data = self._capture(context)
-        if not data:
-            return SolveResult(False, "无法获取验证码截图")
-        detection = detect_slide(data)
-        if not detection.found:
+        """滑块求解循环（2026-09-12 活体迭代实证）。
+
+        循环节奏（最多 ``max_rounds`` 轮）：
+
+        1. 新鲜截图 → ``detect_slide``；检测不到时等待 ``redetect_wait_seconds``
+           后复检一次（可能是弹窗过渡态），仍检测不到才放弃（绝不盲滑）；
+        2. 用新鲜帧的 raw 距离发 sendevent 拟人轨迹（ease-out 变速 + y 抖动 +
+           过冲回调；单段 swipe 的匀速直线会被行为指纹识别拒绝→回弹）；
+        3. 等待 ``settle_seconds`` 让校验动画走完，再取新鲜帧判定；
+        4. 判定：OCR 出现验证码文案（安全验证/拖动滑块/完成拼图等）→ 本轮
+           失败。关键教训（活体实证）：滑动被拒后拼图会**重新随机化**
+           （dist 244→340），必须用新鲜帧重检测再滑，禁止在旧坐标上盲补；
+        5. OCR 无验证码文案：若帧上完全没有文本（合成图/OCR 不可用），
+           按契约「提交成功、guard 复核」返回 solved=True；否则确认验证码
+           已消失，直接返回 solved=True。
+
+        注意：OCR 判「仍在」时进入下一轮重检测再滑（受 ``max_rounds`` 限制），
+        轮次耗尽后返回 ``solved=False`` → guard 进入人工等待。
+        """
+        details = []
+        redetect_used = False
+        for round_no in range(1, self._max_rounds + 1):
+            data = self._capture(context)
+            if not data:
+                return SolveResult(False, "无法获取验证码截图", data={"rounds": details})
+            detection = detect_slide(data)
+            if not detection.found:
+                if redetect_used:
+                    return SolveResult(
+                        False,
+                        detection.error or "未检测到可滑动的验证码",
+                        data={"track": detection.track, "slider": detection.slider,
+                              "rounds": details},
+                    )
+                redetect_used = True
+                self._clock.sleep(self._redetect_wait_seconds, context.token)
+                details.append(
+                    f"第 {round_no} 轮未检测到轨道（{detection.error}），等待 "
+                    f"{self._redetect_wait_seconds:.1f}s 复检"
+                )
+                continue
+
+            redetect_used = False
+            sx, sy = detection.slider_center
+            gap_x = detection.slider_center[0] + detection.distance
+
+            # issue #16 终修（活体实验定案 2026-09-11）+ 迭代循环（2026-09-12）：
+            #   1. 拼图头与按钮 1:1 同步移动（sendevent 连拍实证）
+            #   2. 单段 swipe 的匀速直线轨迹被行为指纹识别 → 校验拒绝 → 回弹
+            #   3. sendevent 注入「ease-out 变速 + y 抖动 + 过冲回调」原始
+            #      触摸事件流一次通过（live_sendevent.py 实证 ✅）
+            #   4. 被拒后拼图重新随机化 → 必须每轮在新鲜帧上重检测再滑
+            self._humanize_swipe(
+                sx, sy, sx + detection.distance, sy, detection.distance
+            )
+            self._clock.sleep(self._settle_seconds, context.token)
+            details.append(
+                f"第 {round_no} 轮已滑动 {detection.distance}px"
+                f"（起点({sx},{sy})→缺口x={gap_x}）"
+            )
+
+            # 复查: 重新观测, 看 OCR 文案里验证码是否仍在。
+            verify_texts = self._observe_texts(context)
+            still_on = any(key in text for text in verify_texts for key in self.CAPTCHA_TEXT_KEYS)
+            if still_on:
+                details.append("OCR 复查验证码文案仍在 → 重新检测缺口再滑")
+                continue
+            # OCR 复查不到验证码文案。帧上完全无文本时（合成图/OCR 不可用）
+            # 无法自行确认，按契约返回提交成功、由 guard 重新观测复核；
+            # 有文本但无验证码文案 = 确认消失。
+            note = "OCR 复查确认验证码文案已消失" if verify_texts else "OCR 无文本（OCR 不可用），交由 guard 复核"
+            details.append(note)
             return SolveResult(
-                False,
-                detection.error or "未检测到可滑动的验证码",
+                True,
+                "; ".join(details),
                 data={
-                    "track": detection.track,
-                    "slider": detection.slider,
+                    "slider_center": detection.slider_center,
+                    "gap_x": gap_x,
+                    "distance": detection.distance,
+                    "rounds": details,
                 },
             )
-        sx, sy = detection.slider_center
-        gap_x = detection.slider_center[0] + detection.distance
-
-        # issue #16 终修（活体实验定案 2026-09-11）：
-        # 之前的「比例尺 2.14/5.44」「迭代补滑」全是错带测量的伪影。真相：
-        #   1. 拼图头与按钮 1:1 同步移动（sendevent 连拍实证）
-        #   2. 单段 swipe 的匀速直线轨迹被行为指纹识别 → 校验拒绝 → 回弹
-        #   3. sendevent 注入「ease-out 变速 + y 抖动 + 过冲回调」原始
-        #      触摸事件流一次通过（live_sendevent.py 实证 ✅）
-        # 直接滑动 raw 距离（按钮中心→缺口），用拟人轨迹注入。
-        self._humanize_swipe(sx, sy, sx + detection.distance, sy, detection.distance)
         return SolveResult(
-            True,
-            f"已滑动 {detection.distance}px（sendevent 拟人轨迹）",
-            data={
-                "slider_center": detection.slider_center,
-                "gap_x": gap_x,
-                "distance": detection.distance,
-            },
+            False,
+            f"滑动 {self._max_rounds} 轮后验证码仍然存在",
+            data={"rounds": details},
         )
