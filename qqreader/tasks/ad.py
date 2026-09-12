@@ -240,6 +240,18 @@ class AdTaskAdapter(PlannedTaskAdapter):
             # Close is asynchronous: a fresh screenshot can still contain the
             # outgoing ad. Never queue Back while that close is in flight.
             return self._execute(Action.wait(settle), context)
+        # 书城 tab 上没有奖励入口（home_ocr_reward_entry 在书架 tab）。
+        # HOME 状态下找不到入口文案时先点底部「书架」tab（issue: 书城页空转）。
+        if state is PageState.HOME:
+            has_entry = any(
+                needle in text
+                for text in context.observation.ocr_texts
+                for needle in ("本周阅读时长", "分钟领")
+            )
+            taps = int(context.get("ad_shelf_tab_taps", 0))
+            if not has_entry and taps < 3:
+                context.update_data(ad_shelf_tab_taps=taps + 1)
+                return self._execute(Action.tap_point(89, 1263), context)
         # GAME_ENTRY is the same reward page when its game row is visible.
         if state in (PageState.REWARD_HOME, PageState.GAME_ENTRY):
             context.update_data(
