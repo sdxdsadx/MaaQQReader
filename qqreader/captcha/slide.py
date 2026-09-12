@@ -42,6 +42,15 @@ except Exception:  # pragma: no cover
     np = None  # type: ignore
 
 
+# 灰色轨道会被停在中部的蓝色滑块切成两段。连续轨道检测失败时，只有当
+# 去掉滑块占位后的灰色像素仍足够密集，才把两段合成为同一条轨道。
+_TRACK_GRAY_MIN = 180
+_TRACK_GRAY_MAX = 220
+_TRACK_MIN_SPAN_RATIO = 0.40
+_SPLIT_TRACK_MIN_DENSITY = 0.70
+_TRACK_SEARCH_HALF_BAND = 60
+
+
 @dataclass(frozen=True)
 class SlideDetection:
     found: bool
@@ -55,7 +64,7 @@ class SlideDetection:
 
 def _longest_gray_run(gray: Any, yy: int) -> Tuple[int, int]:
     row = gray[yy, :]
-    mask = (row >= 180) & (row <= 220)
+    mask = (row >= _TRACK_GRAY_MIN) & (row <= _TRACK_GRAY_MAX)
     max_run = 0
     run = 0
     start = 0
@@ -98,13 +107,13 @@ def _find_track_and_slider(image: Any):
 
     if slider is not None:
         slider_cy = slider[1] + slider[3] / 2
-        y0 = max(0, int(slider_cy - 60))
-        y1 = min(h, int(slider_cy + 60))
+        y0 = max(0, int(slider_cy - _TRACK_SEARCH_HALF_BAND))
+        y1 = min(h, int(slider_cy + _TRACK_SEARCH_HALF_BAND))
         rows = []
         best_row = None
         for yy in range(y0, y1):
             max_run, best_start = _longest_gray_run(gray, yy)
-            if max_run > w * 0.40:
+            if max_run > w * _TRACK_MIN_SPAN_RATIO:
                 rows.append(yy)
                 if best_row is None or max_run > best_row[0]:
                     best_row = (max_run, best_start, yy)
@@ -113,7 +122,7 @@ def _find_track_and_slider(image: Any):
             y_bot = max(rows)
             mid_y = (y_top + y_bot) // 2
             mid = gray[mid_y, :]
-            mask = (mid >= 180) & (mid <= 220)
+            mask = (mid >= _TRACK_GRAY_MIN) & (mid <= _TRACK_GRAY_MAX)
             xs = np.where(mask)[0]
             if len(xs) > 0:
                 track = (
@@ -123,6 +132,45 @@ def _find_track_and_slider(image: Any):
                     y_bot - y_top + 1,
                 )
                 return track, slider
+
+        # 滑块停在轨道中部时会把灰条切成两段，任一单段都可能不足屏宽 40%。
+        # 逐行排除滑块占位，仅在左右灰段合计密度足够高时合成轨道，避免把
+        # 普通灰色背景误认作轨道。原有连续灰条路径仍优先于此回退。
+        slider_left = max(0, slider[0])
+        slider_right = min(w, slider[0] + slider[2])
+        split_rows = []
+        for yy in range(y0, y1):
+            row = gray[yy, :]
+            mask = (row >= _TRACK_GRAY_MIN) & (row <= _TRACK_GRAY_MAX)
+            left_xs = np.where(mask[:slider_left])[0]
+            right_xs = np.where(mask[slider_right:])[0] + slider_right
+            if len(left_xs) == 0 or len(right_xs) == 0:
+                continue
+            left_start = int(left_xs.min())
+            right_end = int(right_xs.max())
+            span = right_end - left_start + 1
+            if span < w * _TRACK_MIN_SPAN_RATIO:
+                continue
+            visible_width = (slider_left - left_start) + (right_end - slider_right + 1)
+            if visible_width <= 0:
+                continue
+            gray_count = int(mask[left_start:slider_left].sum()) + int(
+                mask[slider_right:right_end + 1].sum()
+            )
+            if gray_count / visible_width < _SPLIT_TRACK_MIN_DENSITY:
+                continue
+            split_rows.append((yy, left_start, right_end))
+        if split_rows:
+            y_top = min(row[0] for row in split_rows)
+            y_bot = max(row[0] for row in split_rows)
+            left_start = int(np.median([row[1] for row in split_rows]))
+            right_end = int(np.median([row[2] for row in split_rows]))
+            return (
+                left_start,
+                y_top,
+                right_end - left_start + 1,
+                y_bot - y_top + 1,
+            ), slider
         return None, slider
 
     # 没有蓝色滑块时，先找宽灰色轨道，再在轨道附近找滑块。
@@ -131,7 +179,7 @@ def _find_track_and_slider(image: Any):
     best_line = None
     for yy in range(search_y0, search_y1):
         max_run, best_start = _longest_gray_run(gray, yy)
-        if max_run > w * 0.40:
+        if max_run > w * _TRACK_MIN_SPAN_RATIO:
             if best_line is None or max_run > best_line[0]:
                 best_line = (max_run, best_start, yy)
     if best_line is None:
@@ -141,14 +189,14 @@ def _find_track_and_slider(image: Any):
     rows = []
     for yy in range(max(0, peak_y - 30), min(h, peak_y + 31)):
         max_run, _ = _longest_gray_run(gray, yy)
-        if max_run > w * 0.40:
+        if max_run > w * _TRACK_MIN_SPAN_RATIO:
             rows.append(yy)
     if not rows:
         return None, None
     y_top = min(rows)
     y_bot = max(rows)
     mid = gray[(y_top + y_bot) // 2, :]
-    mask = (mid >= 180) & (mid <= 220)
+    mask = (mid >= _TRACK_GRAY_MIN) & (mid <= _TRACK_GRAY_MAX)
     xs = np.where(mask)[0]
     if len(xs) == 0:
         return None, None
@@ -204,7 +252,8 @@ def _find_gap_x(gray: Any, track: Tuple[int, int, int, int], slider: Tuple[int, 
             continue
         if not (20 <= bw <= 150 and 20 <= bh <= 150):
             continue
-        if bx <= 2 or by <= 2 or bx + bw >= roi.shape[1] - 2:
+        # ROI 上边界恰好可能裁过真实缺口；只拒绝水平方向贴边的候选。
+        if bx <= 2 or bx + bw >= roi.shape[1] - 2:
             continue
         candidates.append((float(area), bx, by, bw, bh))
     if candidates:
@@ -289,8 +338,7 @@ class SlideCaptchaSolver:
         puzzle_scale: float = 2.14,
         head_bias: int = 29,
         max_rounds: int = 6,
-        settle_seconds: float = 2.5,
-        redetect_wait_seconds: float = 2.0,
+        settle_seconds: float = 0.8,
         clock: Optional["Clock"] = None,
     ) -> None:
         self._observer = observer
@@ -306,8 +354,7 @@ class SlideCaptchaSolver:
         if max_rounds < 1:
             raise ValueError("max_rounds 必须 >= 1")
         self._max_rounds = max_rounds
-        self._settle_seconds = settle_seconds      # 滑动后等待校验动画
-        self._redetect_wait_seconds = redetect_wait_seconds  # 检测失败后的过渡等待
+        self._settle_seconds = settle_seconds  # 截图前及滑动后等待页面稳定
         self._clock: "Clock" = clock if clock is not None else RealClock()
 
     def _capture(self, context: "TaskContext") -> Optional[bytes]:
@@ -399,8 +446,22 @@ class SlideCaptchaSolver:
 
         def send(events):
             script = "".join(f"sendevent {tdev} {t} {c} {v}; " for t, c, v in events)
-            subprocess.run([adb, "-s", dev, "shell", script],
-                           capture_output=True, timeout=20)
+            last_error = None
+            for _ in range(2):
+                try:
+                    result = subprocess.run(
+                        [adb, "-s", dev, "shell", script],
+                        capture_output=True,
+                        timeout=20,
+                    )
+                    if result.returncode == 0:
+                        return
+                    last_error = RuntimeError(
+                        f"sendevent 返回码 {result.returncode}"
+                    )
+                except Exception as exc:  # 单批写入异常同样只重试一次
+                    last_error = exc
+            raise RuntimeError("sendevent 批量事件写入失败") from last_error
 
         x = sx
         y = sy
@@ -425,8 +486,9 @@ class SlideCaptchaSolver:
 
         循环节奏（最多 ``max_rounds`` 轮）：
 
-        1. 新鲜截图 → ``detect_slide``；检测不到时等待 ``redetect_wait_seconds``
-           后复检一次（可能是弹窗过渡态），仍检测不到才放弃（绝不盲滑）；
+        1. 等待页面稳定后取新鲜截图 → ``detect_slide``；检测不到时再等待
+           ``settle_seconds / 2`` 后重拍并复检一次（可能是弹窗过渡态），
+           仍检测不到才放弃（绝不盲滑）；
         2. 用新鲜帧的 raw 距离发 sendevent 拟人轨迹（ease-out 变速 + y 抖动 +
            过冲回调；单段 swipe 的匀速直线会被行为指纹识别拒绝→回弹）；
         3. 等待 ``settle_seconds`` 让校验动画走完，再取新鲜帧判定；
@@ -441,29 +503,40 @@ class SlideCaptchaSolver:
         轮次耗尽后返回 ``solved=False`` → guard 进入人工等待。
         """
         details = []
-        redetect_used = False
         for round_no in range(1, self._max_rounds + 1):
+            self._clock.sleep(self._settle_seconds, context.token)
             data = self._capture(context)
             if not data:
                 return SolveResult(False, "无法获取验证码截图", data={"rounds": details})
             detection = detect_slide(data)
             if not detection.found:
-                if redetect_used:
+                first_error = detection.error or "未检测到可滑动的验证码"
+                self._clock.sleep(self._settle_seconds / 2, context.token)
+                retry_data = self._capture(context)
+                if not retry_data:
                     return SolveResult(
                         False,
-                        detection.error or "未检测到可滑动的验证码",
+                        f"首次检测失败: {first_error}; 复检失败: 无法获取验证码截图",
                         data={"track": detection.track, "slider": detection.slider,
                               "rounds": details},
                     )
-                redetect_used = True
-                self._clock.sleep(self._redetect_wait_seconds, context.token)
+                retry_detection = detect_slide(retry_data)
+                if not retry_detection.found:
+                    retry_error = retry_detection.error or "未检测到可滑动的验证码"
+                    return SolveResult(
+                        False,
+                        f"首次检测失败: {first_error}; 复检失败: {retry_error}",
+                        data={
+                            "track": retry_detection.track,
+                            "slider": retry_detection.slider,
+                            "rounds": details,
+                        },
+                    )
                 details.append(
-                    f"第 {round_no} 轮未检测到轨道（{detection.error}），等待 "
-                    f"{self._redetect_wait_seconds:.1f}s 复检"
+                    f"第 {round_no} 轮首次检测失败（{first_error}），重拍后检测成功"
                 )
-                continue
+                detection = retry_detection
 
-            redetect_used = False
             sx, sy = detection.slider_center
             gap_x = detection.slider_center[0] + detection.distance
 
