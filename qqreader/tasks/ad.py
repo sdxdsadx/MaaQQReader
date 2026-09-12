@@ -318,11 +318,21 @@ class AdTaskAdapter(PlannedTaskAdapter):
                 )
             # 「去体验N秒」浏览型广告：无 X、页面不滚动，「跳过」在顶部提示行。
             # 必须先点跳过；live 下滑处理对它无效（页面内容固定）。
-            if self._has_text(context, "去体验") and self._has_text(
-                context, self._skip_text
-            ):
-                # 「跳过」在顶部提示行（无独立 asset），用实测坐标点击。
-                return self._execute(Action.tap_point(688, 30), context)
+            if self._has_text(context, "去体验"):
+                # 浏览型拉活广告：跳过会弹「确定要退出吗」，两个按钮语义：
+                # 去领取奖励=跳第三方体验后再领（无法自动化）；坚持退出=放弃。
+                # 策略：先点跳过；弹窗若已有「坚持退出」则点它；否则 BACK 兜底。
+                if self._has_text(context, "坚持退出"):
+                    tries = int(context.get("browse_exit_tries", 0))
+                    context.update_data(browse_exit_tries=tries + 1)
+                    return self._execute(Action.tap_feature(self._force_exit_key), context)
+                if self._has_text(context, "确定要退出吗"):
+                    waits = int(context.get("ad_play_waits", 0))
+                    context.update_data(ad_play_waits=waits + 1)
+                    if waits >= 6:
+                        return self._execute(Action.press_back(), context)
+                    return self._execute(Action.wait(2.0), context)
+                return self._execute(Action.tap_point(684, 24), context)
             # Modal buttons remain actionable even when the live ad is visible
             # behind the overlay. Reobserve after each action before scrolling.
             if is_live:
