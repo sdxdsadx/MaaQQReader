@@ -65,8 +65,37 @@ def run_once(idx: int) -> Path:
         f"--task DailyAdFlow --timeout-minutes 40"
     )
     with open(log, "w", encoding="utf-8") as fh:
-        subprocess.run(cmd, shell=True, stdout=fh, stderr=fh, cwd=str(ROOT), timeout=42 * 60)
+        proc = subprocess.Popen(
+            cmd, shell=True, stdout=fh, stderr=fh, cwd=str(ROOT),
+        )
+        # 看门狗: 每 30s 检查日志尾行，同一行持续 >180s 视为卡死（issue #2 现象）。
+        last_sig = None
+        last_change = time.time()
+        while proc.poll() is None:
+            time.sleep(30)
+            if proc.poll() is not None:
+                break
+            sig = _log_signature(log)
+            now = time.time()
+            if sig != last_sig:
+                last_sig = sig
+                last_change = now
+            elif now - last_change > 180:
+                print(f"[watchdog] 日志 180s 无变化（{sig}）→ 杀进程", flush=True)
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                               capture_output=True, timeout=30)
+                break
     return log
+
+
+def _log_signature(log: Path) -> str:
+    """日志最后一条 observe 行（页面指纹），用于卡死检测。"""
+    try:
+        rows = log.read_text(encoding="utf-8", errors="ignore").splitlines()
+        tail = [r for r in rows[-8:] if r.strip()]
+        return tail[-1][:120] if tail else ""
+    except OSError:
+        return ""
 
 
 def create_issue(title: str, body: str) -> str | None:
