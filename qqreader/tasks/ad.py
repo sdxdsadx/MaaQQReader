@@ -241,6 +241,16 @@ class AdTaskAdapter(PlannedTaskAdapter):
             # Close is asynchronous: a fresh screenshot can still contain the
             # outgoing ad. Never queue Back while that close is in flight.
             return self._execute(Action.wait(settle), context)
+        # UNKNOWN 兜底：连续 6 次未识别（游戏中心等异常页）时按返回键
+        # 逐层退出，直到回到 HOME/书架可识别页。
+        if state is None:
+            unknowns = int(context.get("ad_unknown_backs", 0))
+            if unknowns >= 6 and unknowns < 14:
+                context.update_data(ad_unknown_backs=unknowns + 1)
+                return self._execute(Action.press_back(), context)
+            context.update_data(ad_unknown_backs=unknowns + 1)
+        else:
+            context.update_data(ad_unknown_backs=0)
         # 书城 tab 上没有奖励入口（home_ocr_reward_entry 在书架 tab）。
         # HOME 状态下找不到入口文案时先点底部「书架」tab（issue: 书城页空转）。
         if state is PageState.HOME:
