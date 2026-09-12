@@ -321,7 +321,8 @@ class AdTaskAdapter(PlannedTaskAdapter):
             if self._has_text(context, "去体验") and self._has_text(
                 context, self._skip_text
             ):
-                return self._execute(Action.tap_feature(self._skip_key), context)
+                # 「跳过」在顶部提示行（无独立 asset），用实测坐标点击。
+                return self._execute(Action.tap_point(688, 30), context)
             # Modal buttons remain actionable even when the live ad is visible
             # behind the overlay. Reobserve after each action before scrolling.
             if is_live:
