@@ -172,6 +172,7 @@ class AdTaskAdapter(PlannedTaskAdapter):
             "上滑或点击",
             "扭一扭或点击",
             "下滑",
+            "去体验",
         ),
         live_scroll_wait_seconds: float = 5.0,
         max_live_scroll_swipes: int = 8,
