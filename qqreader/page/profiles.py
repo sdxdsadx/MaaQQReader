@@ -477,6 +477,15 @@ def build_default_state_definitions(
             min_score=0.4,
             min_matched=2,
             description="游戏运行中：领币悬浮 / HUD（横竖屏均兼容）",
+            # issue #12：游戏中心列表页自带「领币」入口文案（真机
+            # 2026-09-13 score=0.605 被误判成 GAME_RUNNING，导致在列表页
+            # 空转 40 分钟）。列表页的「阅游戏/大家都在玩」板块指纹出现时
+            # 本状态一律不确认，把决策权交回 GAME_CENTER 及 adapter 的
+            # 列表页救援分支。
+            excluded_texts=(
+                keys.game_ocr_browse_games,
+                keys.game_ocr_everyone_playing,
+            ),
         ),
         StateDefinition(
             state=PageState.GAME_MENU,

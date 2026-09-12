@@ -238,6 +238,9 @@ class GameTaskAdapter(PlannedTaskAdapter):
         ),
         modal_text: str = DEFAULT_FEATURE_KEYS.game_ocr_agreement_modal,
         max_confirm_clicks: int = 3,
+        #: issue #12：游戏中心列表页救援开关与「在线玩」tab 下首卡坐标。
+        list_page_rescue_enabled: bool = True,
+        list_page_card_points: Optional[Tuple[Action, ...]] = None,
     ) -> None:
         super().__init__(
             device=device,
@@ -274,10 +277,12 @@ class GameTaskAdapter(PlannedTaskAdapter):
             hall_swipe_action or Action.swipe(360, 420, 360, 980, 500)
         )
         default_game_center_points = (
-            Action.tap_point(98, 981),
-            Action.tap_point(254, 981),
-            Action.tap_point(408, 980),
-            Action.tap_point(564, 982),
+            # issue #12：「在线玩」tab 下游戏卡行右侧「玩」按钮坐标
+            # （真机 2026-09-13：行 y≈274/430/590）。旧横排
+            # (98/254/408/564, 981) 点击落在页面底部无效区，已废弃。
+            Action.tap_point(650, 274),
+            Action.tap_point(650, 430),
+            Action.tap_point(650, 590),
         )
         if game_center_online_play_points:
             self._game_center_online_play_points = tuple(
@@ -314,6 +319,20 @@ class GameTaskAdapter(PlannedTaskAdapter):
         self._confirm_key = confirm_key
         self._modal_text = modal_text
         self._max_confirm_clicks = max_confirm_clicks
+        # issue #12：游戏中心列表页救援——OCR「在线玩」+「阅游戏」同屏时，
+        # 依次尝试「在线玩」tab 下首个游戏卡行的「玩」按钮坐标（2026-09-13
+        # 真机布局：行1 幻灵召唤 y≈274，行2 深入地府 y≈430，行3 王座守护者
+        # y≈590；右侧 x≈650）。旧 (98/254/408/564, 981) 是「玩」字被 OCR
+        # 压字前测的图标横排，点击落在页面底部无效区，已废弃。
+        self._list_page_rescue_enabled = list_page_rescue_enabled
+        self._list_page_card_points = tuple(
+            list_page_card_points
+            or (
+                Action.tap_point(650, 274),
+                Action.tap_point(650, 430),
+                Action.tap_point(650, 590),
+            )
+        )
 
     def _announcement_dismiss_action(self, context: TaskContext) -> Action:
         """公告弹窗关闭动作：有「跳过」点跳过，否则按返回键。"""
@@ -324,7 +343,19 @@ class GameTaskAdapter(PlannedTaskAdapter):
         return Action.press_back()
 
     def advance(self, context: TaskContext) -> StepResult:
+        keys = DEFAULT_FEATURE_KEYS
         state = context.decision.state if context.decision is not None else None
+
+        # issue #12：真机日志中列表页被误判成 GAME_RUNNING（空转 40 分钟），
+        # 但其 OCR 指纹是列表页。无论识别器给出什么状态，只要「在线玩」+
+        # 「阅游戏」同屏且尚未退出游戏，一律走列表页救援。
+        if (
+            self._list_page_rescue_enabled
+            and not context.get("game_exit_done")
+            and self._has_text(context, self._online_play_text)
+            and self._has_text(context, keys.game_ocr_browse_games)
+        ):
+            return self._advance_game_center(context)
 
         # 更新公告弹窗：OCR 命中「跳过」就点它，否则按返回键关闭（真机 2026-09-11）。
         if state is PageState.GAME_ANNOUNCEMENT:
@@ -391,14 +422,10 @@ class GameTaskAdapter(PlannedTaskAdapter):
         # 游戏中心：OCR 识别到「在线玩」后，按顺序点击游戏卡按钮坐标。
         # 部分卡片是「下载游戏」详情页，点进去后恢复流程会返回 GAME_CENTER，
         # 下一次自动换下一张卡片，直到进入可玩的登录/运行页。
+        # issue #12：改为「OCR 定位优先 + 坐标兜底」——旧固定横排坐标落在
+        # 页面底部无效区（真机 2026-09-13 空转 40 分钟的直接推手）。
         if state is PageState.GAME_CENTER:
-            if self._has_text(context, self._online_play_text):
-                attempts = int(context.get("game_center_attempts", 0))
-                points = self._game_center_online_play_points
-                action = points[attempts % len(points)]
-                context.update_data(game_center_attempts=attempts + 1)
-                return self._execute(action, context)
-            return self._execute(self._carousel_action, context)
+            return self._advance_game_center(context)
 
         # 登录/协议页：先勾选协议，再点「登录游戏 / 进入游戏」。
         if state is PageState.GAME_LOADING:
@@ -458,6 +485,14 @@ class GameTaskAdapter(PlannedTaskAdapter):
             # QQR-20：游戏加载/协议页也可能出现「领币」，必须先等真正进入
             # 游戏运行态后再开始计时，否则会提前退出。
             if self._has_any_text(context, self._RUNNING_BLOCK_TEXTS):
+                # issue #12：兜底——列表页指纹出现时，即使仍在阻塞词名单
+                # （旧的兜底分支只空转），也必须推进列表页救援。
+                if (
+                    self._list_page_rescue_enabled
+                    and not context.get("game_exit_done")
+                    and self._has_text(context, keys.game_ocr_browse_games)
+                ):
+                    return self._advance_game_center(context)
                 context.update_data(game_started_at=None)
                 return self._handle_loading_like(
                     context, note="游戏仍在加载/协议页，暂不计时"
@@ -484,6 +519,29 @@ class GameTaskAdapter(PlannedTaskAdapter):
                     progress=False,
                 )
         return super().advance(context)
+
+    def _advance_game_center(self, context: TaskContext) -> StepResult:
+        """游戏中心列表页推进（issue #12：OCR 定位优先 + 坐标兜底）。
+
+        * OCR 命中「在线玩」文案（roi (0,800,720,1280) 下半屏，避开顶部
+          不可点击的分类 tab）→ 直接按 OCR 框中心点击；
+        * OCR 未命中时，按顺序点击「在线玩」tab 下首个游戏卡行的「玩」
+          按钮坐标（行 y≈274/430/590，右侧按钮 x≈650）；
+        * 全部失败退回旧轮播图入口；``game_center_attempts`` 计数驱动
+          协议模态框换卡轮换（issue #13 依赖该计数）。
+        """
+        attempts = int(context.get("game_center_attempts", 0))
+        if self._has_text(context, self._online_play_text):
+            step = self._execute(
+                Action.tap_feature(self._online_play_key), context
+            )
+            if step.progress:
+                context.update_data(game_center_attempts=attempts + 1)
+                return step
+        points = self._list_page_card_points or self._game_center_online_play_points
+        action = points[attempts % len(points)]
+        context.update_data(game_center_attempts=attempts + 1)
+        return self._execute(action, context)
 
     def _handle_loading_like(
         self, context: TaskContext, *, note: str = "等待游戏加载/协议页"
@@ -634,10 +692,11 @@ def build_game_definition(
         carousel_action=Action.tap_point(360, 360),
         hall_swipe_action=Action.swipe(360, 420, 360, 980, 500),
         game_center_online_play_points=(
-            Action.tap_point(98, 981),
-            Action.tap_point(254, 981),
-            Action.tap_point(408, 980),
-            Action.tap_point(564, 982),
+            # issue #12：「在线玩」tab 下游戏卡行右侧「玩」按钮坐标
+            # （真机 2026-09-13：行 y≈274/430/590）。
+            Action.tap_point(650, 274),
+            Action.tap_point(650, 430),
+            Action.tap_point(650, 590),
         ),
         agreement_action=Action.tap_point(157, 1032),
         agreement_action_alt=Action.tap_point(152, 1066),

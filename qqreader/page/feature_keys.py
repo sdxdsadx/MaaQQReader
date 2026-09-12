@@ -106,6 +106,11 @@ class FeatureKeys:
     game_ocr_login_game: str = "登录游戏"
     #: 游戏中心页标题/标识。
     game_ocr_game_center: str = "游戏中心"
+    #: issue #12：游戏中心列表页分类 tab/板块文案（真机 2026-09-13）。
+    #: 「阅游戏」=列表页「在线玩」分类标题；「大家都在玩」=通用板块标题。
+    #: 两者同屏是列表页的稳定指纹（也是对 GAME_RUNNING 的负向锚点）。
+    game_ocr_browse_games: str = "阅游戏"
+    game_ocr_everyone_playing: str = "大家都在玩"
     #: 游戏协议勾选框文案；点击其左侧坐标切换同意。
     game_ocr_agreement: str = "我已详细阅读并同意"
     #: 游戏隐私/协议弹窗的「同意」按钮（进入部分小游戏时会弹出）。

@@ -101,6 +101,11 @@ class StateDefinition:
     min_score: float = 0.4
     min_matched: int = 2
     description: str = ""
+    #: issue #12：排除词（负向锚点）。观测 OCR 中任一排除词出现时，本状态
+    #: 一律不确认。用于挡住「弱特征组合」在错误页面上凑分误判——例如
+    #: 游戏中心列表页自带「领币」入口文案 + 竖屏即可凑满 GAME_RUNNING 的
+    #: 确认阈值（真机 2026-09-13 score=0.605），让任务在列表页空转至超时。
+    excluded_texts: Tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.state is PageState.UNKNOWN:
@@ -111,12 +116,44 @@ class StateDefinition:
             raise ContractViolation("min_matched 必须 >= 1")
         if not 0.0 <= self.min_score <= 1.0:
             raise ContractViolation("min_score 必须在 0..1")
+        for marker in self.excluded_texts:
+            if not isinstance(marker, str) or not marker.strip():
+                raise ContractViolation("excluded_texts 必须是非空字符串")
+
+    def has_excluded_text(self, observation: PageObservation) -> bool:
+        """观测 OCR 是否命中任一排除词（负向锚点）。"""
+        if not self.excluded_texts:
+            return False
+        for text in observation.ocr_texts:
+            if not text or not text.strip():
+                continue
+            for marker in self.excluded_texts:
+                if marker in text:
+                    return True
+        return False
 
     @property
     def required_features(self) -> Tuple[FeatureSpec, ...]:
         return tuple(f for f in self.features if f.required)
 
     def evaluate(self, observation: PageObservation) -> StateCandidate:
+        # issue #12：排除词命中时直接按零证据处理，不进入正常打分。
+        # 部分命中（如 0.6 分）不足以确认，但会污染 UNKNOWN 时的 top 候选
+        # 排序与 confidence，并把 TEMPORARY_MISMATCH 伪装成「目标页局部证据」。
+        if self.has_excluded_text(observation):
+            matches = tuple(
+                FeatureMatch(spec=spec, matched=False, score=0.0, detail="排除词命中，本状态不参与确认")
+                for spec in self.features
+            )
+            return StateCandidate(
+                state=self.state,
+                score=0.0,
+                matched_count=0,
+                total_count=len(matches),
+                matches=matches,
+                required_ok=False,
+                confirmed=False,
+            )
         matches = tuple(match_feature(spec, observation) for spec in self.features)
         total_weight = sum(m.spec.weight for m in matches)
         score = (
@@ -240,8 +277,12 @@ class PageStateRecognizer:
             raise ContractViolation(f"没有 {state.value} 的状态定义") from exc
 
     def evaluate(self, observation: PageObservation) -> StateDecision:
+        # issue #12：带排除词的状态先剔除——排除词命中说明当前页面必然不是
+        # 该状态（如游戏中心列表页不是 GAME_RUNNING），即使其它特征凑分达标。
         candidates = tuple(
-            definition.evaluate(observation) for definition in self._definitions.values()
+            definition.evaluate(observation)
+            for definition in self._definitions.values()
+            if not definition.has_excluded_text(observation)
         )
         confirmed = [c for c in candidates if c.confirmed]
         if not confirmed:

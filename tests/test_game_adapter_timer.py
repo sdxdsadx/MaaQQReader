@@ -194,7 +194,7 @@ def test_game_flow_end_to_end_with_real_adapter() -> None:
             observer.go("REWARD_DONE")
 
     def on_tap_point(x: int, y: int) -> None:
-        if (x, y) in ((98, 981), (254, 981), (408, 980), (564, 982)):
+        if (x, y) in ((650, 274), (650, 430), (650, 590)):
             observer.go("GAME_AGREEMENT")
         elif (x, y) == (360, 360):
             observer.go("GAME_AGREEMENT")
@@ -224,8 +224,11 @@ def test_game_flow_end_to_end_with_real_adapter() -> None:
     assert result.outcome is TaskOutcome.SUCCESS
     assert ("tap_feature", HOME_REWARD_KEY) in device.calls
     assert ("swipe", 360, 420, 360, 980, 500) in device.calls
+    # issue #12：游戏中心列表页推进 = OCR 定位优先（真机 2026-09-13）。
+    # GAME_CENTER 页 OCR 命中「在线玩」→ 直接 tap_feature 进入下一页，
+    # 无需坐标兜底（坐标轮换由 test_qqr20 单测覆盖）。
     assert ("tap_feature", GAME_ONLINE_PLAY_KEY) in device.calls
-    assert ("tap_point", 98, 981) in device.calls
+    assert ("tap_point", 98, 981) not in device.calls
     assert ("tap_point", 157, 1032) in device.calls
     assert ("tap_point", 152, 1066) in device.calls
     assert ("tap_feature", GAME_ENTER_KEY) in device.calls

@@ -9,6 +9,7 @@ from qqreader.tasks.game import build_game_action_plan
 from tests.helpers import (
     QQ,
     SimulatedDevice,
+    game_center_list_observation,
     game_center_observation,
     game_hall_observation,
     game_running_observation,
@@ -106,18 +107,44 @@ def test_game_center_state() -> None:
     assert decision.state is PageState.GAME_CENTER
 
 
-def test_game_center_taps_first_card_point_then_cycles() -> None:
+def test_game_center_ocr_taps_online_play_then_cycles_card_points() -> None:
+    """issue #12：游戏中心列表页推进改为「OCR 定位优先 + 卡片坐标兜底」。
+
+    * OCR 命中「在线玩」→ 直接 tap_feature（真机 2026-09-13 列表页 OCR）；
+    * OCR 未命中 → 按「在线玩」tab 下游戏卡行「玩」按钮坐标轮换
+      (650, 274) → (650, 430) → (650, 590)。旧横排 (98/254/408/564, 981)
+      落在页面底部无效区，已废弃。
+    """
     device = SimulatedDevice()
     adapter = _adapter(device)
-    context = make_context(game_center_observation(), run_state=RunState.RUNNING)
+    context = make_context(game_center_list_observation(), run_state=RunState.RUNNING)
+
+    # 根因回归锚点：列表页 OCR 含「领币」，修复前被 GAME_RUNNING 以 0.605
+    # 误确认（排除词「阅游戏/大家都在玩」命中后必须让位 GAME_CENTER）。
+    assert make_recognizer().evaluate(game_center_list_observation()).state is PageState.GAME_CENTER
 
     first = adapter.advance(context)
-    second = adapter.advance(context)
+    assert first.actions == (
+        f"{ActionKind.TAP_FEATURE.value}:{ONLINE_PLAY_KEY}",
+    )
+    assert ("tap_feature", ONLINE_PLAY_KEY) in device.calls
 
-    assert first.actions == (ActionKind.TAP_POINT.value,)
+    # OCR 未命中「在线玩」的页面（仅「游戏中心」标题）走坐标兜底。
+    fallback = make_context(
+        game_center_observation(ocr_texts=("游戏中心",)),
+        run_state=RunState.RUNNING,
+    )
+    second = adapter.advance(fallback)
+    third = adapter.advance(fallback)
+    fourth = adapter.advance(fallback)
+
     assert second.actions == (ActionKind.TAP_POINT.value,)
-    assert ("tap_point", 98, 981) in device.calls
-    assert ("tap_point", 254, 981) in device.calls
+    assert third.actions == (ActionKind.TAP_POINT.value,)
+    assert fourth.actions == (ActionKind.TAP_POINT.value,)
+    assert ("tap_point", 650, 274) in device.calls
+    assert ("tap_point", 650, 430) in device.calls
+    assert ("tap_point", 650, 590) in device.calls
+    assert ("tap_point", 98, 981) not in device.calls
 
 
 def test_exit_done_never_reenters_game() -> None:

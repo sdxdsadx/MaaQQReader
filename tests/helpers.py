@@ -163,6 +163,30 @@ def game_center_observation(**overrides: object) -> PageObservation:
     return PageObservation(**base)  # type: ignore[arg-type]
 
 
+def game_center_list_observation(**overrides: object) -> PageObservation:
+    """issue #12：游戏中心「在线玩」分类下的列表页（真机 2026-09-13 OCR）。
+
+    注意 ``current_app=None``（真机 ADB 前台探测失败时的真实值）；该页
+    自带「领币」入口文案，修复前会被误判成 GAME_RUNNING 空转至超时。
+    """
+    base = dict(
+        current_app=None,
+        orientation=Orientation.PORTRAIT,
+        ocr_texts=(
+            "3:04",
+            "青云诀之...",
+            "幻灵召唤",
+            "大家都在玩",
+            "精品热门",
+            "在线玩",
+            "乐享元游青云诀之伏魔记",
+            "阅游戏",
+        ),
+    )
+    base.update(overrides)
+    return PageObservation(**base)  # type: ignore[arg-type]
+
+
 def game_running_observation(**overrides: object) -> PageObservation:
     base = dict(
         current_app=QQ,
