@@ -253,10 +253,14 @@ def test_reading_entry_chain_prefers_bookstore_adaptation() -> None:
     data = _load_pipeline()
     nxt = data["DirectReadingFlow"]["next"]
     assert nxt[0] == "EnsureShelfOrGoto", nxt
+    # issue #14 落地页恢复链：开屏跳过/书籍简介继续阅读/榜单页 BACK
     assert set(nxt[1:]) == {
         "ReadingAlreadyInBook",
         "RewardGotoReading",
         "ReadingGotoShelf",
+        "SplashSkipAd",
+        "BookIntroContinueRead",
+        "BookRankBackOut",
     }
 
 
@@ -285,7 +289,8 @@ def test_bookstore_nodes_detect_and_click_shelf_tab() -> None:
         assert detector["recognition"] == "OCR"
         assert detector["expected"] == "排行榜|男生|免费"
         assert detector["action"] == "DoNothing"
-        assert detector["next"] == [tap]
+        # issue #14：检测器 next 追加落地页恢复分支（保持 tap 为首选）
+        assert detector["next"][0] == tap
         tapper = data[tap]
         assert tapper["recognition"] == "OCR"
         assert tapper["expected"] == "^书架$"
