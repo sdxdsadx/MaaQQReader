@@ -12,7 +12,14 @@
 * OCR 复查到验证码文案（安全验证/拖动滑块等）仍在时，返回 ``solved=False``，
   绝不谎报成功；OCR 不可用（无文本帧）时提交一次滑动并交由 guard 复核；
 * 检测不到轨道/滑块/缺口时等待后复检一次，仍失败返回 ``solved=False``，
-  绝不盲滑；缺少 OpenCV/numpy 时返回明确原因，由 guard 进入人工等待。
+  绝不盲滑；缺少 OpenCV/numpy 时返回明确原因，由 guard 进入人工等待；
+* issue #15 两级增强（2026-09-14 实测 autocap_r1_pre.png 变体）：
+  1) 轨道行先按连续性聚成「灰带」，选包含滑块中线的带——新变体在轨道
+     上方有一条更宽的深色渐变带，旧的 min/max 合并把轨道框成两带之间的
+     杂区，导致缺口 ROI 对不准；
+  2) ``_find_gap_x`` 的 Otsu/Canny 两级都落空时，回退「滑块右缘 + 固定
+     偏移」估算缺口（历史活体实证成功距离 294/338px，轨道右端≈642），
+     偏移与距离上下限参数化便于新变体再校准。
 """
 
 from __future__ import annotations
@@ -49,6 +56,15 @@ _TRACK_GRAY_MAX = 220
 _TRACK_MIN_SPAN_RATIO = 0.40
 _SPLIT_TRACK_MIN_DENSITY = 0.70
 _TRACK_SEARCH_HALF_BAND = 60
+
+# issue #15：``_find_gap_x`` 两级主检测（Otsu 轮廓 / Canny 密度）都落空时，
+# 回退「滑块右缘 + 固定偏移」估算缺口。历史活体实证成功滑动距离 294/338px
+# （滑块中心 → 缺口中心），对应缺口中心在滑块右缘右侧 235/279px（均值
+# 257px ≈ 2.18 × 滑块宽 118）。距离上下限防止把回退用在几何离谱的帧上。
+# 新验证码变体只需重新标定这几个常数。
+_GAP_FALLBACK_OFFSET_RATIO = 2.18
+_GAP_FALLBACK_MIN_DISTANCE = 120
+_GAP_FALLBACK_MAX_DISTANCE_RATIO = 0.90
 
 
 @dataclass(frozen=True)
@@ -110,16 +126,35 @@ def _find_track_and_slider(image: Any):
         y0 = max(0, int(slider_cy - _TRACK_SEARCH_HALF_BAND))
         y1 = min(h, int(slider_cy + _TRACK_SEARCH_HALF_BAND))
         rows = []
-        best_row = None
         for yy in range(y0, y1):
-            max_run, best_start = _longest_gray_run(gray, yy)
+            max_run, _ = _longest_gray_run(gray, yy)
             if max_run > w * _TRACK_MIN_SPAN_RATIO:
                 rows.append(yy)
-                if best_row is None or max_run > best_row[0]:
-                    best_row = (max_run, best_start, yy)
-        if rows and best_row is not None:
-            y_top = min(rows)
-            y_bot = max(rows)
+        if rows:
+            # issue #15：轨道行可能不止一条带（新变体在轨道上方还有一条
+            # 更宽的深色渐变带）。按 y 连续性聚成「带」，优先选包含滑块
+            # 中线的带，其次按灰像素数量（真实轨道最宽），避免把轨道框成
+            # 两带之间的杂区导致缺口 ROI 对不准。
+            slider_mid_y = slider[1] + slider[3] / 2
+            bands = []
+            for yy in rows:
+                if bands and yy - bands[-1][-1] <= 2:
+                    bands[-1].append(yy)
+                else:
+                    bands.append([yy])
+
+            def _band_score(band: list) -> Tuple[int, int]:
+                y_top_b = band[0]
+                y_bot_b = band[-1]
+                mid_y_b = (y_top_b + y_bot_b) // 2
+                mid = gray[mid_y_b, :]
+                band_mask = (mid >= _TRACK_GRAY_MIN) & (mid <= _TRACK_GRAY_MAX)
+                inside = y_top_b <= slider_mid_y <= y_bot_b
+                return (1 if inside else 0, int(band_mask.sum()))
+
+            best_band = max(bands, key=_band_score)
+            y_top = best_band[0]
+            y_bot = best_band[-1]
             mid_y = (y_top + y_bot) // 2
             mid = gray[mid_y, :]
             mask = (mid >= _TRACK_GRAY_MIN) & (mid <= _TRACK_GRAY_MAX)
@@ -227,7 +262,15 @@ def _find_track_and_slider(image: Any):
     return track, slider
 
 
-def _find_gap_x(gray: Any, track: Tuple[int, int, int, int], slider: Tuple[int, int, int, int]) -> Optional[int]:
+def _find_gap_x(
+    gray: Any,
+    track: Tuple[int, int, int, int],
+    slider: Tuple[int, int, int, int],
+    *,
+    fallback_offset_ratio: float = _GAP_FALLBACK_OFFSET_RATIO,
+    fallback_min_distance: int = _GAP_FALLBACK_MIN_DISTANCE,
+    fallback_max_distance_ratio: float = _GAP_FALLBACK_MAX_DISTANCE_RATIO,
+) -> Optional[int]:
     x, y, cw, ch = track
     h, w = gray.shape[:2]
     x1 = max(0, x + 10)
@@ -235,7 +278,13 @@ def _find_gap_x(gray: Any, track: Tuple[int, int, int, int], slider: Tuple[int, 
     y1 = max(0, y - 300)
     y2 = max(y1 + 20, y - 35)
     if x2 - x1 < 30 or y2 - y1 < 30:
-        return None
+        return _gap_fallback_x(
+            track,
+            slider,
+            offset_ratio=fallback_offset_ratio,
+            min_distance=fallback_min_distance,
+            max_distance_ratio=fallback_max_distance_ratio,
+        )
 
     roi = gray[y1:y2, x1:x2]
     _, th = cv2.threshold(roi, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
@@ -268,16 +317,60 @@ def _find_gap_x(gray: Any, track: Tuple[int, int, int, int], slider: Tuple[int, 
     search_start = max(0, slider[0] - x1 + slider[2])
     search_end = max(search_start + 10, roi.shape[1] - 60)
     if search_start >= search_end:
-        return None
+        return _gap_fallback_x(
+            track,
+            slider,
+            offset_ratio=fallback_offset_ratio,
+            min_distance=fallback_min_distance,
+            max_distance_ratio=fallback_max_distance_ratio,
+        )
     search = col_density[search_start:search_end]
     if search.size < 10:
-        return None
+        return _gap_fallback_x(
+            track,
+            slider,
+            offset_ratio=fallback_offset_ratio,
+            min_distance=fallback_min_distance,
+            max_distance_ratio=fallback_max_distance_ratio,
+        )
     kernel = np.ones(7, dtype=float) / 7
     smoothed = np.convolve(search, kernel, mode="same")
     idx = int(np.argmax(smoothed))
     if smoothed[idx] < 1.0:
-        return None
+        return _gap_fallback_x(
+            track,
+            slider,
+            offset_ratio=fallback_offset_ratio,
+            min_distance=fallback_min_distance,
+            max_distance_ratio=fallback_max_distance_ratio,
+        )
     return int(x1 + search_start + idx)
+
+
+def _gap_fallback_x(
+    track: Tuple[int, int, int, int],
+    slider: Tuple[int, int, int, int],
+    *,
+    offset_ratio: float,
+    min_distance: int,
+    max_distance_ratio: float,
+) -> Optional[int]:
+    """issue #15 回退：滑块右缘 + 固定偏移估算缺口中心 x。
+
+    Otsu/Canny 两级主检测都失败时（新验证码变体的缺口纹理不规则），
+    按历史活体实证的均值偏移估算。距离必须落在 [min_distance,
+    track_width * max_distance_ratio] 内，否则认为几何不可信，维持
+    None（绝不为凑结果返回离谱坐标）。
+    """
+    slider_center = slider[0] + slider[2] // 2
+    gap_x = int(round(slider[0] + slider[2] + slider[2] * offset_ratio))
+    distance = gap_x - slider_center
+    max_distance = int(track[2] * max_distance_ratio)
+    if distance < min_distance or distance > max_distance:
+        return None
+    if gap_x > track[0] + track[2]:
+        return None
+    return gap_x
 
 
 def detect_slide(image_bytes: bytes) -> SlideDetection:

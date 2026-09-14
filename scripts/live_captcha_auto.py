@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import random
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -56,9 +57,16 @@ def ocr_texts(client, shot) -> list:
 def snap(client, tag: str):
     """截图 → 保存 → detect_slide → OCR。返回 (detection, texts)。"""
     s = client.screencap()
-    data = s.data if hasattr(s, "data") else s
-    (OUT / f"autocap_{tag}.png").write_bytes(data)
-    return detect_slide(data), ocr_texts(client, s)
+    # Maa Screenshot.data 在部分运行时是 RGBA 裸像素，不能直接交给
+    # cv2.imdecode。统一走 Screenshot.save() 让运行时编码成 PNG，再读回
+    # 字节；同时保留一份轮次截图，便于失败后复盘。
+    with tempfile.TemporaryDirectory(prefix="qqreader-captcha-") as temp_dir:
+        temp_path = Path(temp_dir) / f"autocap_{tag}.png"
+        s.save(str(temp_path))
+        png = temp_path.read_bytes()
+    OUT.mkdir(parents=True, exist_ok=True)
+    (OUT / f"autocap_{tag}.png").write_bytes(png)
+    return detect_slide(png), ocr_texts(client, s)
 
 
 def classify(texts: list) -> tuple:
