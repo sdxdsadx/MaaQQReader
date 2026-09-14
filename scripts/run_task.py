@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence
 
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
@@ -75,6 +75,25 @@ LEGACY_TIMING_NODE = {
     "DailyReadingFlow": "ReadingWaitOneMinute",
     "DailyAudiobookFlow": "AudiobookWaitOneMinute",
 }
+
+# issue #13：旧 run_maa_ad.py 打出最终结果 JSON 行后可能因 MAA 静态库
+# 析构挂死而不退出（实测 4000 后挂 25 分钟）。检测到最终 JSON 后最多再
+# 给这个宽限期，超时按 JSON 结果返回。
+LEGACY_FINAL_EXIT_GRACE_SECONDS = 30.0
+
+
+def _parse_final_result_line(line: str) -> Optional[Dict[str, Any]]:
+    """解析 run_maa_ad 的最终结果 JSON 行（形如 {"success": ..., "status": ...}）。"""
+    stripped = line.strip()
+    if not stripped.startswith("{") or not stripped.endswith("}"):
+        return None
+    try:
+        data = json.loads(stripped)
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or "success" not in data:
+        return None
+    return data
 
 
 def _find_legacy_runner(repo_root: Path) -> Optional[Path]:
@@ -145,6 +164,7 @@ def _run_legacy_task(task: str, config: Any, minutes: Optional[float]) -> int:
         str(config.machine.log_dir),
     ]
     print("[legacy] 调用旧 QQ 阅读流程: " + " ".join(command), flush=True)
+    final_result: Optional[Dict[str, Any]] = None
     try:
         process = subprocess.Popen(
             command,
@@ -157,7 +177,45 @@ def _run_legacy_task(task: str, config: Any, minutes: Optional[float]) -> int:
         if process.stdout is not None:
             for line in process.stdout:
                 print(line.rstrip(), flush=True)
-        return process.wait()
+                # issue #13：stdout 已给出最终结果 JSON 即认为任务已结束；
+                # 子进程可能因 MAA 析构挂死不退出，宽限期内仍不退就主动
+                # terminate，按 JSON 结果返回，绝不再无限死等 wait()。
+                parsed = _parse_final_result_line(line)
+                if parsed is not None:
+                    final_result = parsed
+                    break
+        if final_result is None:
+            return process.wait()
+        try:
+            return process.wait(timeout=LEGACY_FINAL_EXIT_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            print(
+                "[legacy] 最终结果已返回但旧流程 "
+                f"{LEGACY_FINAL_EXIT_GRACE_SECONDS:g}s 内未退出，主动终止",
+                flush=True,
+            )
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                # Windows 上 terminate() 可能只杀父进程：MAA 子线程挂死时
+                # 需要按 issue #13 人工恢复的方式整树强杀。
+                try:
+                    subprocess.run(
+                        ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                        capture_output=True,
+                        timeout=15,
+                    )
+                except (OSError, subprocess.SubprocessError) as kill_exc:
+                    print(f"[legacy] taskkill 兜底失败: {kill_exc}", flush=True)
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    print(
+                        "[legacy] 警告：旧流程进程可能仍残留，请手动 taskkill /T /F",
+                        flush=True,
+                    )
+            return 0 if final_result.get("success") else 2
     except OSError as exc:
         print(f"[legacy] 启动旧流程失败: {exc}", flush=True)
         return 3
