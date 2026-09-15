@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sys
 import time
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -19,11 +20,9 @@ sys.path.insert(0, str(ROOT))
 from qqreader.config import load_config
 from qqreader.maa.factory import build_maa_client
 
-config = load_config("configs/qqreader.local.json")
-client = build_maa_client(config)
-client.connect()
-
 LOG = ROOT / "runtime" / "logs" / "auto_read.log"
+ALLOWED_BOOK_KEYWORDS = ("宇智波",)
+client = None
 
 
 def log(msg: str) -> None:
@@ -36,6 +35,28 @@ def log(msg: str) -> None:
 def ocr_all():
     s = client.screencap()
     return client.recognize("OCR", {}, s).text_boxes()
+
+
+def _verify_book_allowed(client) -> tuple[bool, str]:
+    """确认当前页面顶部标题属于允许自动阅读的书源。"""
+    screenshot = client.screencap()
+    boxes = client.recognize("OCR", {}, screenshot).text_boxes()
+    title_lines = []
+    for text, box in boxes:
+        text = str(text).strip()
+        if text and box[1] < 100:
+            title_lines.append(text)
+
+    recognized = next(
+        (text for text in title_lines if any(keyword in text for keyword in ALLOWED_BOOK_KEYWORDS)),
+        None,
+    )
+    if recognized is not None:
+        return True, recognized
+
+    chapter = next((text for text in title_lines if re.search(r"第\s*\d+\s*章", text)), None)
+    observed = chapter or (" / ".join(title_lines) if title_lines else "未识别到正文页标题")
+    return False, f"当前书不在自动阅读白名单: {observed}"
 
 
 def body_first_line():
@@ -103,12 +124,21 @@ def is_auto_reading() -> bool:
 
 
 def main() -> int:
+    global client
+    config = load_config("configs/qqreader.local.json")
+    client = build_maa_client(config)
+    client.connect()
+
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--minutes", type=int, default=30)
     args, _ = ap.parse_known_args()
     duration = args.minutes * 60
     log(f"=== 自动阅读 {args.minutes} 分钟开始 ===")
+    allowed, message = _verify_book_allowed(client)
+    if not allowed:
+        log(message)
+        sys.exit(3)
     if is_auto_reading():
         log("已在自动阅读中 → 直接看护")
     elif not enable_auto_read():
