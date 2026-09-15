@@ -57,6 +57,7 @@ class FeatureKeys:
     ad_ocr_skip: str = "跳过"
     ad_ocr_close: str = "关闭"
     ad_ocr_continue: str = "继续观看"
+    ad_ocr_abandon_reward: str = "放弃奖励"
     #: 跳过广告时出现的「确定要退出吗?」弹窗按钮。
     ad_ocr_claim_after_exit: str = "去领取奖励"
     ad_ocr_force_exit: str = "坚持退出"

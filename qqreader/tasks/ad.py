@@ -131,6 +131,9 @@ class AdTaskAdapter(PlannedTaskAdapter):
         continue_key: str = feature_key(
             DEFAULT_FEATURE_KEYS, DEFAULT_FEATURE_KEYS.ad_ocr_continue
         ),
+        abandon_reward_key: str = feature_key(
+            DEFAULT_FEATURE_KEYS, DEFAULT_FEATURE_KEYS.ad_ocr_abandon_reward
+        ),
         close_key: str = feature_key(
             DEFAULT_FEATURE_KEYS, DEFAULT_FEATURE_KEYS.ad_ocr_close
         ),
@@ -151,6 +154,7 @@ class AdTaskAdapter(PlannedTaskAdapter):
         banner_text: str = DEFAULT_FEATURE_KEYS.reward_ocr_ad_banner,
         skip_text: str = DEFAULT_FEATURE_KEYS.ad_ocr_skip,
         continue_text: str = DEFAULT_FEATURE_KEYS.ad_ocr_continue,
+        abandon_reward_text: str = DEFAULT_FEATURE_KEYS.ad_ocr_abandon_reward,
         close_text: str = DEFAULT_FEATURE_KEYS.ad_ocr_close,
         claim_exit_text: str = DEFAULT_FEATURE_KEYS.ad_ocr_claim_after_exit,
         force_exit_text: str = DEFAULT_FEATURE_KEYS.ad_ocr_force_exit,
@@ -158,10 +162,6 @@ class AdTaskAdapter(PlannedTaskAdapter):
         completed_text: str = DEFAULT_FEATURE_KEYS.ad_ocr_completed,
         watch_partial_text: str = "立",
         watch_point_action: Optional[Action] = None,
-        offer_texts: tuple = (
-            DEFAULT_FEATURE_KEYS.ad_ocr_offer,
-            DEFAULT_FEATURE_KEYS.ad_ocr_offer_alt,
-        ),
         offer_close_action: Optional[Action] = None,
         completed_close_action: Optional[Action] = None,
         initial_wait_seconds: float = 40.0,
@@ -192,6 +192,7 @@ class AdTaskAdapter(PlannedTaskAdapter):
         self._banner_key = banner_key
         self._skip_key = skip_key
         self._continue_key = continue_key
+        self._abandon_reward_key = abandon_reward_key
         self._close_key = close_key
         self._claim_exit_key = claim_exit_key
         self._force_exit_key = force_exit_key
@@ -202,6 +203,7 @@ class AdTaskAdapter(PlannedTaskAdapter):
         self._banner_text = banner_text
         self._skip_text = skip_text
         self._continue_text = continue_text
+        self._abandon_reward_text = abandon_reward_text
         self._close_text = close_text
         self._claim_exit_text = claim_exit_text
         self._force_exit_text = force_exit_text
@@ -215,12 +217,7 @@ class AdTaskAdapter(PlannedTaskAdapter):
         self._watch_point_action = watch_point_action or Action.tap_point(
             600, 1078
         )
-        self._offer_texts = tuple(offer_texts)
-        # issue #2: offerwall 页 press_back 无效（r1 实测 800 observe 卡死），
-        # 必须点左上角 X；点不掉再 BACK 兜底。
-        self._offer_close_action = offer_close_action or Action.tap_point(55, 118)
-        self._offer_close_fallback = Action.press_back()
-        self._offer_close_tries = 0
+        self._offer_close_action = offer_close_action or Action.tap_point(34, 58)
         self._completed_close_action = completed_close_action or Action.tap_point(
             48, 70
         )
@@ -269,6 +266,7 @@ class AdTaskAdapter(PlannedTaskAdapter):
                 ad_initial_wait_done=False, ad_play_waits=0,
                 ad_scroll_phase="wait", ad_scroll_swipes=0,
                 ad_live_exit_pending=False,
+                ad_offerwall_exit_rounds=0,
             )
             has_banner = self._has_text(context, self._banner_text)
             # 必须先确认当前屏有广告卡，才允许点「立即观看」；否则只滚动，
@@ -294,6 +292,9 @@ class AdTaskAdapter(PlannedTaskAdapter):
             is_live = any(
                 self._has_text(context, item) for item in self._live_texts
             )
+            is_offerwall = self._is_offerwall(context)
+            if is_offerwall or self._has_text(context, self._abandon_reward_text):
+                return self._handle_offerwall(context)
             if not is_live and not context.get("ad_initial_wait_done"):
                 context.update_data(ad_initial_wait_done=True)
                 return self._execute(
@@ -347,13 +348,6 @@ class AdTaskAdapter(PlannedTaskAdapter):
             # behind the overlay. Reobserve after each action before scrolling.
             if is_live:
                 return self._handle_live_ad(context)
-            if any(self._has_text(context, item) for item in self._offer_texts):
-                # issue #2: X 优先，连续 2 次无效转 BACK 兜底，再无效重计。
-                tries = self._offer_close_tries
-                self._offer_close_tries = 0 if tries >= 3 else tries + 1
-                if tries < 2:
-                    return self._execute(self._offer_close_action, context)
-                return self._execute(self._offer_close_fallback, context)
             if self._has_text(context, self._skip_text):
                 return self._execute(Action.tap_feature(self._skip_key), context)
             if self._has_text(context, self._close_text):
@@ -380,7 +374,8 @@ class AdTaskAdapter(PlannedTaskAdapter):
             is_exit = is_exit or (
                 action.kind is ActionKind.TAP_FEATURE
                 and action.target in (self._close_key, self._claim_exit_key,
-                                      self._force_exit_key, self._skip_key)
+                                      self._force_exit_key, self._skip_key,
+                                      self._abandon_reward_key)
             )
             if is_exit:
                 context.update_data(ad_exit_settle_until=context.now + 3.0)
@@ -402,6 +397,39 @@ class AdTaskAdapter(PlannedTaskAdapter):
             )
         context.update_data(ad_scroll_phase="wait", ad_scroll_swipes=swipes + 1)
         return self._execute(self._scroll_action, context)
+
+    def _handle_offerwall(self, context: TaskContext) -> StepResult:
+        """拉活广告快速放弃；退出失败三轮后重启 App 重新进入奖励页。"""
+        if self._has_text(context, self._abandon_reward_text):
+            context.update_data(ad_offerwall_exit_rounds=0)
+            return self._execute(
+                Action.tap_feature(self._abandon_reward_key), context
+            )
+
+        rounds = int(context.get("ad_offerwall_exit_rounds", 0))
+        if rounds >= 3:
+            context.update_data(ad_offerwall_exit_rounds=0)
+            return self._execute(Action.restart_app(self._expected_package), context)
+
+        context.update_data(ad_offerwall_exit_rounds=rounds + 1)
+        if self._has_offerwall_close_mark(context):
+            return self._execute(self._offer_close_action, context)
+        return self._execute(Action.press_back(), context)
+
+    @staticmethod
+    def _is_offerwall(context: TaskContext) -> bool:
+        text = "".join(context.observation.ocr_texts)
+        has_reward_countdown = re.search(
+            r"观看.{0,4}秒.{0,6}奖励", text
+        ) is not None
+        return has_reward_countdown and "跳转详情页" in text
+
+    @staticmethod
+    def _has_offerwall_close_mark(context: TaskContext) -> bool:
+        return any(
+            text.strip().casefold() in {"x", "×"}
+            for text in context.observation.ocr_texts
+        )
 
     @staticmethod
     def _remaining_seconds(context: TaskContext) -> Optional[int]:
@@ -451,6 +479,7 @@ def build_ad_definition(
         banner_key=feature_key(keys, keys.reward_ocr_ad_banner),
         skip_key=feature_key(keys, keys.ad_ocr_skip),
         continue_key=feature_key(keys, keys.ad_ocr_continue),
+        abandon_reward_key=feature_key(keys, keys.ad_ocr_abandon_reward),
         close_key=feature_key(keys, keys.ad_ocr_close),
         claim_exit_key=feature_key(keys, keys.ad_ocr_claim_after_exit),
         force_exit_key=feature_key(keys, keys.ad_ocr_force_exit),
@@ -461,6 +490,7 @@ def build_ad_definition(
         banner_text=keys.reward_ocr_ad_banner,
         skip_text=keys.ad_ocr_skip,
         continue_text=keys.ad_ocr_continue,
+        abandon_reward_text=keys.ad_ocr_abandon_reward,
         close_text=keys.ad_ocr_close,
         claim_exit_text=keys.ad_ocr_claim_after_exit,
         force_exit_text=keys.ad_ocr_force_exit,
