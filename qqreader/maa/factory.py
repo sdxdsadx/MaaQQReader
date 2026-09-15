@@ -139,6 +139,7 @@ def build_maa_runtime(
         keys=keys,
         captcha_guard=captcha_guard,
         config=config,
+        navigation_client=client,
     )
     runtime = MaaRuntime(
         config=config,

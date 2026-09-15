@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from ..captcha.guard import CaptchaGuard
 from ..config import AppConfig, ConfigError
@@ -29,6 +29,9 @@ from .game import (
     build_game_definition,
 )
 
+if TYPE_CHECKING:  # pragma: no cover
+    from ..maa.client import MaaClient
+
 
 def build_default_registry(
     observer: PageObserver,
@@ -40,6 +43,7 @@ def build_default_registry(
     game_timeout_seconds: float = DEFAULT_GAME_TIMEOUT_SECONDS,
     game_duration_seconds: float = DEFAULT_GAME_DURATION_SECONDS,
     config: Optional[AppConfig] = None,
+    navigation_client: Optional["MaaClient"] = None,
 ) -> TaskRegistry:
     """装配默认任务集合（广告 + 游戏）。
 
@@ -80,6 +84,7 @@ def build_default_registry(
                 recognizer,
                 timeout_seconds=ad_timeout,
                 captcha_guard=captcha_guard,
+                navigation_client=navigation_client,
             )
         )
     if game_enabled:

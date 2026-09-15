@@ -10,12 +10,20 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from ..captcha.factory import build_default_captcha_guard
 from ..captcha.guard import CaptchaGuard, ManualCaptchaGuard
-from ..contract.conditions import StateIs, all_of, any_of, feature, state_in
-from ..contract.contract import TaskContract, TimeoutSpec
+from ..contract.conditions import (
+    ConditionResult,
+    StateIs,
+    all_of,
+    any_of,
+    callable_condition,
+    feature,
+    state_in,
+)
+from ..contract.contract import FatalErrorSpec, TaskContract, TimeoutSpec
 from ..page.feature_keys import DEFAULT_FEATURE_KEYS, FeatureKeys
 from ..page.features import MatchMode
 from ..page.recognizer import PageStateRecognizer
@@ -35,8 +43,18 @@ from .common import (
 )
 from .plan import Action, ActionKind, PlannedTaskAdapter, StateActionPlan
 
+if TYPE_CHECKING:  # pragma: no cover
+    from ..maa.client import MaaClient
+
 AD_TASK_NAME = "DailyAdFlow"
 DEFAULT_AD_TIMEOUT_SECONDS = 45 * 60
+
+
+def _watch_entry_error(context: TaskContext) -> ConditionResult:
+    message = context.get("ad_watch_entry_error")
+    if message:
+        return ConditionResult.yes(str(message))
+    return ConditionResult.no("奖励页入口滚动查找尚未报错")
 
 
 def build_ad_contract(
@@ -74,7 +92,14 @@ def build_ad_contract(
                 "误入游戏页面，返回奖励页",
             ),
         ),
-        fatal_error=health_fatal_errors(keys),
+        fatal_error=health_fatal_errors(keys)
+        + (
+            FatalErrorSpec(
+                "ad_watch_entry_not_found",
+                callable_condition(_watch_entry_error, "广告入口滚动查找失败"),
+                "首屏及最多 8 次下滑均未找到立即观看入口",
+            ),
+        ),
         timeout=TimeoutSpec(timeout_seconds, timeout_label),
     )
 
@@ -113,6 +138,7 @@ class AdTaskAdapter(PlannedTaskAdapter):
         plan: StateActionPlan,
         expected_package: str,
         popup_feature: Optional[str],
+        navigation_client: Optional["MaaClient"] = None,
         watch_key: str = feature_key(
             DEFAULT_FEATURE_KEYS, DEFAULT_FEATURE_KEYS.reward_ocr_watch
         ),
@@ -178,7 +204,8 @@ class AdTaskAdapter(PlannedTaskAdapter):
         max_live_scroll_swipes: int = 8,
         live_exit_action: Optional[Action] = None,
         scroll_action: Optional[Action] = None,
-        max_scrolls: int = 24,
+        max_scrolls: int = 8,
+        entry_settle_seconds: float = 1.0,
     ) -> None:
         super().__init__(
             device=device,
@@ -187,6 +214,7 @@ class AdTaskAdapter(PlannedTaskAdapter):
             popup_feature=popup_feature,
         )
         self._watch_key = watch_key
+        self._navigation_client = navigation_client
         self._watch_alt_key = watch_alt_key
         self._watch_partial_key = watch_partial_key
         self._banner_key = banner_key
@@ -230,6 +258,7 @@ class AdTaskAdapter(PlannedTaskAdapter):
             360, 1000, 360, 350, 500
         )
         self._max_scrolls = max_scrolls
+        self._entry_settle_seconds = float(entry_settle_seconds)
 
     def advance(self, context: TaskContext) -> StepResult:
         state = context.decision.state if context.decision is not None else None
@@ -268,6 +297,41 @@ class AdTaskAdapter(PlannedTaskAdapter):
                 ad_live_exit_pending=False,
                 ad_offerwall_exit_rounds=0,
             )
+            if self._navigation_client is not None:
+                # 延迟导入避免 reward.nav → maa.__init__ → factory → tasks
+                # 在模块初始化阶段形成循环依赖。
+                from ..reward.nav import find_watch_entry
+
+                entry = find_watch_entry(
+                    self._navigation_client,
+                    max_scrolls=self._max_scrolls,
+                    settle_seconds=self._entry_settle_seconds,
+                    sleep=lambda seconds: context.clock.sleep(seconds, context.token),
+                )
+                if entry is None:
+                    message = (
+                        "奖励页广告入口查找失败：首屏及最多 "
+                        f"{self._max_scrolls} 次下滑均未找到“立即观看”"
+                    )
+                    context.update_data(ad_watch_entry_error=message)
+                    return StepResult(
+                        message,
+                        actions=(ActionKind.REOBSERVE.value,),
+                        progress=False,
+                    )
+                text, (x, y, width, height) = entry
+                if not self._navigation_client.click(
+                    x + width // 2, y + height // 2
+                ):
+                    message = f"已定位“{text}”，但点击广告入口失败"
+                    context.update_data(ad_watch_entry_error=message)
+                    return StepResult(message, progress=False)
+                context.data.pop("ad_watch_entry_error", None)
+                return StepResult(
+                    f"滚动定位并点击广告入口“{text}”",
+                    actions=(ActionKind.TAP_POINT.value,),
+                    progress=True,
+                )
             has_banner = self._has_text(context, self._banner_text)
             # 必须先确认当前屏有广告卡，才允许点「立即观看」；否则只滚动，
             # 避免把其他页面残留的 OCR 文案当成广告按钮误点。
@@ -465,6 +529,7 @@ def build_ad_definition(
     *,
     timeout_seconds: float = DEFAULT_AD_TIMEOUT_SECONDS,
     captcha_guard: Optional[CaptchaGuard] = None,
+    navigation_client: Optional["MaaClient"] = None,
 ) -> TaskDefinition:
     """装配广告任务（契约 + 观测器 + 适配器 + 恢复 + 验证码守卫）。"""
     contract = build_ad_contract(keys, timeout_seconds=timeout_seconds)
@@ -473,6 +538,7 @@ def build_ad_definition(
         plan=build_ad_action_plan(keys),
         expected_package=keys.qq_reader_package,
         popup_feature=feature_key(keys, keys.popup_close),
+        navigation_client=navigation_client,
         watch_key=feature_key(keys, keys.reward_ocr_watch),
         watch_alt_key=feature_key(keys, keys.reward_ocr_watch_alt),
         watch_partial_key=feature_key(keys, keys.reward_ocr_watch_partial),

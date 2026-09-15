@@ -427,6 +427,7 @@ def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
                 recovery,
                 recognizer,
                 timeout_seconds=args.timeout_minutes * 60.0,
+                navigation_client=client,
             )
         recorder = FileRunRecorder(
             RecordingConfig(
