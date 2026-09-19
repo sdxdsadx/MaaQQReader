@@ -103,6 +103,19 @@ def test_goto_reward_page_handles_body_bookstore_and_shelf_entry() -> None:
     assert client.clicks == [(70, 1250), (200, 200)]
 
 
+def test_goto_reward_page_prefers_actionable_shelf_button_over_copy() -> None:
+    client = FakeClient(
+        [
+            [("时长兑赠币，立即领取", (60, 180, 280, 40)),
+             ("签到领赠币", (520, 160, 140, 50))],
+            [("看小视频领好礼", (60, 1100, 260, 50))],
+        ]
+    )
+
+    assert goto_reward_page(client, settle_seconds=0) is True
+    assert client.clicks == [(590, 185)]
+
+
 def test_goto_reward_page_stops_before_clicking_when_captcha_is_visible() -> None:
     client = FakeClient(
         [[("安全验证", (80, 350, 120, 40)), ("今日已获赠币160", (220, 60, 280, 50))]]

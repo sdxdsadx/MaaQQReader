@@ -280,6 +280,30 @@ class AdTaskAdapter(PlannedTaskAdapter):
         # 书城 tab 上没有奖励入口（home_ocr_reward_entry 在书架 tab）。
         # HOME 状态下找不到入口文案时先点底部「书架」tab（issue: 书城页空转）。
         if state is PageState.HOME:
+            if self._navigation_client is not None:
+                # HOME 的奖励入口文案会随版本/账号变化（例如“本周阅读时长”
+                # 变成“554分钟 / 时长兑赠币，立即领取”）。复用统一导航器，
+                # 让它依据当前 OCR 点击实际入口并逐帧确认已进入奖励页。
+                from ..reward.nav import goto_reward_page
+
+                if goto_reward_page(
+                    self._navigation_client,
+                    settle_seconds=self._entry_settle_seconds,
+                    sleep=lambda seconds: context.clock.sleep(seconds, context.token),
+                ):
+                    context.data.pop("ad_watch_entry_error", None)
+                    return StepResult(
+                        "从首页定位奖励入口并确认进入奖励页",
+                        actions=(ActionKind.TAP_POINT.value,),
+                        progress=True,
+                    )
+                message = "无法从首页定位奖励入口并确认进入奖励页"
+                context.update_data(ad_watch_entry_error=message)
+                return StepResult(
+                    message,
+                    actions=(ActionKind.REOBSERVE.value,),
+                    progress=False,
+                )
             has_entry = any(
                 needle in text
                 for text in context.observation.ocr_texts

@@ -112,7 +112,9 @@ def goto_reward_page(
         if _contains_any(text, _REWARD_MARKERS):
             return True
 
-        entry = _find(boxes, _SHELF_ENTRY_MARKERS)
+        # 书架顶部卡片同时包含说明文案和蓝色“签到领赠币”按钮；说明文案
+        # 本身在部分版本不可点击。优先点击按钮，找不到时才退回卡片文案。
+        entry = _find(boxes, ("签到领赠币",)) or _find(boxes, _SHELF_ENTRY_MARKERS)
         if entry is not None:
             _tap(client, entry)
             _sleep(settle_seconds, sleep)

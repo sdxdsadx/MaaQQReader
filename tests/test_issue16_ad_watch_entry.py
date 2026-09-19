@@ -8,7 +8,7 @@ from qqreader.page.feature_keys import DEFAULT_FEATURE_KEYS
 from qqreader.page.states import RunState
 from qqreader.tasks.ad import AdTaskAdapter, build_ad_action_plan
 from qqreader.tasks.common import feature_key
-from tests.helpers import QQ, SimulatedDevice, make_context, reward_observation
+from tests.helpers import QQ, SimulatedDevice, home_observation, make_context, reward_observation
 from tests.test_issue15_reward_nav import FakeClient, Frame
 
 KEYS = DEFAULT_FEATURE_KEYS
@@ -78,3 +78,22 @@ def test_missing_watch_entry_reports_readable_error(adapter_factory) -> None:
     assert context.get("ad_watch_entry_error") == step.description
     assert client.clicks == []
     assert len(client.swipes) == 3
+
+
+def test_home_reuses_reward_page_navigation_for_changed_entry_copy(adapter_factory) -> None:
+    client = FakeClient(
+        [
+            [("书架", (20, 30, 60, 30)), ("554分钟", (70, 150, 100, 40)),
+             ("时长兑赠币，立即领取", (60, 180, 280, 40))],
+            [("看小视频领好礼", (60, 1100, 260, 50))],
+        ]
+    )
+    adapter = adapter_factory(client)
+    context = make_context(home_observation(), run_state=RunState.RUNNING)
+
+    step = adapter.advance(context)
+
+    assert step.progress is True
+    assert step.description == "从首页定位奖励入口并确认进入奖励页"
+    assert client.clicks == [(200, 200)]
+    assert context.get("ad_watch_entry_error") is None
