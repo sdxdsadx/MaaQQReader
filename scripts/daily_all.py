@@ -34,6 +34,17 @@ CONFIG = ROOT / "configs" / "qqreader.local.json"
 LOGDIR = ROOT / "runtime" / "logs"
 
 
+def _find_nearby_claim(boxes, card_markers=("每日听书", "已听")):
+    """返回与目标任务卡同一行的领取按钮 OCR 框；已在奖励页也可调用。"""
+    cards = [item for item in boxes if any(marker in item[0] for marker in card_markers)]
+    claims = [item for item in boxes if item[0].strip() in {"领取", "立即领取"}]
+    for _card_text, card_box in cards:
+        nearby = [item for item in claims if abs(item[1][1] - card_box[1]) < 150]
+        if nearby:
+            return nearby[0]
+    return None
+
+
 def run(task: str, extra: list[str]) -> tuple[bool, float]:
     stamp = datetime.now().strftime("%Y%m%d")
     # 每任务独立日志，避免并发/缓冲交错混串
@@ -75,7 +86,25 @@ def claim_audiobook_reward() -> bool:
         s = client.screencap()
         return client.recognize("OCR", {}, s).text_boxes()
 
+    def try_claim_on_current_page() -> bool:
+        claim = _find_nearby_claim(ocr())
+        if claim is None:
+            return False
+        _text, box = claim
+        client.swipe(
+            box[0] + box[2] // 2,
+            box[1] + box[3] // 2,
+            box[0] + box[2] // 2,
+            box[1] + box[3] // 2,
+            60,
+        )
+        time.sleep(2.5)
+        return True
+
     try:
+        if try_claim_on_current_page():
+            print("[听书领取] 已点领取", flush=True)
+            return True
         # 回书架
         s = client.screencap()
         if not any(t.strip() == "书架" and b[1] < 100 for t, b in ocr()):
@@ -92,19 +121,9 @@ def claim_audiobook_reward() -> bool:
         time.sleep(4)
         # 下滑找听书卡「立即领取」
         for _ in range(5):
-            s = client.screencap()
-            boxes = ocr()
-            card = [(t, b) for t, b in boxes if "每日听书" in t or "已听" in t]
-            claim = [(t, b) for t, b in boxes if t.strip() == "立即领取"]
-            if card and claim:
-                nearby = [c for c in claim if abs(c[1][1] - card[0][1][1]) < 150]
-                if nearby:
-                    t, b = nearby[0][1]
-                    client.swipe(b[0] + b[2] // 2, b[1] + b[3] // 2,
-                                 b[0] + b[2] // 2, b[1] + b[3] // 2, 60)
-                    time.sleep(2.5)
-                    print("[听书领取] ✅ 已点立即领取", flush=True)
-                    return True
+            if try_claim_on_current_page():
+                print("[听书领取] 已点领取", flush=True)
+                return True
             client.swipe(360, 1100, 360, 600, 450)
             time.sleep(1.8)
         print("[听书领取] 未找到听书卡领取按钮（可能已领）", flush=True)
