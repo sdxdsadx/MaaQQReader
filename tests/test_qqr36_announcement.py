@@ -1,11 +1,11 @@
-"""QQR-36：游戏更新公告弹窗——识别、进度条件与关闭动作（返回/跳过）。"""
+"""QQR-36：游戏更新公告弹窗——按用户口径作为挂机落地页计时。"""
 
 from __future__ import annotations
 
 from qqreader.page.feature_keys import DEFAULT_FEATURE_KEYS
 from qqreader.page.observation import PageObservation
 from qqreader.page.states import Orientation, PageState, RunState
-from qqreader.tasks import Action, ActionKind, GameTaskAdapter, feature_key
+from qqreader.tasks import Action, GameTaskAdapter, feature_key
 from qqreader.tasks.game import build_game_action_plan, build_game_contract
 from tests.helpers import QQ, SimulatedDevice, make_context, make_recognizer
 
@@ -56,30 +56,29 @@ def test_announcement_in_progress_condition() -> None:
     assert result.satisfied is True
 
 
-def test_announcement_dismiss_without_skip() -> None:
-    """OCR 未命中「跳过」时按返回键关闭公告（game_exit_done 未设置）。"""
+def test_announcement_starts_game_timer() -> None:
     adapter, device = _adapter()
     context = make_context(announcement_observation(), run_state=RunState.RUNNING)
     assert context.state is PageState.GAME_ANNOUNCEMENT
 
     step = adapter.advance(context)
 
-    assert any("PRESS_BACK" in str(action) for action in step.actions)
-    assert ("press_back",) in device.calls
+    assert step.description == "确认游戏公告/登录落地页，开始挂机计时"
+    assert step.actions == ("GAME_TIMER_START",)
+    assert context.get("game_started_at") == context.now
+    assert device.calls == []
 
 
-def test_announcement_dismiss_with_skip() -> None:
-    """OCR 命中「跳过」时点击跳过特征，而不是按返回键。"""
+def test_announcement_exits_after_timer_even_when_skip_is_visible() -> None:
     adapter, device = _adapter()
     context = make_context(
         announcement_observation("跳过"), run_state=RunState.RUNNING
     )
     assert context.state is PageState.GAME_ANNOUNCEMENT
+    context.update_data(game_started_at=context.now - 61.0)
 
     step = adapter.advance(context)
 
-    skip_key = feature_key(KEYS, KEYS.game_ocr_announcement_skip)
-    assert "skip" in skip_key
-    assert step.actions == (f"{ActionKind.TAP_FEATURE.value}:{skip_key}",)
-    assert ("tap_feature", skip_key) in device.calls
-    assert ("press_back",) not in device.calls
+    assert any("PRESS_BACK" in str(action) for action in step.actions)
+    assert context.get("game_exit_done") is True
+    assert ("press_back",) in device.calls

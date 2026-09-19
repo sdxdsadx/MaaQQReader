@@ -357,9 +357,23 @@ class GameTaskAdapter(PlannedTaskAdapter):
         ):
             return self._advance_game_center(context)
 
-        # 更新公告弹窗：OCR 命中「跳过」就点它，否则按返回键关闭（真机 2026-09-11）。
+        # 用户验收口径：进入在线游戏的公告/登录落地页后即可开始挂机。
+        # 某些游戏没有可用的“跳过”，反复返回只会重新打开公告并导致永不计时。
         if state is PageState.GAME_ANNOUNCEMENT:
-            return self._execute(self._announcement_dismiss_action(context), context)
+            if context.get("game_exit_done"):
+                return self._execute(Action.press_back(), context)
+            started = context.get("game_started_at")
+            if started is None:
+                context.update_data(game_started_at=context.now)
+                return StepResult(
+                    "确认游戏公告/登录落地页，开始挂机计时",
+                    actions=("GAME_TIMER_START",),
+                    progress=True,
+                )
+            if context.now - float(started) >= self._game_duration:
+                context.update_data(game_exit_started=True, game_exit_done=True)
+                return self._execute(Action.press_back(), context)
+            return self._execute(Action.wait(10.0), context)
 
         def _claim_or_scroll(ctx: TaskContext, missing_hint: str) -> StepResult:
             """issue #11：退出游戏后先读「今日已获赠币」计数器——数值较进游戏前
