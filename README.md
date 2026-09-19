@@ -22,6 +22,7 @@ QQ 阅读每日任务自动化（MaaFramework 重构）的新仓库。
 | 恢复 | `qqreader/recovery/` | 升级式恢复阶梯 `EscalationPolicy`（重新截图 → 重新判断 → 关弹窗 → 返回 → 重进入口 → 重启 App → 可选重启模拟器 → 放弃） |
 | 验证码 | `qqreader/captcha/` | `VerifyingCaptchaGuard`（求解后必须重新观测确认消失）、`SlideCaptchaSolver`（OpenCV 轨道/滑块/缺口检测 + `DeviceController.swipe`）、`ManualCaptchaGuard` 人工兜底；CAPTCHA 状态优先于普通页面识别，OCR 识别 `安全验证` / `拖动下方滑块完成拼图` |
 | 调度 | `qqreader/runner/` | `TaskRunner`（阶段推进 / 超时 / 取消 / UNKNOWN 只重判或恢复 / 验证码优先阻塞）、`PageConfirmer`（确认阶梯）、`FileRunRecorder`（JSON 运行记录 + 关键节点截图 + 默认 30 天保留）、`TaskRegistry`、`TaskDefinition` |
+| 每日流水线 | `qqreader/workflow.py` | 启动时冻结顺序与参数；北京时间 04:00 业务日；严格串行、失败继续；用户停止后当前项 `CANCELLED`、后续项 `SKIPPED`；流水线结果区分 `SUCCEEDED` / `COMPLETED_WITH_ERRORS` / `CANCELLED`，每次状态变化原子写入 JSON |
 | 具体任务 | `qqreader/tasks/` | 声明式 `StateActionPlan` + `PlannedTaskAdapter`；广告 `DailyAdFlow`、游戏 `DailyGameFlow` 的契约与动作计划；HOME 使用书架 OCR「本周阅读时长」进奖励页、奖励页滚动查找「去玩游戏」并在 OCR 定位失败时退到按钮坐标 fallback；游戏大厅下划一次 → 识别「在线玩」→ 游戏中心点游戏卡「在线玩」→ 登录/协议页（勾选/登录游戏）→ `GAME_RUNNING`「领币」计时；退出流程含「退出」「关闭游戏」和返回奖励页，退出后禁止再次进入游戏；`build_default_registry` |
 | 运行时协议 | `qqreader/runtime/` | `Clock`/`CancellationToken`/`DeviceController`/`PageObserver`/`TaskAdapter`/`TaskContext`；`qqreader/maa/` 已提供 MaaFramework ctypes 适配（截图/OCR/模板/点击/滑动/前台 App）；`scripts/run_task.py` 支持新流程任务，旧任务转调备份里的旧 QQ 阅读 `run_maa_ad.py` |
 
@@ -82,6 +83,7 @@ GUI 支持：
 - 左侧卡片式任务列表：按分组展示，每张卡片直接包含启用勾选、任务名称、说明、参数（重复次数/每次分钟/超时/最大步数）和上移/下移按钮；
 - 右侧为实时日志，参数修改即时保存到 `runtime/gui_tasks.json`；
 - 「串行执行」按卡片顺序依次运行所有已启用任务，`count>1` 会自动展开重复执行；
+- 串行开始时冻结本轮配置并生成 run id；流水线记录保存到 `record_dir/daily_flows/<run-id>.json`，可回看实际参数、业务日和每一步状态；
 - 「运行选中任务」只执行当前选中的卡片任务；
 - 「每日默认」/「1分钟试运行」预设；
 - 上移 / 下移调整任务顺序，并保存到 `runtime/gui_tasks.json`；
@@ -142,6 +144,9 @@ py -3.10 scripts/run_task.py --config configs/qqreader.local.json `
 # 旧任务转调备份里的旧 QQ 阅读 run_maa_ad.py
 py -3.10 scripts/run_task.py --config configs/qqreader.local.json `
   --task DailyReadingFlow --minutes 35
+
+# 完整每日流水线 CLI；与 GUI 使用相同的流水线状态/记录语义
+py -3.10 scripts/daily_all.py
 ```
 
 ## 真机运行游戏流程

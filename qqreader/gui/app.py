@@ -17,6 +17,13 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from ..config import AppConfig, ConfigError, load_config
+from ..workflow import (
+    DailyFlowRecorder,
+    DailyFlowRun,
+    FlowRunState,
+    FlowStepState,
+    snapshots_from_plans,
+)
 from .commands import (
     build_adb_connect_command,
     build_emulator_launch_command,
@@ -93,7 +100,9 @@ class QQReaderGui:
         self._cards_container: Optional[tk.Frame] = None
         self._serial_plan: List[TaskRunPlan] = []
         self._serial_index = 0
-        self._serial_failures = 0
+        self._serial_run: Optional[DailyFlowRun] = None
+        self._serial_recorder: Optional[DailyFlowRecorder] = None
+        self._serial_record_path: Optional[Path] = None
 
         self._build_ui()
         self._load_task_settings_file()
@@ -788,10 +797,23 @@ class QQReaderGui:
         if not script.is_file():
             messagebox.showerror("脚本缺失", f"找不到 {script}")
             return
+        config = self._require_config()
+        if config is None:
+            return
         self._serial_index = 0
-        self._serial_failures = 0
         self._stopping = False
-        self._log(f"[串行] 共 {len(self._serial_plan)} 个任务，按顺序执行")
+        self._serial_run = DailyFlowRun.start(
+            snapshots_from_plans(self._serial_plan),
+            config_path=self._config_var.get().strip(),
+        )
+        self._serial_recorder = DailyFlowRecorder(Path(config.machine.record_dir))
+        self._save_serial_run()
+        self._log(
+            f"[串行] 共 {len(self._serial_plan)} 个任务，按顺序执行；"
+            f"run={self._serial_run.run_id} 业务日={self._serial_run.business_day}"
+        )
+        if self._serial_record_path is not None:
+            self._log(f"[串行记录] {self._serial_record_path}")
         self._start_next_task()
 
     def _start_next_task(self) -> None:
@@ -816,8 +838,11 @@ class QQReaderGui:
             )
         except ValueError as exc:
             self._log(f"[串行] 参数错误: {exc}")
+            if self._serial_run is not None:
+                self._serial_run.complete_current(2, reason=f"参数错误: {exc}")
+                self._save_serial_run()
             self._serial_index += 1
-            self._serial_failures += 1
+            self._start_next_record_step()
             self.root.after(500, self._start_next_task)
             return
         index = self._serial_index + 1
@@ -843,22 +868,47 @@ class QQReaderGui:
 
     def _on_task_finished(self, code: int) -> None:
         if self._stopping:
-            self._log("[串行] 已停止")
+            if (
+                self._serial_run is not None
+                and self._serial_run.state is FlowRunState.RUNNING
+            ):
+                self._serial_run.stop_by_user()
+                self._save_serial_run()
+            self._log("[串行] 已停止；当前任务已取消，后续任务已跳过")
+            self._finish_serial()
             return
         plan = self._serial_plan[self._serial_index]
+        if self._serial_run is not None:
+            self._serial_run.complete_current(code)
+            self._save_serial_run()
         if code == 0:
             self._log(
                 f"[{self._serial_index + 1}/{len(self._serial_plan)}] "
                 f"{plan.spec.display_name} 成功"
             )
         else:
-            self._serial_failures += 1
             self._log(
                 f"[{self._serial_index + 1}/{len(self._serial_plan)}] "
                 f"{plan.spec.display_name} 失败 exit={code}"
             )
         self._serial_index += 1
+        self._start_next_record_step()
         self.root.after(self._interval_seconds() * 1000, self._start_next_task)
+
+    def _start_next_record_step(self) -> None:
+        run = self._serial_run
+        if run is None or run.state is not FlowRunState.RUNNING:
+            return
+        run.start_next()
+        self._save_serial_run()
+
+    def _save_serial_run(self) -> None:
+        if self._serial_run is None or self._serial_recorder is None:
+            return
+        try:
+            self._serial_record_path = self._serial_recorder.save(self._serial_run)
+        except OSError as exc:
+            self._log(f"[串行记录] 保存失败: {exc}")
 
     def _interval_seconds(self) -> int:
         try:
@@ -867,15 +917,25 @@ class QQReaderGui:
             return 0
 
     def _finish_serial(self) -> None:
-        success = len(self._serial_plan) - self._serial_failures
+        run = self._serial_run
         self._current_var.set("")
-        if self._serial_failures:
-            self._set_status(
-                f"串行完成：成功 {success}，失败 {self._serial_failures}"
-            )
+        if run is None:
+            self._set_status("串行执行结束")
+            return
+        counts = run.counts()
+        success = counts[FlowStepState.SUCCEEDED.value]
+        failed = counts[FlowStepState.FAILED.value]
+        skipped = counts[FlowStepState.SKIPPED.value]
+        if run.state is FlowRunState.CANCELLED:
+            summary = f"已停止：成功 {success}，失败 {failed}，跳过 {skipped}"
+        elif run.state is FlowRunState.COMPLETED_WITH_ERRORS:
+            summary = f"完成但有错误：成功 {success}，失败 {failed}"
         else:
-            self._set_status(f"串行完成：成功 {success}")
-        self._log(f"[串行] 完成，成功 {success}，失败 {self._serial_failures}")
+            summary = f"全部成功：{success} 项"
+        self._set_status(summary)
+        self._log(f"[串行] {summary}")
+        if self._serial_record_path is not None:
+            self._log(f"[串行记录] {self._serial_record_path}")
 
     # ------------------------------------------------------------- 进程管理
 
@@ -956,8 +1016,6 @@ class QQReaderGui:
         if self._process is None or self._process.poll() is not None:
             return
         self._stopping = True
-        self._serial_plan = []
-        self._serial_index = 0
         self._log("[停止] 正在结束当前任务…")
         try:
             if os.name == "nt":
@@ -974,7 +1032,7 @@ class QQReaderGui:
                     self._process.kill()
         except OSError as exc:
             self._log(f"[停止失败] {exc}")
-        self._set_status("已停止")
+        self._set_status("正在停止…")
 
     # ------------------------------------------------------------- 日志等
 
