@@ -144,7 +144,8 @@ def find_watch_entry(
     settle_seconds: float = 1.0,
     sleep: Sleep = time.sleep,
 ) -> Optional[OcrBox]:
-    """在奖励页循环上滑并返回「立即观看」OCR 项；不负责点击入口。"""
+    """在奖励页逐屏查找「立即观看」；位于底部时先回到中段。"""
+    toward_top: Optional[bool] = None
     for scroll_no in range(max_scrolls + 1):
         boxes = _ocr(client)
         text = _joined(boxes)
@@ -154,7 +155,15 @@ def find_watch_entry(
         if watch is not None:
             return watch
         if scroll_no < max_scrolls:
-            client.swipe(360, 1150, 360, 400, 500)
+            if toward_top is None:
+                toward_top = _contains_any(
+                    text, ("抽奖回馈", "回到顶部", "连续签到180天")
+                )
+            if toward_top:
+                # 手指向下滑，页面内容回到更靠上的视频任务区域。
+                client.swipe(360, 400, 360, 1100, 500)
+            else:
+                client.swipe(360, 1150, 360, 400, 500)
             _sleep(settle_seconds, sleep)
     return None
 

@@ -145,6 +145,26 @@ def test_find_watch_entry_scrolls_until_ocr_box_is_visible() -> None:
     ]
 
 
+def test_find_watch_entry_returns_from_reward_page_bottom() -> None:
+    client = FakeClient(
+        [
+            [("抽奖回馈礼献不停", (60, 300, 260, 40)),
+             ("回到顶部", (300, 1180, 120, 40))],
+            [("游戏任意充值领赠币", (60, 700, 260, 40))],
+            [("立即观看", (540, 220, 120, 50))],
+        ]
+    )
+
+    assert find_watch_entry(client, max_scrolls=4, settle_seconds=0) == (
+        "立即观看",
+        (540, 220, 120, 50),
+    )
+    assert client.swipes == [
+        (360, 400, 360, 1100, 500),
+        (360, 400, 360, 1100, 500),
+    ]
+
+
 def test_back_to_reward_uses_giveup_then_x_then_back() -> None:
     client = FakeClient(
         [
