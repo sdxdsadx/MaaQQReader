@@ -252,9 +252,9 @@ def _load_pipeline() -> Dict[str, Any]:
 def test_reading_entry_chain_prefers_bookstore_adaptation() -> None:
     data = _load_pipeline()
     nxt = data["DirectReadingFlow"]["next"]
-    assert nxt[0] == "EnsureShelfOrGoto", nxt
+    assert nxt[:2] == ["ReadingDismissDownloadedUpdate", "EnsureShelfOrGoto"], nxt
     # issue #14 落地页恢复链：开屏跳过/书籍简介继续阅读/榜单页 BACK
-    assert set(nxt[1:]) == {
+    assert set(nxt[2:]) == {
         "ReadingAlreadyInBook",
         "RewardGotoReading",
         "ReadingGotoShelf",

@@ -194,6 +194,13 @@ def main() -> int:
                     claim_audiobook_reward()
                 except Exception as exc:
                     print(f"[听书领取] 异常: {exc}", flush=True)
+            if task == "DailyReadingFlow" and ok:
+                claim_ok, claim_dt = run("ClaimOneReward", [])
+                print(
+                    f"[阅读领取] {'✅' if claim_ok else '❌'} "
+                    f"ClaimOneReward ({claim_dt:.0f}s)",
+                    flush=True,
+                )
             if flow.state is FlowRunState.RUNNING:
                 flow.start_next()
                 recorder.save(flow)

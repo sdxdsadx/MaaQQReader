@@ -390,6 +390,8 @@ def main() -> int:
     parser.add_argument("--minutes", type=int, default=30, help="总阅读时长（分钟）")
     parser.add_argument("--segment-minutes", type=int, default=SEGMENT_MINUTES,
                         help="单段停留上限，默认 15（老版本值）")
+    parser.add_argument("--skip-claim", action="store_true",
+                        help="完成阅读后不自动领取每日阅读奖励")
     args = parser.parse_args()
     if args.minutes < 1:
         log("--minutes 必须 >= 1")
@@ -449,6 +451,26 @@ def main() -> int:
             _client.close()
 
     log(f"=== 自动阅读完成：正文页累计停留 {sum(plan)} 分钟 ===")
+    if not args.skip_claim:
+        claim = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "run_task.py"),
+                "--config",
+                str(ROOT / "configs" / "qqreader.local.json"),
+                "--task",
+                "ClaimOneReward",
+                "--timeout-minutes",
+                "10",
+            ],
+            cwd=str(ROOT),
+            timeout=12 * 60,
+            check=False,
+        )
+        if claim.returncode != 0:
+            log(f"❌ 阅读完成，但自动领取奖励失败（exit={claim.returncode}）")
+            return 4
+        log("阅读奖励自动领取/已领取状态验证成功")
     return 0
 
 

@@ -39,6 +39,7 @@ from qqreader.runner.runner import RunnerConfig, TaskRunner
 from qqreader.runtime.clock import RealClock
 from qqreader.tasks.ad import AD_TASK_NAME, build_ad_definition
 from qqreader.tasks.game import GAME_TASK_NAME, build_game_definition
+from qqreader.tasks.reading_reward import claim_reading_rewards
 
 import logging
 
@@ -60,9 +61,8 @@ LEGACY_NOT_IMPLEMENTED = (
     "DailyAudiobookFlow",
     "DailyExternalAppFlow",
     "DailyLevelAdFlow",
-    "ClaimOneReward",
 )
-TASK_NAMES = NEW_FLOW_TASKS + SYSTEM_TASKS + LEGACY_NOT_IMPLEMENTED
+TASK_NAMES = NEW_FLOW_TASKS + SYSTEM_TASKS + LEGACY_NOT_IMPLEMENTED + ("ClaimOneReward",)
 
 LEGACY_ENTRY = {
     "DailyReadingFlow": "DirectReadingFlow",
@@ -396,6 +396,19 @@ def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
             if path:
                 print("[record] " + str(path), flush=True)
             return 3
+        if args.task == "ClaimOneReward":
+            result = claim_reading_rewards(
+                client,
+                Path(config.machine.screenshot_dir),
+                evidence_prefix="reading_reward_claim",
+            )
+            print("[result] " + result.reason, flush=True)
+            print("[outcome] " + ("SUCCESS" if result.succeeded else "FAILED"), flush=True)
+            if result.before_screenshot:
+                print("[evidence-before] " + str(result.before_screenshot), flush=True)
+            if result.after_screenshot:
+                print("[evidence-after] " + str(result.after_screenshot), flush=True)
+            return 0 if result.succeeded else 2
         keys, observer, device, recognizer = _build_runtime(
             client, verbose=not args.quiet
         )
