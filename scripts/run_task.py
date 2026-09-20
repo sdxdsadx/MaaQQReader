@@ -103,19 +103,102 @@ def _find_legacy_runner(repo_root: Path) -> Optional[Path]:
     return None
 
 
-def _patch_legacy_pipeline(resource_dir: Path, node: str, minutes: float):
+def _insert_before(items: list[str], value: str, before: str) -> None:
+    if value in items:
+        return
+    try:
+        index = items.index(before)
+    except ValueError:
+        items.append(value)
+    else:
+        items.insert(index, value)
+
+
+def _apply_level_ad_runtime_overrides(data: Dict[str, Any]) -> None:
+    """注入等级页广告的实机恢复规则。
+
+    ``dev/resource`` 是本机生成目录，不能作为修复来源提交。因此在每次旧流程
+    启动前临时覆盖，任务结束后仍由 ``_run_legacy_task`` 恢复原文件。
+    """
+    for name in ("LevelClickCoinAd", "LevelClickPointsAd"):
+        node = data.get(name)
+        if isinstance(node, dict) and isinstance(node.get("next"), list):
+            _insert_before(node["next"], "AdStaticDownloadPage", "AdScrollDownRepeat")
+
+    reward_issued = data.get("AdRewardIssued")
+    if isinstance(reward_issued, dict) and isinstance(reward_issued.get("next"), list):
+        if "AdReturnedAfterClose" not in reward_issued["next"]:
+            reward_issued["next"].insert(0, "AdReturnedAfterClose")
+
+    level_ready = data.get("LevelPageReady")
+    if isinstance(level_ready, dict):
+        level_ready["next"] = ["LevelTopReady", "LevelScrollToTop"]
+
+    data["LevelTopReady"] = {
+        "recognition": "OCR",
+        "expected": "听书券|卡牌券|主页背景",
+        "focus": "等级页已回到顶部，从固定起点查找赠币和积分广告",
+        "next": [
+            "LevelClickCoinAd",
+            "LevelCoinSectionFound",
+            "LevelClickPointsAd",
+            "LevelPointsSectionFound",
+            "LevelScrollToCoinAd",
+        ],
+    }
+    data["LevelScrollToTop"] = {
+        "action": "Swipe",
+        "begin": [360, 420],
+        "end": [360, 1120],
+        "duration": 500,
+        "post_delay": 700,
+        "max_hit": 8,
+        "next": ["LevelTopReady", "LevelScrollToTop"],
+    }
+    data["AdStaticDownloadPage"] = {
+        "recognition": "OCR",
+        "expected": "^下载$",
+        "focus": "识别到无倒计时文案的下载型广告，完整等待35秒后关闭",
+        "next": ["AdStaticDownloadWait"],
+    }
+    data["AdStaticDownloadWait"] = {
+        "action": "DoNothing",
+        "post_delay": 35000,
+        "next": ["AdStaticDownloadClose"],
+    }
+    data["AdStaticDownloadClose"] = {
+        "recognition": "OCR",
+        "expected": "^(X|x|×|✕|✖|关闭|退出)$",
+        "roi": [0, 0, 180, 180],
+        "action": "Click",
+        "post_delay": 1800,
+        "focus": "下载型广告已观看35秒并关闭",
+        "next": [
+            "AdCouponPopup",
+            "AdClickIKnow",
+            "AdCaptchaDetected",
+            "AdReturnedAfterClose",
+            "AdCloseByBackKey",
+        ],
+    }
+
+
+def _patch_legacy_pipeline(
+    resource_dir: Path, node: Optional[str], minutes: Optional[float]
+):
     pipeline_path = resource_dir / "pipeline" / "qq_reader_trial.json"
     if not pipeline_path.is_file():
         return None
     original = pipeline_path.read_bytes()
     try:
         data = json.loads(original.decode("utf-8"))
-        if node in data:
+        _apply_level_ad_runtime_overrides(data)
+        if node and minutes and node in data:
             data[node]["post_delay"] = int(float(minutes) * 60000)
-            pipeline_path.write_text(
-                json.dumps(data, ensure_ascii=False, indent=4) + "\n",
-                encoding="utf-8",
-            )
+        pipeline_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=4) + "\n",
+            encoding="utf-8",
+        )
         return original
     except (OSError, ValueError) as exc:
         print(f"[legacy] 修改旧 pipeline 失败: {exc}", flush=True)
@@ -146,8 +229,8 @@ def _run_legacy_task(task: str, config: Any, minutes: Optional[float]) -> int:
     print(f"[legacy] ADB 预检: {detail}", flush=True)
     if not ready:
         print("[legacy] 设备不可截图，旧流程可能仍会失败。", flush=True)
-    if node and minutes and float(minutes) > 0:
-        original = _patch_legacy_pipeline(resource_dir, node, float(minutes))
+    patched_minutes = float(minutes) if minutes and float(minutes) > 0 else None
+    original = _patch_legacy_pipeline(resource_dir, node, patched_minutes)
     command = [
         sys.executable,
         str(runner),
