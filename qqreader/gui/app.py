@@ -56,20 +56,21 @@ def _detect_repo_root() -> Path:
 
 _REPO_ROOT = _detect_repo_root()
 
-BG = "#f3f5f9"
+BG = "#f6f8fc"
 CARD = "#ffffff"
-TEXT = "#1f2937"
-MUTED = "#6b7280"
-ACCENT = "#2563eb"
-ACCENT_ACTIVE = "#1d4ed8"
+TEXT = "#172033"
+MUTED = "#667085"
+ACCENT = "#5b5bd6"
+ACCENT_ACTIVE = "#4848bd"
+ACCENT_SOFT = "#eeeeff"
 DANGER = "#dc2626"
 SUCCESS = "#16a34a"
 WARNING = "#d97706"
-BORDER = "#d7dde8"
-LOG_BG = "#0f172a"
+BORDER = "#e3e8f2"
+LOG_BG = "#111827"
 LOG_FG = "#e2e8f0"
 FONT_UI = ("Microsoft YaHei UI", 9)
-FONT_TITLE = ("Microsoft YaHei UI", 12, "bold")
+FONT_TITLE = ("Microsoft YaHei UI", 18, "bold")
 FONT_MONO = ("Consolas", 9)
 
 
@@ -114,8 +115,8 @@ class QQReaderGui:
 
     def _build_ui(self) -> None:
         self.root.title("QQReader 每日任务控制台")
-        self.root.geometry("1240x800")
-        self.root.minsize(1040, 660)
+        self.root.geometry("1280x840")
+        self.root.minsize(1080, 720)
         self.root.configure(bg=BG)
         self._configure_styles()
         self._build_header()
@@ -124,8 +125,8 @@ class QQReaderGui:
         self._build_action_bar()
         self.root.after(100, self._drain_log_queue)
         self._log(
-            "GUI 已启动。首次使用可点「一键启动环境」，再选「今日流程」或「1分钟试跑」，"
-            "最后点击底部「运行已勾选任务」。"
+            "GUI 已启动。日常使用只需点击「一键执行今日任务」；"
+            "需要调试时可选择1分钟试跑或单独运行任务。"
         )
 
     def _configure_styles(self) -> None:
@@ -145,13 +146,21 @@ class QQReaderGui:
             background=CARD,
             foreground=TEXT,
         )
-        style.configure("Toolbar.TButton", padding=(8, 5))
+        style.configure("Toolbar.TButton", padding=(10, 7), borderwidth=0)
+        style.configure(
+            "Soft.TButton",
+            padding=(12, 8),
+            foreground=ACCENT_ACTIVE,
+            background=ACCENT_SOFT,
+            borderwidth=0,
+        )
+        style.map("Soft.TButton", background=[("active", "#dedefe")])
         style.configure(
             "Primary.TButton",
-            font=("Microsoft YaHei UI", 10, "bold"),
+            font=("Microsoft YaHei UI", 11, "bold"),
             foreground="#ffffff",
             background=ACCENT,
-            padding=(18, 8),
+            padding=(22, 11),
             borderwidth=0,
         )
         style.map(
@@ -201,57 +210,180 @@ class QQReaderGui:
         )
 
     def _build_header(self) -> None:
-        header = tk.Frame(self.root, bg=BG, padx=14, pady=10)
+        header = tk.Frame(self.root, bg=BG, padx=20, pady=14)
         header.pack(fill=tk.X)
-        ttk.Label(
-            header, text="QQReader 每日任务控制台", style="Title.TLabel"
-        ).pack(side=tk.LEFT)
-        right = ttk.Frame(header)
-        right.pack(side=tk.RIGHT)
-        ttk.Label(right, text="配置文件").pack(side=tk.LEFT)
-        self._config_var = tk.StringVar()
-        ttk.Entry(right, textvariable=self._config_var, width=56).pack(
-            side=tk.LEFT, padx=(6, 6)
+        brand = tk.Frame(header, bg=BG)
+        brand.pack(side=tk.LEFT)
+        ttk.Label(brand, text="QQReader 自动任务", style="Title.TLabel").pack(
+            anchor="w"
         )
-        ttk.Button(
-            right, text="选择…", command=self._choose_config, style="Toolbar.TButton"
-        ).pack(side=tk.LEFT)
-        ttk.Button(
-            right, text="加载", command=self._load_config_from_entry, style="Toolbar.TButton"
+        tk.Label(
+            brand,
+            text="一次配置，每日按顺序完成阅读、听书、游戏与广告",
+            bg=BG,
+            fg=MUTED,
+            font=FONT_UI,
+        ).pack(anchor="w", pady=(3, 0))
+
+        right = tk.Frame(header, bg=BG)
+        right.pack(side=tk.RIGHT)
+        self._status_var = tk.StringVar(value="准备就绪")
+        self._status_dot = tk.Label(
+            right, text="●", bg=BG, fg=MUTED, font=("Segoe UI", 11)
+        )
+        self._status_dot.pack(side=tk.LEFT)
+        tk.Label(
+            right,
+            textvariable=self._status_var,
+            bg=BG,
+            fg=TEXT,
+            font=("Microsoft YaHei UI", 9, "bold"),
         ).pack(side=tk.LEFT, padx=(6, 0))
 
     def _build_toolbar(self) -> None:
-        bar = tk.Frame(self.root, bg=BG)
-        bar.pack(fill=tk.X, padx=14, pady=(0, 8))
-        self._action_buttons: List[ttk.Button] = []
-        self._launch_button = ttk.Button(
-            bar,
-            text="启动模拟器",
-            command=self._launch_emulator,
-            style="Toolbar.TButton",
+        shell = tk.Frame(
+            self.root,
+            bg=CARD,
+            highlightbackground=BORDER,
+            highlightthickness=1,
         )
-        self._launch_button.pack(side=tk.LEFT)
-        self._action_buttons.append(self._launch_button)
+        shell.pack(fill=tk.X, padx=20, pady=(0, 12))
+        bar = tk.Frame(shell, bg=CARD)
+        bar.pack(fill=tk.X, padx=18, pady=(16, 12))
+        self._action_buttons: List[ttk.Button] = []
 
+        overview = tk.Frame(bar, bg=CARD)
+        overview.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        tk.Label(
+            overview,
+            text="今天的任务",
+            bg=CARD,
+            fg=TEXT,
+            font=("Microsoft YaHei UI", 12, "bold"),
+        ).pack(anchor="w")
+        self._selection_summary_var = tk.StringVar(value="正在读取任务设置…")
+        tk.Label(
+            overview,
+            textvariable=self._selection_summary_var,
+            bg=CARD,
+            fg=ACCENT_ACTIVE,
+            font=("Microsoft YaHei UI", 10, "bold"),
+        ).pack(anchor="w", pady=(6, 0))
+        self._selection_detail_var = tk.StringVar(value="")
+        tk.Label(
+            overview,
+            textvariable=self._selection_detail_var,
+            bg=CARD,
+            fg=MUTED,
+            font=FONT_UI,
+            anchor="w",
+        ).pack(anchor="w", pady=(3, 0))
+
+        actions = tk.Frame(bar, bg=CARD)
+        actions.pack(side=tk.RIGHT, padx=(18, 0))
+        primary = ttk.Button(
+            actions,
+            text="一键执行今日任务",
+            command=self._run_daily_with_environment,
+            style="Primary.TButton",
+        )
+        primary.pack(side=tk.LEFT)
+        self._action_buttons.append(primary)
+        direct = ttk.Button(
+            actions,
+            text="直接运行已选",
+            command=self._run_serial,
+            style="Soft.TButton",
+        )
+        direct.pack(side=tk.LEFT, padx=(8, 0))
+        self._action_buttons.append(direct)
+
+        tools = tk.Frame(shell, bg="#fafbfe")
+        tools.pack(fill=tk.X, padx=1, pady=(0, 1))
+        preset = tk.Frame(tools, bg="#fafbfe")
+        preset.pack(side=tk.LEFT, padx=16, pady=10)
+        tk.Label(
+            preset, text="快速选择", bg="#fafbfe", fg=MUTED, font=FONT_UI
+        ).pack(side=tk.LEFT, padx=(0, 8))
         for text, command in (
-            ("一键启动环境", self._launch_environment),
-            ("启动QQ阅读", lambda: self._run_task("LaunchQQReader")),
-            ("识别检查", lambda: self._run_task("SmokeTest")),
             ("选择今日流程", lambda: self._apply_preset(True)),
             ("选择1分钟试跑", lambda: self._apply_preset(False)),
             ("全不选", self._clear_task_selection),
-            ("保存设置", self._save_settings),
-            ("打开记录目录", self._open_record_dir),
         ):
             button = ttk.Button(
-                bar, text=text, command=command, style="Toolbar.TButton"
+                preset, text=text, command=command, style="Toolbar.TButton"
+            )
+            button.pack(side=tk.LEFT, padx=(0, 6))
+            self._action_buttons.append(button)
+
+        utilities = tk.Frame(tools, bg="#fafbfe")
+        utilities.pack(side=tk.RIGHT, padx=16, pady=10)
+        for text, command in (
+            ("仅启动环境", self._launch_environment),
+            ("启动QQ阅读", lambda: self._run_task("LaunchQQReader")),
+            ("识别检查", lambda: self._run_task("SmokeTest")),
+            ("运行记录", self._open_record_dir),
+            ("设置", self._toggle_settings_panel),
+        ):
+            button = ttk.Button(
+                utilities, text=text, command=command, style="Toolbar.TButton"
             )
             button.pack(side=tk.LEFT, padx=(6, 0))
             self._action_buttons.append(button)
 
+        self._config_var = tk.StringVar()
+        self._interval_var = tk.StringVar(value="3")
+        self._settings_panel = tk.Frame(shell, bg="#f3f5fb")
+        tk.Label(
+            self._settings_panel,
+            text="本机配置",
+            bg="#f3f5fb",
+            fg=TEXT,
+            font=("Microsoft YaHei UI", 9, "bold"),
+        ).pack(side=tk.LEFT, padx=(16, 8), pady=10)
+        ttk.Entry(
+            self._settings_panel, textvariable=self._config_var, width=52
+        ).pack(side=tk.LEFT, pady=10)
+        ttk.Button(
+            self._settings_panel,
+            text="选择…",
+            command=self._choose_config,
+            style="Toolbar.TButton",
+        ).pack(side=tk.LEFT, padx=(6, 0), pady=6)
+        ttk.Button(
+            self._settings_panel,
+            text="重新加载",
+            command=self._load_config_from_entry,
+            style="Toolbar.TButton",
+        ).pack(side=tk.LEFT, padx=(4, 16), pady=6)
+        tk.Label(
+            self._settings_panel,
+            text="任务间隔",
+            bg="#f3f5fb",
+            fg=MUTED,
+            font=FONT_UI,
+        ).pack(side=tk.LEFT)
+        ttk.Spinbox(
+            self._settings_panel,
+            from_=0,
+            to=120,
+            increment=1,
+            width=5,
+            textvariable=self._interval_var,
+        ).pack(side=tk.LEFT, padx=(6, 3))
+        tk.Label(
+            self._settings_panel, text="秒", bg="#f3f5fb", fg=MUTED
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            self._settings_panel,
+            text="保存任务设置",
+            command=self._save_settings,
+            style="Toolbar.TButton",
+        ).pack(side=tk.RIGHT, padx=16, pady=6)
+
     def _build_main_panes(self) -> None:
         paned = ttk.Panedwindow(self.root, orient=tk.HORIZONTAL)
-        paned.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 6))
+        paned.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 8))
 
         left = tk.Frame(paned, bg=BG)
         paned.add(left, weight=3)
@@ -259,14 +391,14 @@ class QQReaderGui:
         left_header.pack(fill=tk.X, padx=4, pady=(0, 6))
         tk.Label(
             left_header,
-            text="任务列表",
+            text="任务编排",
             bg=BG,
             fg=TEXT,
             font=("Microsoft YaHei UI", 11, "bold"),
         ).pack(side=tk.LEFT)
         tk.Label(
             left_header,
-            text="勾选任务并直接修改参数",
+            text="从上到下串行执行；可直接修改次数与时长",
             bg=BG,
             fg=MUTED,
             font=FONT_UI,
@@ -296,12 +428,12 @@ class QQReaderGui:
         right = tk.Frame(
             paned, bg=CARD, highlightbackground=BORDER, highlightthickness=1
         )
-        paned.add(right, weight=2)
+        paned.add(right, weight=3)
         log_header = tk.Frame(right, bg=CARD)
         log_header.pack(fill=tk.X, padx=12, pady=(8, 4))
         tk.Label(
             log_header,
-            text="实时日志",
+            text="运行动态",
             bg=CARD,
             fg=TEXT,
             font=("Microsoft YaHei UI", 11, "bold"),
@@ -342,66 +474,32 @@ class QQReaderGui:
 
     def _build_action_bar(self) -> None:
         bar = tk.Frame(self.root, bg=BG)
-        bar.pack(fill=tk.X, padx=14, pady=(4, 12))
-        self._serial_button = ttk.Button(
-            bar,
-            text="运行已勾选任务",
-            command=self._run_serial,
-            style="Primary.TButton",
-        )
-        self._serial_button.pack(side=tk.LEFT)
-        self._action_buttons.append(self._serial_button)
-        self._selected_button = ttk.Button(
-            bar,
-            text="只运行当前卡片",
-            command=self._run_selected,
-            style="Toolbar.TButton",
-        )
-        self._selected_button.pack(side=tk.LEFT, padx=(8, 0))
-        self._action_buttons.append(self._selected_button)
+        bar.pack(fill=tk.X, padx=20, pady=(2, 14))
         self._stop_button = ttk.Button(
             bar,
-            text="停止",
+            text="停止当前任务",
             command=self._stop_process,
             state=tk.DISABLED,
             style="Danger.TButton",
         )
-        self._stop_button.pack(side=tk.LEFT, padx=(8, 0))
+        self._stop_button.pack(side=tk.RIGHT)
 
-        right = tk.Frame(bar, bg=BG)
-        right.pack(side=tk.RIGHT)
-        ttk.Label(right, text="任务间隔").pack(side=tk.LEFT)
-        self._interval_var = tk.StringVar(value="3")
-        ttk.Spinbox(
-            right,
-            from_=0,
-            to=120,
-            increment=1,
-            width=5,
-            textvariable=self._interval_var,
-        ).pack(side=tk.LEFT, padx=(6, 2))
-        ttk.Label(right, text="秒").pack(side=tk.LEFT)
-        ttk.Label(right, text="状态：").pack(side=tk.LEFT, padx=(18, 0))
-        self._status_dot = tk.Label(
-            right, text="●", bg=BG, fg=MUTED, font=("Segoe UI", 10)
-        )
-        self._status_dot.pack(side=tk.LEFT)
-        self._status_var = tk.StringVar(value="未运行")
-        tk.Label(
-            right,
-            textvariable=self._status_var,
-            bg=BG,
-            fg=TEXT,
-            font=FONT_UI,
-        ).pack(side=tk.LEFT, padx=(4, 0))
+        self._progress_var = tk.DoubleVar(value=0)
+        ttk.Progressbar(
+            bar,
+            variable=self._progress_var,
+            maximum=100,
+            mode="determinate",
+            length=220,
+        ).pack(side=tk.LEFT, padx=(0, 12))
         self._current_var = tk.StringVar(value="")
         tk.Label(
-            right,
+            bar,
             textvariable=self._current_var,
             bg=BG,
             fg=MUTED,
             font=FONT_UI,
-        ).pack(side=tk.LEFT, padx=(12, 0))
+        ).pack(side=tk.LEFT)
 
     # ------------------------------------------------------------- 任务树
 
@@ -412,15 +510,17 @@ class QQReaderGui:
             child.destroy()
         self._card_enabled_vars.clear()
         self._card_field_vars.clear()
-        groups: Dict[str, List[TaskSpec]] = {}
-        for spec in self._ordered_catalog:
-            groups.setdefault(spec.group, []).append(spec)
-        for group, specs in groups.items():
-            self._build_group_header(group, len(specs))
-            for spec in specs:
-                self._build_task_card(spec)
-        if self._selected_spec is None and self._ordered_catalog:
-            self._selected_spec = self._ordered_catalog[0]
+        visible = [
+            spec
+            for spec in self._ordered_catalog
+            if spec.key not in {"LaunchQQReader", "SmokeTest"}
+        ]
+        self._build_group_header("每日与可选任务", len(visible))
+        for index, spec in enumerate(visible, start=1):
+            self._build_task_card(spec, index=index)
+        if self._selected_spec not in visible and visible:
+            self._selected_spec = visible[0]
+        self._refresh_selection_summary()
         container = self._cards_container
         container.update_idletasks()
         canvas = container.master
@@ -444,7 +544,7 @@ class QQReaderGui:
             side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 0)
         )
 
-    def _build_task_card(self, spec: TaskSpec) -> None:
+    def _build_task_card(self, spec: TaskSpec, *, index: int) -> None:
         settings = self._settings[spec.key]
         card = tk.Frame(
             self._cards_container,
@@ -455,12 +555,22 @@ class QQReaderGui:
         card.pack(fill=tk.X, padx=4, pady=4)
 
         top = tk.Frame(card, bg=CARD)
-        top.pack(fill=tk.X, padx=12, pady=(10, 2))
+        top.pack(fill=tk.X, padx=14, pady=(12, 3))
+        tk.Label(
+            top,
+            text=f"{index:02d}",
+            bg=ACCENT_SOFT,
+            fg=ACCENT_ACTIVE,
+            width=3,
+            padx=3,
+            pady=3,
+            font=("Consolas", 9, "bold"),
+        ).pack(side=tk.LEFT, padx=(0, 8))
         enabled_var = tk.BooleanVar(value=settings.enabled)
         self._card_enabled_vars[spec.key] = enabled_var
         tk.Checkbutton(
             top,
-            text=spec.display_name,
+            text=spec.name,
             variable=enabled_var,
             bg=CARD,
             fg=TEXT,
@@ -470,18 +580,23 @@ class QQReaderGui:
             anchor="w",
             command=lambda s=spec: self._on_card_enabled_changed(s),
         ).pack(side=tk.LEFT)
-        if not spec.implemented:
-            tk.Label(
-                top,
-                text="旧流程",
-                bg="#fef3c7",
-                fg=WARNING,
-                font=("Microsoft YaHei UI", 8, "bold"),
-                padx=6,
-                pady=1,
-            ).pack(side=tk.LEFT, padx=(8, 0))
+        tk.Label(
+            top,
+            text="默认流程" if spec.default_enabled else "可选",
+            bg="#ecfdf3" if spec.default_enabled else "#f2f4f7",
+            fg=SUCCESS if spec.default_enabled else MUTED,
+            font=("Microsoft YaHei UI", 8, "bold"),
+            padx=7,
+            pady=2,
+        ).pack(side=tk.LEFT, padx=(8, 0))
         order = tk.Frame(top, bg=CARD)
         order.pack(side=tk.RIGHT)
+        ttk.Button(
+            order,
+            text="运行此项",
+            command=lambda key=spec.key: self._run_task(key),
+            style="Soft.TButton",
+        ).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(
             order,
             text="▲",
@@ -503,13 +618,13 @@ class QQReaderGui:
             bg=CARD,
             fg=MUTED,
             font=FONT_UI,
-            wraplength=620,
+            wraplength=540,
             justify=tk.LEFT,
             anchor="w",
         ).pack(fill=tk.X, padx=12, pady=(0, 6))
 
         fields = tk.Frame(card, bg=CARD)
-        fields.pack(fill=tk.X, padx=12, pady=(0, 10))
+        fields.pack(fill=tk.X, padx=14, pady=(1, 12))
         self._card_field_vars[spec.key] = {}
         for index, item in enumerate(spec.fields):
             column = index * 3
@@ -554,6 +669,38 @@ class QQReaderGui:
         for widget in (card, top, fields):
             widget.bind("<Button-1>", lambda _event, s=spec: self._select_card(s))
 
+    def _refresh_selection_summary(self) -> None:
+        if not hasattr(self, "_selection_summary_var"):
+            return
+        enabled_specs = [
+            spec
+            for spec in self._ordered_catalog
+            if self._settings[spec.key].enabled
+            and spec.key not in {"LaunchQQReader", "SmokeTest"}
+        ]
+        try:
+            plan = build_serial_plan(
+                self._settings,
+                self._catalog,
+                order=[spec.key for spec in self._ordered_catalog],
+            )
+        except ValueError:
+            self._selection_summary_var.set("任务参数需要检查")
+            self._selection_detail_var.set("请修正红框或无效数字后再运行")
+            return
+        minutes = 0.0
+        for item in plan:
+            value = item.settings.value(item.spec, "minutes", None)
+            if value is None:
+                value = item.settings.value(item.spec, "duration_minutes", 0)
+            minutes += float(value or 0)
+        self._selection_summary_var.set(
+            f"已选择 {len(enabled_specs)} 项 · 实际执行 {len(plan)} 步"
+            + (f" · 计时约 {minutes:g} 分钟" if minutes else "")
+        )
+        names = " → ".join(spec.name for spec in enabled_specs)
+        self._selection_detail_var.set(names or "尚未选择任务")
+
     def _select_card(self, spec: TaskSpec) -> None:
         self._selected_spec = spec
 
@@ -566,6 +713,7 @@ class QQReaderGui:
             f"[任务] {spec.display_name} {'启用' if var.get() else '停用'}"
         )
         self._save_settings(silent=True)
+        self._refresh_selection_summary()
 
     def _on_card_field_changed(self, spec: TaskSpec, key: str) -> None:
         var = self._card_field_vars.get(spec.key, {}).get(key)
@@ -577,6 +725,7 @@ class QQReaderGui:
             return
         self._settings[spec.key].values[key] = value
         self._save_settings(silent=True)
+        self._refresh_selection_summary()
 
     # ------------------------------------------------------------- 配置
 
@@ -591,6 +740,14 @@ class QQReaderGui:
         if path:
             self._config_var.set(path)
             self._load_config(Path(path))
+
+    def _toggle_settings_panel(self) -> None:
+        if self._settings_panel.winfo_manager():
+            self._settings_panel.pack_forget()
+            self._log("[界面] 已收起本机设置")
+        else:
+            self._settings_panel.pack(fill=tk.X, padx=1, pady=(0, 1))
+            self._log("[界面] 已展开本机设置")
 
     def _load_config_from_entry(self) -> None:
         raw = self._config_var.get().strip()
@@ -649,14 +806,19 @@ class QQReaderGui:
         if self._busy:
             return
         keys = [item.key for item in self._ordered_catalog]
+        visible_keys = [
+            key for key in keys if key not in {"LaunchQQReader", "SmokeTest"}
+        ]
         try:
-            index = keys.index(spec.key)
+            index = visible_keys.index(spec.key)
         except ValueError:
             return
         target = index + direction
-        if target < 0 or target >= len(keys):
+        if target < 0 or target >= len(visible_keys):
             return
-        keys[index], keys[target] = keys[target], keys[index]
+        first = keys.index(visible_keys[index])
+        second = keys.index(visible_keys[target])
+        keys[first], keys[second] = keys[second], keys[first]
         by_key = {item.key: item for item in self._catalog}
         self._ordered_catalog = [by_key[key] for key in keys]
         self._selected_spec = spec
@@ -719,7 +881,15 @@ class QQReaderGui:
             on_finish=self._on_emulator_finished,
         )
 
-    def _launch_environment(self) -> None:
+    def _run_daily_with_environment(self) -> None:
+        """日常主入口：恢复正式预设，准备环境后直接开始整轮任务。"""
+        if self._busy:
+            return
+        self._apply_preset(True)
+        self._log("[一键执行] 已恢复正式参数，开始准备模拟器和 QQ 阅读")
+        self._launch_environment(run_daily=True)
+
+    def _launch_environment(self, run_daily: bool = False) -> None:
         """一次完成模拟器启动、ADB 就绪和 QQ 阅读开屏清理。"""
         config = self._require_config()
         if config is None or self._busy:
@@ -737,11 +907,16 @@ class QQReaderGui:
             command,
             status="一键启动环境",
             on_finish=lambda code: self._on_emulator_finished(
-                code, launch_reader=True
+                code, launch_reader=True, run_daily=run_daily
             ),
         )
 
-    def _on_emulator_finished(self, code: int, launch_reader: bool = False) -> None:
+    def _on_emulator_finished(
+        self,
+        code: int,
+        launch_reader: bool = False,
+        run_daily: bool = False,
+    ) -> None:
         self._log(f"[模拟器] 启动命令 exit={code}")
         config = self._config
         if config is None:
@@ -763,11 +938,51 @@ class QQReaderGui:
             self._log(f"[ADB] {detail}")
             if not ready:
                 self._log("[ADB] 设备未就绪，启动任务时仍会再次重试。")
+                if run_daily:
+                    self.root.after(0, lambda: self._set_status("设备未就绪"))
             elif launch_reader:
                 self._log("[一键启动] 设备已就绪，启动 QQ 阅读并清理弹窗")
-                self.root.after(0, lambda: self._run_task("LaunchQQReader"))
+                callback = (
+                    self._start_reader_before_daily
+                    if run_daily
+                    else lambda: self._run_task("LaunchQQReader")
+                )
+                self.root.after(0, callback)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _start_reader_before_daily(self) -> None:
+        config = self._require_config()
+        if config is None or self._busy:
+            return
+        spec = next(item for item in self._catalog if item.key == "LaunchQQReader")
+        python_executable, python_args = self._python_launcher(config)
+        try:
+            command = build_run_task_command(
+                python_executable,
+                self.repo_root,
+                Path(self._config_var.get()),
+                spec.key,
+                python_args=python_args,
+                settings=self._settings[spec.key].normalized(spec).values,
+            )
+        except ValueError as exc:
+            self._log(f"[一键执行] 启动参数错误: {exc}")
+            self._set_status("启动参数错误")
+            return
+        self._start_process(
+            command,
+            status="正在启动 QQ 阅读",
+            on_finish=self._on_reader_before_daily_finished,
+        )
+
+    def _on_reader_before_daily_finished(self, code: int) -> None:
+        if code != 0:
+            self._log(f"[一键执行] QQ 阅读启动清理失败 exit={code}，未开始每日任务")
+            self._set_status("QQ 阅读启动失败")
+            return
+        self._log("[一键执行] 环境准备完成，开始今日任务")
+        self.root.after(300, self._run_serial)
 
     # ------------------------------------------------------------- 串行执行
 
@@ -835,6 +1050,7 @@ class QQReaderGui:
         if config is None:
             return
         self._serial_index = 0
+        self._progress_var.set(0)
         self._stopping = False
         self._serial_run = DailyFlowRun.start(
             snapshots_from_plans(self._serial_plan),
@@ -881,6 +1097,7 @@ class QQReaderGui:
             return
         index = self._serial_index + 1
         total = len(self._serial_plan)
+        self._progress_var.set((index - 1) / total * 100)
         repeat = (
             f"（重复 {plan.repeat_index}/{plan.repeat_total}）"
             if plan.repeat_total > 1
@@ -925,6 +1142,9 @@ class QQReaderGui:
                 f"[{self._serial_index + 1}/{len(self._serial_plan)}] "
                 f"{plan.spec.display_name} 失败 exit={code}"
             )
+        self._progress_var.set(
+            (self._serial_index + 1) / len(self._serial_plan) * 100
+        )
         self._serial_index += 1
         self._start_next_record_step()
         self.root.after(self._interval_seconds() * 1000, self._start_next_task)
@@ -952,7 +1172,7 @@ class QQReaderGui:
 
     def _finish_serial(self) -> None:
         run = self._serial_run
-        self._current_var.set("")
+        self._current_var.set("本轮运行结束")
         if run is None:
             self._set_status("串行执行结束")
             return
@@ -966,6 +1186,7 @@ class QQReaderGui:
             summary = f"完成但有错误：成功 {success}，失败 {failed}"
         else:
             summary = f"全部成功：{success} 项"
+        self._progress_var.set(100)
         self._set_status(summary)
         self._log(f"[串行] {summary}")
         if self._serial_record_path is not None:
