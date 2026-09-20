@@ -45,6 +45,16 @@ def _find_nearby_claim(boxes, card_markers=("每日听书", "已听")):
     return None
 
 
+def _audiobook_reward_done(boxes) -> bool:
+    cards = [item for item in boxes if "每日听书" in item[0] or "已听" in item[0]]
+    done = [
+        item
+        for item in boxes
+        if "已领20赠币" in item[0] or item[0].strip() == "明日再来"
+    ]
+    return any(abs(status[1][1] - card[1][1]) < 150 for card in cards for status in done)
+
+
 def _find_audiobook_float_close(boxes):
     """在书架页定位听书悬浮条的关闭按钮。
 
@@ -91,7 +101,7 @@ def run(task: str, extra: list[str]) -> tuple[bool, float]:
     return ok, dt
 
 
-def claim_audiobook_reward() -> bool:
+def claim_audiobook_reward(config_path: str | Path = CONFIG) -> bool:
     """听书 SUCCESS 后去奖励页领「每日听书30分钟+20赠币」。
     路径：书架 → 时长兑赠币入口 → 下滑找听书卡「立即领取」→ 点。"""
     import subprocess
@@ -102,7 +112,7 @@ def claim_audiobook_reward() -> bool:
     from qqreader.config import load_config
     from qqreader.maa.factory import build_maa_client
 
-    config = load_config("configs/qqreader.local.json")
+    config = load_config(config_path)
     client = build_maa_client(config)
     try:
         client.connect()
@@ -115,7 +125,11 @@ def claim_audiobook_reward() -> bool:
         return client.recognize("OCR", {}, s).text_boxes()
 
     def try_claim_on_current_page() -> bool:
-        claim = _find_nearby_claim(ocr())
+        boxes = ocr()
+        if _audiobook_reward_done(boxes):
+            print("[听书领取] 今日奖励已领取", flush=True)
+            return True
+        claim = _find_nearby_claim(boxes)
         if claim is None:
             return False
         _text, box = claim
@@ -127,7 +141,12 @@ def claim_audiobook_reward() -> bool:
             60,
         )
         time.sleep(2.5)
-        return True
+        verified = _audiobook_reward_done(ocr())
+        print(
+            "[听书领取] " + ("领取后状态已确认" if verified else "点击后未确认已领取"),
+            flush=True,
+        )
+        return verified
 
     try:
         if try_claim_on_current_page():
@@ -233,18 +252,6 @@ def main() -> int:
                 reason="任务证据确认成功" if ok else "run_task.py 返回非零退出码",
             )
             recorder.save(flow)
-            if task == "DailyAudiobookFlow" and ok:
-                try:
-                    claim_audiobook_reward()
-                except Exception as exc:
-                    print(f"[听书领取] 异常: {exc}", flush=True)
-            if task == "DailyReadingFlow" and ok:
-                claim_ok, claim_dt = run("ClaimOneReward", [])
-                print(
-                    f"[阅读领取] {'✅' if claim_ok else '❌'} "
-                    f"ClaimOneReward ({claim_dt:.0f}s)",
-                    flush=True,
-                )
             if flow.state is FlowRunState.RUNNING:
                 flow.start_next()
                 recorder.save(flow)

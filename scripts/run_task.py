@@ -442,7 +442,32 @@ def run_device_preflight(client, config, policy, *, adb_probe=run_adb, log=None)
 def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
     if args.task in LEGACY_NOT_IMPLEMENTED:
         minutes = args.minutes if args.minutes is not None else args.duration_minutes
-        return _run_legacy_task(args.task, config, minutes)
+        code = _run_legacy_task(args.task, config, minutes)
+        if code != 0:
+            return code
+        if args.task == "DailyAudiobookFlow":
+            from scripts.daily_all import claim_audiobook_reward
+
+            print("[post-task] 听书完成，关闭悬浮框并领取听书奖励", flush=True)
+            return 0 if claim_audiobook_reward(args.config) else 2
+        if args.task == "DailyReadingFlow":
+            client = build_maa_client(config)
+            try:
+                client.connect()
+                print("[post-task] 阅读完成，检查并领取阅读奖励", flush=True)
+                result = claim_reading_rewards(
+                    client,
+                    Path(config.machine.screenshot_dir),
+                    evidence_prefix="reading_reward_after_flow",
+                )
+                print("[result] " + result.reason, flush=True)
+                return 0 if result.succeeded else 2
+            except Exception as exc:
+                print(f"[post-task] 阅读奖励领取异常: {exc}", flush=True)
+                return 2
+            finally:
+                client.close()
+        return 0
 
     if args.timeout_minutes <= 0:
         print("[配置错误] --timeout-minutes 必须 > 0", file=sys.stderr)

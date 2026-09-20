@@ -1,4 +1,5 @@
 from scripts.daily_all import (
+    _audiobook_reward_done,
     _find_audiobook_float_close,
     _find_nearby_claim,
     _find_shelf_reward_entry,
@@ -42,3 +43,13 @@ def test_find_shelf_reward_entry_accepts_dynamic_coin_amount() -> None:
     ]
 
     assert _find_shelf_reward_entry(boxes) == ("领250赠币", (527, 161, 132, 44))
+
+
+def test_audiobook_reward_done_is_scoped_to_audiobook_card() -> None:
+    boxes = [
+        ("每日听书30分钟+20赠币", (60, 724, 260, 36)),
+        ("明日再来", (550, 738, 90, 32)),
+        ("每日阅读领赠币", (60, 280, 220, 36)),
+    ]
+
+    assert _audiobook_reward_done(boxes) is True
