@@ -1,8 +1,4 @@
-"""任务目录、分级设置与串行计划（纯逻辑，不依赖 Tkinter）。
-
-任务列表按旧 GUI 的 `assets/interface.json` 顺序迁移；未接入新流程的任务会保留
-在树中，但运行时会由 ``scripts/run_task.py`` 明确输出「未接入」。
-"""
+"""任务目录、分级设置与串行计划（纯逻辑，不依赖 Tkinter）。"""
 
 from __future__ import annotations
 
@@ -195,10 +191,9 @@ DEFAULT_TASK_CATALOG: Tuple[TaskSpec, ...] = (
         group="阅读任务",
         legacy_name="01 每日自动阅读（默认2次×35分钟）",
         entry="DailyReadingFlow",
-        implemented=False,
-        default_enabled=False,
-        description="调用旧 QQ 阅读 pipeline 的自动阅读流程。",
-        fields=(_count_field(2), _minutes_field(35), _timeout_field(240)),
+        default_enabled=True,
+        description="宇智波书籍自动阅读；每次结束后自动检查并领取阅读奖励。",
+        fields=(_count_field(2), _minutes_field(35), _timeout_field(50)),
     ),
     TaskSpec(
         key="DailyAudiobookFlow",
@@ -206,10 +201,9 @@ DEFAULT_TASK_CATALOG: Tuple[TaskSpec, ...] = (
         group="听书任务",
         legacy_name="02 每日听书（默认35分钟，结束后暂停）",
         entry="DailyAudiobookFlow",
-        implemented=False,
-        default_enabled=False,
-        description="调用旧 QQ 阅读 pipeline 的听书流程。",
-        fields=(_count_field(1), _minutes_field(35), _timeout_field(240)),
+        default_enabled=True,
+        description="播放《全职法师》；结束后关闭听书悬浮框并领取20赠币。",
+        fields=(_count_field(1), _minutes_field(35), _timeout_field(50)),
     ),
     TaskSpec(
         key="DailyGameFlow",
@@ -228,14 +222,13 @@ DEFAULT_TASK_CATALOG: Tuple[TaskSpec, ...] = (
                 key="duration_minutes",
                 label="挂机分钟",
                 kind="float",
-                default=22.0,
+                default=25.0,
                 minimum=0.02,
                 maximum=180.0,
                 step=1.0,
                 unit="分钟",
             ),
-            _timeout_field(30),
-            _max_steps_field(),
+            _timeout_field(35),
         ),
     ),
     TaskSpec(
@@ -246,7 +239,7 @@ DEFAULT_TASK_CATALOG: Tuple[TaskSpec, ...] = (
         entry="DailyAdFlow",
         default_enabled=True,
         description="奖励页视频广告：主页 → 奖励页 → 观看广告 → 返回奖励页 → 判断次数/验证码。",
-        fields=(_count_field(1, maximum=1), _timeout_field(45), _max_steps_field()),
+        fields=(_count_field(1, maximum=1), _timeout_field(45)),
     ),
     TaskSpec(
         key="DailyExternalAppFlow",
@@ -254,9 +247,8 @@ DEFAULT_TASK_CATALOG: Tuple[TaskSpec, ...] = (
         group="外部应用",
         legacy_name="05 外部应用每日流程（大众点评+百度地图）",
         entry="DailyExternalAppFlow",
-        implemented=False,
         default_enabled=False,
-        description="调用旧 QQ 阅读 pipeline 的外部应用跳转流程。",
+        description="可选：只处理大众点评和百度地图，不打开京东。",
         fields=(_count_field(1, maximum=1), _timeout_field(30)),
     ),
     TaskSpec(
@@ -265,23 +257,52 @@ DEFAULT_TASK_CATALOG: Tuple[TaskSpec, ...] = (
         group="等级广告",
         legacy_name="06 等级页广告每日流程（赠币+积分）",
         entry="DailyLevelAdFlow",
-        implemented=False,
-        default_enabled=False,
-        description="调用旧 QQ 阅读 pipeline 的等级页广告流程。",
+        default_enabled=True,
+        description="我的→等级：各完成一次赠币广告和+5积分广告。",
         fields=(_count_field(1, maximum=1), _timeout_field(30)),
     ),
     TaskSpec(
         key="ClaimOneReward",
-        name="领取全部已完成奖励",
+        name="重新检查阅读奖励",
         group="奖励领取",
-        legacy_name="07 领取全部已完成奖励",
+        legacy_name="07 重新检查阅读奖励",
         entry="ClaimOneReward",
-        implemented=False,
         default_enabled=False,
-        description="调用旧 QQ 阅读 pipeline 的奖励领取流程。",
+        description="通常无需勾选；阅读任务已自动领取，仅用于失败后重试。",
         fields=(_count_field(1, maximum=1), _timeout_field(10)),
     ),
 )
+
+FORMAL_PRESET_KEYS = frozenset(
+    {
+        "DailyReadingFlow",
+        "DailyAudiobookFlow",
+        "DailyGameFlow",
+        "DailyAdFlow",
+        "DailyLevelAdFlow",
+    }
+)
+TRIAL_PRESET_KEYS = frozenset(
+    {"DailyReadingFlow", "DailyAudiobookFlow", "DailyGameFlow"}
+)
+
+
+def apply_daily_preset(
+    settings: Dict[str, TaskSettings],
+    *,
+    formal: bool,
+    catalog: Sequence[TaskSpec] = DEFAULT_TASK_CATALOG,
+) -> None:
+    """选择一套可直接运行的任务，并同步恢复对应默认时长。"""
+    enabled_keys = FORMAL_PRESET_KEYS if formal else TRIAL_PRESET_KEYS
+    for spec in catalog:
+        task_settings = settings[spec.key]
+        task_settings.enabled = spec.key in enabled_keys
+        for item in spec.fields:
+            if item.key == "count":
+                task_settings.values[item.key] = item.default if formal else 1
+            elif item.key in {"minutes", "duration_minutes"}:
+                task_settings.values[item.key] = item.default if formal else 1
 
 
 def default_settings(

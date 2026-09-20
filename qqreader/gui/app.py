@@ -35,6 +35,7 @@ from .task_catalog import (
     TaskRunPlan,
     TaskSettings,
     TaskSpec,
+    apply_daily_preset,
     build_serial_plan,
     default_settings,
     load_task_order,
@@ -122,7 +123,10 @@ class QQReaderGui:
         self._build_main_panes()
         self._build_action_bar()
         self.root.after(100, self._drain_log_queue)
-        self._log("GUI 已启动。左侧勾选任务，右侧设置参数，点击底部「串行执行」。")
+        self._log(
+            "GUI 已启动。首次使用可点「一键启动环境」，再选「今日流程」或「1分钟试跑」，"
+            "最后点击底部「运行已勾选任务」。"
+        )
 
     def _configure_styles(self) -> None:
         style = ttk.Style(self.root)
@@ -230,10 +234,12 @@ class QQReaderGui:
         self._action_buttons.append(self._launch_button)
 
         for text, command in (
+            ("一键启动环境", self._launch_environment),
             ("启动QQ阅读", lambda: self._run_task("LaunchQQReader")),
             ("识别检查", lambda: self._run_task("SmokeTest")),
-            ("每日默认", lambda: self._apply_preset(True)),
-            ("1分钟试运行", lambda: self._apply_preset(False)),
+            ("选择今日流程", lambda: self._apply_preset(True)),
+            ("选择1分钟试跑", lambda: self._apply_preset(False)),
+            ("全不选", self._clear_task_selection),
             ("保存设置", self._save_settings),
             ("打开记录目录", self._open_record_dir),
         ):
@@ -339,7 +345,7 @@ class QQReaderGui:
         bar.pack(fill=tk.X, padx=14, pady=(4, 12))
         self._serial_button = ttk.Button(
             bar,
-            text="串行执行",
+            text="运行已勾选任务",
             command=self._run_serial,
             style="Primary.TButton",
         )
@@ -347,7 +353,7 @@ class QQReaderGui:
         self._action_buttons.append(self._serial_button)
         self._selected_button = ttk.Button(
             bar,
-            text="运行选中任务",
+            text="只运行当前卡片",
             command=self._run_selected,
             style="Toolbar.TButton",
         )
@@ -668,24 +674,27 @@ class QQReaderGui:
     def _apply_preset(self, formal: bool) -> None:
         if self._busy:
             return
-        for spec in self._catalog:
-            settings = self._settings[spec.key]
-            for item in spec.fields:
-                if item.key == "count":
-                    settings.values["count"] = item.default if formal else 1
-                elif item.key == "minutes":
-                    settings.values["minutes"] = item.default if formal else 1
-                elif item.key == "duration_minutes":
-                    settings.values["duration_minutes"] = (
-                        item.default if formal else 1
-                    )
+        apply_daily_preset(
+            self._settings,
+            formal=formal,
+            catalog=self._catalog,
+        )
         self._build_task_cards()
         self._save_settings(silent=True)
         self._log(
-            "[预设] 已应用每日默认配置"
+            "[预设] 已选择今日流程：阅读→听书→游戏→奖励页广告→等级广告"
             if formal
-            else "[预设] 已应用 1 分钟试运行配置"
+            else "[预设] 已选择1分钟试跑：阅读→听书→游戏，各运行1次"
         )
+
+    def _clear_task_selection(self) -> None:
+        if self._busy:
+            return
+        for settings in self._settings.values():
+            settings.enabled = False
+        self._build_task_cards()
+        self._save_settings(silent=True)
+        self._log("[任务] 已取消全部勾选")
 
     # ------------------------------------------------------------- 模拟器
 
@@ -710,7 +719,29 @@ class QQReaderGui:
             on_finish=self._on_emulator_finished,
         )
 
-    def _on_emulator_finished(self, code: int) -> None:
+    def _launch_environment(self) -> None:
+        """一次完成模拟器启动、ADB 就绪和 QQ 阅读开屏清理。"""
+        config = self._require_config()
+        if config is None or self._busy:
+            return
+        if not config.machine.emulator_path:
+            messagebox.showwarning("模拟器", "配置里没有 machine.emulator_path")
+            return
+        try:
+            command = build_emulator_launch_command(Path(config.machine.emulator_path))
+        except ValueError as exc:
+            self._log(f"[模拟器错误] {exc}")
+            return
+        self._log("[一键启动] 启动模拟器，设备就绪后自动启动 QQ 阅读")
+        self._start_process(
+            command,
+            status="一键启动环境",
+            on_finish=lambda code: self._on_emulator_finished(
+                code, launch_reader=True
+            ),
+        )
+
+    def _on_emulator_finished(self, code: int, launch_reader: bool = False) -> None:
         self._log(f"[模拟器] 启动命令 exit={code}")
         config = self._config
         if config is None:
@@ -732,6 +763,9 @@ class QQReaderGui:
             self._log(f"[ADB] {detail}")
             if not ready:
                 self._log("[ADB] 设备未就绪，启动任务时仍会再次重试。")
+            elif launch_reader:
+                self._log("[一键启动] 设备已就绪，启动 QQ 阅读并清理弹窗")
+                self.root.after(0, lambda: self._run_task("LaunchQQReader"))
 
         threading.Thread(target=worker, daemon=True).start()
 
