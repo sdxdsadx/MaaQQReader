@@ -45,6 +45,34 @@ def _find_nearby_claim(boxes, card_markers=("每日听书", "已听")):
     return None
 
 
+def _find_audiobook_float_close(boxes):
+    """在书架页定位听书悬浮条的关闭按钮。
+
+    悬浮条位于左下角，OCR 通常只识别出 ``X``/``×``；限定位置可避免误点
+    奖励页邀请区域中的同名字符。
+    """
+    candidates = [
+        item
+        for item in boxes
+        if item[0].strip().lower() in {"x", "×"}
+        and item[1][0] < 300
+        and item[1][1] > 850
+    ]
+    return max(candidates, key=lambda item: item[1][0], default=None)
+
+
+def _find_shelf_reward_entry(boxes):
+    """定位书架顶部的阅读时长/赠币奖励入口，兼容动态金额文案。"""
+    candidates = [
+        item
+        for item in boxes
+        if item[1][1] < 350
+        and "赠币" in item[0]
+        and ("领" in item[0] or "兑" in item[0])
+    ]
+    return max(candidates, key=lambda item: item[1][0], default=None)
+
+
 def run(task: str, extra: list[str]) -> tuple[bool, float]:
     stamp = datetime.now().strftime("%Y%m%d")
     # 每任务独立日志，避免并发/缓冲交错混串
@@ -110,13 +138,29 @@ def claim_audiobook_reward() -> bool:
         if not any(t.strip() == "书架" and b[1] < 100 for t, b in ocr()):
             client.swipe(89, 1263, 89, 1263, 60)
             time.sleep(2.5)
-        # 点时长兑赠币入口
-        s = client.screencap()
-        entry = [(t, b) for t, b in ocr() if "兑赠币" in t or "领20赠币" in t]
-        if not entry:
+        # 听书结束后书架左下角仍可能保留播放悬浮条。先关闭它，避免透明
+        # 控制层拦截奖励入口；金额每天变化，不能依赖固定的「领20赠币」。
+        boxes = ocr()
+        float_close = _find_audiobook_float_close(boxes)
+        if float_close is not None:
+            _text, box = float_close
+            client.swipe(
+                box[0] + box[2] // 2,
+                box[1] + box[3] // 2,
+                box[0] + box[2] // 2,
+                box[1] + box[3] // 2,
+                60,
+            )
+            time.sleep(2.5)
+            boxes = ocr()
+            print("[听书领取] 已关闭听书悬浮框", flush=True)
+
+        # 点书架顶部的时长/赠币入口
+        entry = _find_shelf_reward_entry(boxes)
+        if entry is None:
             print("[听书领取] 未找到奖励入口", flush=True)
             return False
-        t, b = entry[-1]
+        _text, b = entry
         client.swipe(b[0] + b[2] // 2, b[1] + b[3] // 2, b[0] + b[2] // 2, b[1] + b[3] // 2, 60)
         time.sleep(4)
         # 下滑找听书卡「立即领取」

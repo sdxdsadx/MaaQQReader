@@ -1,4 +1,8 @@
-from scripts.daily_all import _find_nearby_claim
+from scripts.daily_all import (
+    _find_audiobook_float_close,
+    _find_nearby_claim,
+    _find_shelf_reward_entry,
+)
 
 
 def test_find_nearby_claim_accepts_short_and_long_button_copy() -> None:
@@ -18,3 +22,23 @@ def test_find_nearby_claim_ignores_unrelated_claim_button() -> None:
     ]
 
     assert _find_nearby_claim(boxes) is None
+
+
+def test_find_audiobook_float_close_prefers_left_bottom_x() -> None:
+    boxes = [
+        ("X", (186, 1112, 20, 24)),
+        ("X", (610, 1050, 20, 24)),
+        ("书架", (35, 50, 70, 35)),
+    ]
+
+    assert _find_audiobook_float_close(boxes) == ("X", (186, 1112, 20, 24))
+
+
+def test_find_shelf_reward_entry_accepts_dynamic_coin_amount() -> None:
+    boxes = [
+        ("领250赠币", (527, 161, 132, 44)),
+        ("全职法师", (138, 590, 130, 40)),
+        ("今日已获赠币324", (200, 900, 200, 40)),
+    ]
+
+    assert _find_shelf_reward_entry(boxes) == ("领250赠币", (527, 161, 132, 44))
