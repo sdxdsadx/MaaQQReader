@@ -15,6 +15,10 @@ def test_level_ad_overrides_recover_from_bottom_and_static_download_ads() -> Non
         "LevelPageReady": {"next": ["LevelClickCoinAd"]},
         "LevelClickCoinAd": {"next": ["AdCountdown", "AdScrollDownRepeat"]},
         "LevelClickPointsAd": {"next": ["AdCountdown", "AdScrollDownRepeat"]},
+        "LevelPointsSectionFound": {
+            "recognition": "OCR",
+            "expected": "看小视频.*[+＋]5积分",
+        },
         "AdRewardIssued": {"next": ["AdClosableAfterCountdown"]},
     }
 
@@ -29,6 +33,8 @@ def test_level_ad_overrides_recover_from_bottom_and_static_download_ads() -> Non
         "AdScrollDownRepeat",
     ]
     assert data["AdRewardIssued"]["next"][0] == "AdReturnedAfterClose"
+    assert data["LevelPointsSectionFound"]["expected"] == "^今日已完成$"
+    assert data["LevelPointsSectionFound"]["roi"] == [520, 500, 180, 300]
 
 
 def test_level_ad_overrides_are_idempotent() -> None:
@@ -36,6 +42,7 @@ def test_level_ad_overrides_are_idempotent() -> None:
         "LevelPageReady": {"next": []},
         "LevelClickCoinAd": {"next": ["AdScrollDownRepeat"]},
         "LevelClickPointsAd": {"next": ["AdScrollDownRepeat"]},
+        "LevelPointsSectionFound": {"recognition": "OCR"},
         "AdRewardIssued": {"next": ["AdClosableAfterCountdown"]},
     }
 

@@ -134,6 +134,18 @@ def _apply_level_ad_runtime_overrides(data: Dict[str, Any]) -> None:
     if isinstance(level_ready, dict):
         level_ready["next"] = ["LevelTopReady", "LevelScrollToTop"]
 
+    points_done = data.get("LevelPointsSectionFound")
+    if isinstance(points_done, dict):
+        # 不能只凭左侧“看小视频，+5积分”标题判完成：未执行时该标题
+        # 同样存在。等级页回到固定区域后，只接受该任务行右侧的
+        # “今日已完成”作为业务证据。
+        points_done.update({
+            "recognition": "OCR",
+            "expected": "^今日已完成$",
+            "roi": [520, 500, 180, 300],
+            "focus": "等级页积分广告已显示今日完成，流程结束",
+        })
+
     data["LevelTopReady"] = {
         "recognition": "OCR",
         "expected": "听书券|卡牌券|主页背景",
