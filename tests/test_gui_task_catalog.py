@@ -10,6 +10,7 @@ from qqreader.gui.task_catalog import (
     DEFAULT_TASK_CATALOG,
     TaskSettings,
     apply_daily_preset,
+    apply_weekly_reading_preset,
     build_serial_plan,
     default_settings,
     describe_catalog,
@@ -30,6 +31,7 @@ def test_catalog_migrates_old_gui_task_order() -> None:
         "DailyExternalAppFlow",
         "DailyLevelAdFlow",
         "ClaimOneReward",
+        "ClaimAudiobookReward",
     ]
     assert DEFAULT_TASK_CATALOG[2].legacy_name.startswith("01 每日自动阅读")
     assert DEFAULT_TASK_CATALOG[4].legacy_name.startswith("03 每日游戏")
@@ -163,6 +165,17 @@ def test_trial_preset_runs_only_timed_tasks_once_for_one_minute() -> None:
     assert settings["DailyReadingFlow"].values["minutes"] == 1
     assert settings["DailyAudiobookFlow"].values["minutes"] == 1
     assert settings["DailyGameFlow"].values["duration_minutes"] == 1
+
+
+def test_weekly_reading_preset_disables_everything_except_ten_reading_runs() -> None:
+    settings = default_settings()
+
+    apply_weekly_reading_preset(settings)
+
+    enabled = {key for key, value in settings.items() if value.enabled}
+    assert enabled == {"DailyReadingFlow"}
+    assert settings["DailyReadingFlow"].values["count"] == 10
+    assert settings["DailyReadingFlow"].values["minutes"] == 35
 
 
 def test_describe_catalog_mentions_old_tasks() -> None:

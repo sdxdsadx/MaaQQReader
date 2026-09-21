@@ -62,7 +62,7 @@ LEGACY_NOT_IMPLEMENTED = (
     "DailyExternalAppFlow",
     "DailyLevelAdFlow",
 )
-TASK_NAMES = NEW_FLOW_TASKS + SYSTEM_TASKS + LEGACY_NOT_IMPLEMENTED + ("ClaimOneReward",)
+TASK_NAMES = NEW_FLOW_TASKS + SYSTEM_TASKS + LEGACY_NOT_IMPLEMENTED + ("ClaimOneReward", "ClaimAudiobookReward")
 
 LEGACY_ENTRY = {
     "DailyReadingFlow": "DirectReadingFlow",
@@ -440,6 +440,9 @@ def run_device_preflight(client, config, policy, *, adb_probe=run_adb, log=None)
 
 
 def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
+    if args.task == "ClaimAudiobookReward":
+        from scripts.daily_all import claim_audiobook_reward
+        return 0 if claim_audiobook_reward(args.config) else 2
     if args.task in LEGACY_NOT_IMPLEMENTED:
         minutes = args.minutes if args.minutes is not None else args.duration_minutes
         code = _run_legacy_task(args.task, config, minutes)

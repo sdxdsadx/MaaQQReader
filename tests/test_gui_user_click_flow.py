@@ -118,3 +118,24 @@ def test_settings_panel_is_hidden_until_user_requests_it(tmp_path: Path) -> None
         assert gui._settings_panel.winfo_manager() == ""
     finally:
         root.destroy()
+
+
+def test_weekly_reading_button_selects_only_ten_reading_runs(tmp_path: Path) -> None:
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:  # pragma: no cover - headless CI fallback
+        pytest.skip(str(exc))
+    root.withdraw()
+    try:
+        gui = QQReaderGui(root, repo_root=tmp_path)
+
+        _button(root, "每周阅读600分钟").invoke()
+
+        enabled = {key for key, value in gui._settings.items() if value.enabled}
+        assert enabled == {"DailyReadingFlow"}
+        assert gui._settings["DailyReadingFlow"].values["count"] == 10
+        assert gui._settings["DailyReadingFlow"].values["minutes"] == 35
+        assert "实际执行 10 步" in gui._selection_summary_var.get()
+        assert "计时约 350 分钟" in gui._selection_summary_var.get()
+    finally:
+        root.destroy()

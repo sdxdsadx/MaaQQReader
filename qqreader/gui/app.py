@@ -36,6 +36,7 @@ from .task_catalog import (
     TaskSettings,
     TaskSpec,
     apply_daily_preset,
+    apply_weekly_reading_preset,
     build_serial_plan,
     default_settings,
     load_task_order,
@@ -301,13 +302,15 @@ class QQReaderGui:
         tools = tk.Frame(shell, bg="#fafbfe")
         tools.pack(fill=tk.X, padx=1, pady=(0, 1))
         preset = tk.Frame(tools, bg="#fafbfe")
-        preset.pack(side=tk.LEFT, padx=16, pady=10)
+        preset.pack(anchor="w", padx=16, pady=(10, 4))
         tk.Label(
             preset, text="快速选择", bg="#fafbfe", fg=MUTED, font=FONT_UI
         ).pack(side=tk.LEFT, padx=(0, 8))
         for text, command in (
             ("选择今日流程", lambda: self._apply_preset(True)),
             ("选择1分钟试跑", lambda: self._apply_preset(False)),
+            ("每周阅读600分钟", self._apply_weekly_reading_preset),
+            ("动态规划", self._plan_dynamic_tasks),
             ("全不选", self._clear_task_selection),
         ):
             button = ttk.Button(
@@ -317,7 +320,7 @@ class QQReaderGui:
             self._action_buttons.append(button)
 
         utilities = tk.Frame(tools, bg="#fafbfe")
-        utilities.pack(side=tk.RIGHT, padx=16, pady=10)
+        utilities.pack(anchor="w", padx=16, pady=(0, 10))
         for text, command in (
             ("仅启动环境", self._launch_environment),
             ("启动QQ阅读", lambda: self._run_task("LaunchQQReader")),
@@ -857,6 +860,32 @@ class QQReaderGui:
         self._build_task_cards()
         self._save_settings(silent=True)
         self._log("[任务] 已取消全部勾选")
+
+    def _apply_weekly_reading_preset(self) -> None:
+        if self._busy:
+            return
+        apply_weekly_reading_preset(self._settings, catalog=self._catalog)
+        self._build_task_cards()
+        self._save_settings(silent=True)
+        self._log(
+            "[预设] 已选择每周阅读：仅自动阅读，10次×35分钟；其他任务已关闭"
+        )
+
+    def _plan_dynamic_tasks(self) -> None:
+        config = self._require_config()
+        if config is None or self._busy:
+            return
+        python, python_args = self._python_launcher(config)
+        command = [python, *python_args, str(self.repo_root / "scripts" / "dynamic_plan.py"),
+                   "--config", self._config_var.get()]
+        self._start_process(command, status="读取奖励页并规划任务", on_finish=self._on_dynamic_plan_finished)
+
+    def _on_dynamic_plan_finished(self, code: int) -> None:
+        if code == 0:
+            self._load_task_settings_file()
+            self._set_status("规划完成，请直接运行已选")
+        else:
+            self._set_status("规划未完成，请查看日志")
 
     # ------------------------------------------------------------- 模拟器
 

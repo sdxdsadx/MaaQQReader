@@ -271,6 +271,14 @@ DEFAULT_TASK_CATALOG: Tuple[TaskSpec, ...] = (
         description="通常无需勾选；阅读任务已自动领取，仅用于失败后重试。",
         fields=(_count_field(1, maximum=1), _timeout_field(10)),
     ),
+    TaskSpec(
+        key="ClaimAudiobookReward",
+        name="领取听书奖励",
+        group="奖励领取",
+        entry="ClaimAudiobookReward",
+        description="关闭听书悬浮框，只领取已达标的听书奖励。",
+        fields=(_count_field(1, maximum=1), _timeout_field(10)),
+    ),
 )
 
 FORMAL_PRESET_KEYS = frozenset(
@@ -303,6 +311,20 @@ def apply_daily_preset(
                 task_settings.values[item.key] = item.default if formal else 1
             elif item.key in {"minutes", "duration_minutes"}:
                 task_settings.values[item.key] = item.default if formal else 1
+
+
+def apply_weekly_reading_preset(
+    settings: Dict[str, TaskSettings],
+    *,
+    catalog: Sequence[TaskSpec] = DEFAULT_TASK_CATALOG,
+) -> None:
+    """只启用自动阅读，并设置为 10 次、每次 35 分钟。"""
+    for spec in catalog:
+        task_settings = settings[spec.key]
+        task_settings.enabled = spec.key == "DailyReadingFlow"
+    reading = settings["DailyReadingFlow"]
+    reading.values["count"] = 10
+    reading.values["minutes"] = 35
 
 
 def default_settings(
