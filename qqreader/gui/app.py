@@ -282,22 +282,22 @@ class QQReaderGui:
 
         actions = tk.Frame(bar, bg=CARD)
         actions.pack(side=tk.RIGHT, padx=(18, 0))
-        primary = ttk.Button(
-            actions,
-            text="一键执行今日任务",
-            command=self._run_daily_with_environment,
-            style="Primary.TButton",
-        )
-        primary.pack(side=tk.LEFT)
-        self._action_buttons.append(primary)
         direct = ttk.Button(
             actions,
             text="直接运行已选",
             command=self._run_serial,
+            style="Primary.TButton",
+        )
+        direct.pack(side=tk.LEFT)
+        self._action_buttons.append(direct)
+        daily = ttk.Button(
+            actions,
+            text="一键执行今日任务",
+            command=self._run_daily_with_environment,
             style="Soft.TButton",
         )
-        direct.pack(side=tk.LEFT, padx=(8, 0))
-        self._action_buttons.append(direct)
+        daily.pack(side=tk.LEFT, padx=(8, 0))
+        self._action_buttons.append(daily)
 
         tools = tk.Frame(shell, bg="#fafbfe")
         tools.pack(fill=tk.X, padx=1, pady=(0, 1))

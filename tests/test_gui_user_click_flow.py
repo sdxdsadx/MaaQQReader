@@ -23,6 +23,26 @@ def _button(root: tk.Misc, text: str):
     )
 
 
+def test_direct_run_precedes_daily_run_and_uses_primary_style(tmp_path: Path) -> None:
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:  # pragma: no cover - headless CI fallback
+        pytest.skip(str(exc))
+    root.withdraw()
+    try:
+        QQReaderGui(root, repo_root=tmp_path)
+        direct = _button(root, "直接运行已选")
+        daily = _button(root, "一键执行今日任务")
+
+        assert direct.master is daily.master
+        siblings = direct.master.winfo_children()
+        assert siblings.index(direct) < siblings.index(daily)
+        assert str(direct.cget("style")) == "Primary.TButton"
+        assert str(daily.cget("style")) == "Soft.TButton"
+    finally:
+        root.destroy()
+
+
 def test_user_can_select_daily_flow_and_clear_it_with_one_click(tmp_path: Path) -> None:
     try:
         root = tk.Tk()
