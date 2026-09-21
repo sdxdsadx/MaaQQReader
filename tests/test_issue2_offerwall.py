@@ -66,6 +66,19 @@ def test_offerwall_with_x_clicks_x_then_abandon_reward() -> None:
     assert ("tap_feature", ABANDON_KEY) in device.calls
 
 
+def test_offerwall_copy_is_recognized_as_ad_playing_without_app_identity() -> None:
+    observation = PageObservation(
+        current_app=None,
+        orientation=Orientation.PORTRAIT,
+        ocr_texts=("X", "跳转详情页或第三方应用", "了解详情", "大众点评"),
+    )
+
+    decision = make_recognizer().evaluate(observation)
+
+    assert decision.state.value == "AD_PLAYING"
+    assert decision.is_confirmed
+
+
 def test_offerwall_without_x_presses_back_then_abandons_reward() -> None:
     device = SimulatedDevice()
     adapter = _adapter(device)
@@ -78,6 +91,19 @@ def test_offerwall_without_x_presses_back_then_abandons_reward() -> None:
     _observe(context, texts + ("继续观看", "放弃奖励"))
 
     assert adapter.advance(context).actions == (f"TAP_FEATURE:{ABANDON_KEY}",)
+
+
+def test_offerwall_after_countdown_still_uses_fast_exit() -> None:
+    device = SimulatedDevice()
+    context = _context((
+        "X",
+        "跳转详情页或第三方应用",
+        "了解详情",
+        "大众点评",
+    ))
+
+    assert _adapter(device).advance(context).actions == ("TAP_POINT",)
+    assert ("tap_point", 34, 58) in device.calls
 
 
 def test_offerwall_three_ineffective_rounds_restart_app_and_stop_retrying() -> None:

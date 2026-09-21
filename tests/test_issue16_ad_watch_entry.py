@@ -47,6 +47,20 @@ def test_watch_entry_on_first_screen_is_clicked(adapter_factory) -> None:
     assert context.get("ad_watch_entry_error") is None
 
 
+def test_watch_entry_click_waits_for_async_ad_transition(adapter_factory) -> None:
+    client = FakeClient([[('立即观看', (540, 1080, 120, 50))]])
+    adapter = adapter_factory(client)
+
+    context, first = _advance(adapter)
+    second = adapter.advance(context)
+
+    assert first.progress is True
+    assert second.actions == ("WAIT",)
+    assert context.clock.sleeps == [8.0]
+    assert client.clicks == [(600, 1105)]
+    assert client.swipes == []
+
+
 def test_watch_entry_below_fold_is_clicked_after_n_scrolls(adapter_factory) -> None:
     frames: list[Frame] = [
         [("今日游戏", (50, 800, 180, 40))],

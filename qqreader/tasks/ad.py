@@ -206,6 +206,7 @@ class AdTaskAdapter(PlannedTaskAdapter):
         scroll_action: Optional[Action] = None,
         max_scrolls: int = 8,
         entry_settle_seconds: float = 1.0,
+        entry_transition_seconds: float = 8.0,
     ) -> None:
         super().__init__(
             device=device,
@@ -259,6 +260,7 @@ class AdTaskAdapter(PlannedTaskAdapter):
         )
         self._max_scrolls = max_scrolls
         self._entry_settle_seconds = float(entry_settle_seconds)
+        self._entry_transition_seconds = float(entry_transition_seconds)
 
     def advance(self, context: TaskContext) -> StepResult:
         state = context.decision.state if context.decision is not None else None
@@ -267,6 +269,19 @@ class AdTaskAdapter(PlannedTaskAdapter):
             # Close is asynchronous: a fresh screenshot can still contain the
             # outgoing ad. Never queue Back while that close is in flight.
             return self._execute(Action.wait(settle), context)
+        entry_transition = float(
+            context.get("ad_entry_transition_until", 0)
+        ) - context.now
+        if entry_transition > 0 and state in (
+            PageState.REWARD_HOME,
+            PageState.GAME_ENTRY,
+        ):
+            # QQ 阅读有时会在入口点击后继续显示奖励页数秒，再异步拉起
+            # 广告。等待这次页面转换完成，不能把仍在离场的奖励页当成
+            # “下一轮”并立即滚动八屏，否则会在广告落地页上误报入口缺失。
+            return self._execute(Action.wait(entry_transition), context)
+        if state not in (PageState.REWARD_HOME, PageState.GAME_ENTRY):
+            context.data.pop("ad_entry_transition_until", None)
         # UNKNOWN 兜底：连续 6 次未识别（游戏中心等异常页）时按返回键
         # 逐层退出，直到回到 HOME/书架可识别页。
         if state in (None, PageState.GAME_CENTER, PageState.GAME_HALL):
@@ -350,6 +365,11 @@ class AdTaskAdapter(PlannedTaskAdapter):
                     message = f"已定位“{text}”，但点击广告入口失败"
                     context.update_data(ad_watch_entry_error=message)
                     return StepResult(message, progress=False)
+                context.update_data(
+                    ad_entry_transition_until=(
+                        context.now + self._entry_transition_seconds
+                    )
+                )
                 context.data.pop("ad_watch_entry_error", None)
                 return StepResult(
                     f"滚动定位并点击广告入口“{text}”",
@@ -510,7 +530,12 @@ class AdTaskAdapter(PlannedTaskAdapter):
         has_reward_countdown = re.search(
             r"观看.{0,4}秒.{0,6}奖励", text
         ) is not None
-        return has_reward_countdown and "跳转详情页" in text
+        # 同一个第三方拉活广告在倒计时结束后会移除“观看 N 秒”文案，
+        # 但仍保留“跳转详情页或第三方应用 / 了解详情”。此时仍应沿用
+        # 快速退出分支，不能退回普通广告的 40 秒等待和多轮空转。
+        return "跳转详情页" in text and (
+            has_reward_countdown or "了解详情" in text
+        )
 
     @staticmethod
     def _has_offerwall_close_mark(context: TaskContext) -> bool:
