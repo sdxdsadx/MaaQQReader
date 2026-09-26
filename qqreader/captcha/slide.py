@@ -344,7 +344,22 @@ def _find_gap_x(
             min_distance=fallback_min_distance,
             max_distance_ratio=fallback_max_distance_ratio,
         )
-    return int(x1 + search_start + idx)
+    left_edge = search_start + idx
+    # Canny 的最强列常是缺口左边缘。2026-09-25 截图中它落在 x=492，
+    # 缺口右侧有多条边缘，中心约 x=532；直接滑到左边缘会短约四十像素。
+    # 只在滑块宽度允许的距离内找到足够强的右边缘时取两边中点。
+    min_width = max(20, int(slider[2] * 0.45))
+    max_width = min(int(slider[2] * 0.9), len(col_density) - left_edge - 1)
+    if min_width <= max_width:
+        right_slice = col_density[left_edge + min_width:left_edge + max_width + 1]
+        if right_slice.size:
+            strong = np.flatnonzero(right_slice >= max(
+                float(right_slice.max()) * 0.75, float(smoothed[idx]) * 0.6
+            ))
+            if strong.size:
+                right_idx = int(np.median(strong)) + left_edge + min_width
+                return int(x1 + (left_edge + right_idx) // 2)
+    return int(x1 + left_edge)
 
 
 def _gap_fallback_x(
@@ -430,7 +445,7 @@ class SlideCaptchaSolver:
         swipe_duration_ms: int = 600,
         puzzle_scale: float = 2.14,
         head_bias: int = 29,
-        max_rounds: int = 6,
+        max_rounds: int = 15,
         settle_seconds: float = 0.8,
         clock: Optional["Clock"] = None,
     ) -> None:

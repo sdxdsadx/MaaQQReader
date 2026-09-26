@@ -7,7 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from qqreader.captcha.slide import SlideCaptchaSolver, detect_slide
+from qqreader.captcha.slide import SlideCaptchaSolver, _find_gap_x, detect_slide
+from qqreader.captcha.factory import build_default_captcha_guard
 from qqreader.page.feature_keys import DEFAULT_FEATURE_KEYS
 from qqreader.page.observation import PageObservation
 from qqreader.page.states import Orientation, PageState, RunState
@@ -220,6 +221,62 @@ def test_detect_slide_on_real_old_captcha_screenshot() -> None:
     detection = detect_slide(path.read_bytes())
     assert detection.found is True
     assert detection.distance > 0
+
+
+def test_detect_slide_centers_20260925_gap() -> None:
+    path = Path(
+        r"G:\project_X\runtime\screenshots\20260925\DailyAdFlow_20260925_221809_418384_005_CAPTCHA_DETECTED.png"
+    )
+    if not path.is_file():
+        pytest.skip("本机没有 2026-09-25 滑动验证码截图")
+    detection = detect_slide(path.read_bytes())
+    assert detection.found is True
+    assert 525 <= detection.target[0] <= 545
+
+
+def test_canny_gap_edges_use_center() -> None:
+    gray = np.full((1280, 720), 200, np.uint8)
+    cv2.line(gray, (492, 560), (492, 700), 20, 2)
+    cv2.line(gray, (558, 560), (558, 700), 20, 2)
+    target = _find_gap_x(gray, (75, 806, 567, 26), (111, 789, 114, 59))
+    assert target is not None
+    assert 520 <= target <= 540
+
+
+def test_slide_solver_stops_after_fifteen_swipes(monkeypatch) -> None:
+    class _Shot:
+        data = _synthetic_slide_png()
+
+    class _Observer:
+        last_screenshot = _Shot()
+
+        def observe(self, context, *, deep: bool = False):
+            return PageObservation(ocr_texts=("安全验证",))
+
+        def save_last_screenshot(self, path):
+            return None
+
+    swipes = []
+    monkeypatch.setattr(
+        SlideCaptchaSolver,
+        "_humanize_swipe",
+        lambda self, *args: swipes.append(args),
+    )
+    result = SlideCaptchaSolver(
+        observer=_Observer(), device=object(), settle_seconds=0
+    ).solve(make_context(PageObservation.empty(), run_state=RunState.CAPTCHA))
+    assert result.solved is False
+    assert len(swipes) == 15
+    assert "15 轮" in result.reason
+
+
+def test_default_slide_guard_does_not_restart_fifteen_rounds() -> None:
+    guard = build_default_captcha_guard(
+        observer=object(), device=object(), recognizer=object(),
+        captcha_condition=object(),
+    )
+    assert guard._max_attempts == 1
+    assert guard._solver._max_rounds == 15
 
 
 def test_detect_slide_on_issue11_real_screenshots() -> None:
