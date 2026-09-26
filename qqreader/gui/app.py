@@ -1036,6 +1036,8 @@ class QQReaderGui:
         config = self._require_config()
         if config is None or self._busy:
             return False
+        # 设置可在 GUI 启动后由规划器或其他进程更新；运行前读取磁盘最新版。
+        self._load_task_settings_file()
         return True
 
     def _start_serial_plan(self) -> None:

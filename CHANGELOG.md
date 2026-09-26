@@ -1,5 +1,15 @@
 # QQReader 更新日志
 
+## 2026-09-26 · 修复 GUI 沿用旧超时值
+
+**触发**：广告日志传 `--timeout-minutes 2`，而磁盘 `runtime/gui_tasks.json` 已保存 45 分钟。旧 GUI 进程尚未重启，内存保留旧设置。
+
+**原因与修改**：GUI 原本只在启动时读取任务设置，正式每日预设也没有恢复 `timeout_minutes`。现在每次开始串行或单项任务前重读磁盘设置；正式预设恢复各任务默认超时，广告为 45 分钟。
+
+**改动文件**：`qqreader/gui/app.py`、`qqreader/gui/task_catalog.py`、`tests/test_gui_task_catalog.py`、`tests/test_gui_stale_settings.py`。
+
+**验证**：定向测试覆盖内存 2 分钟、磁盘 45 分钟时启动命令使用 45 分钟，以及正式预设恢复广告超时。旧进程需重启加载新代码；完整广告流程待实机复验。
+
 ## 2026-09-26 · 滑块失败刷新与广告顶部关闭
 
 **触发**：`runtime/logs/gui_DailyAdFlow_20260926_143304.log` 报 `TIMEOUT`；用户要求滑块连续失败 4 次后点左下角刷新、总上限 16 轮，并修复观看约 40 秒后无法关闭广告。
