@@ -209,6 +209,12 @@ def build_default_state_definitions(
                     _icon(keys.ad_skip, weight=1.0),
                     _structure(keys.ad_video_surface, weight=1.0),
                     _text(FeatureKind.OCR, keys.ad_ocr_live, mode=MatchMode.REGEX),
+                    _text(
+                        FeatureKind.OCR,
+                        keys.ad_ocr_offer,
+                        values=(keys.ad_ocr_offer_alt,),
+                        mode=MatchMode.ONE_OF,
+                    ),
                     _text(FeatureKind.OCR, keys.ad_ocr_accelerate, mode=MatchMode.REGEX),
                     _text(FeatureKind.OCR, keys.ad_ocr_completed, mode=MatchMode.REGEX),
                     _text(

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from qqreader.captcha.slide import SlideCaptchaSolver, _find_gap_x, detect_slide
+from qqreader.captcha.slide import SlideCaptchaSolver, SlideDetection, _find_gap_x, detect_slide
 from qqreader.captcha.factory import build_default_captcha_guard
 from qqreader.page.feature_keys import DEFAULT_FEATURE_KEYS
 from qqreader.page.observation import PageObservation
@@ -243,7 +243,7 @@ def test_canny_gap_edges_use_center() -> None:
     assert 520 <= target <= 540
 
 
-def test_slide_solver_stops_after_fifteen_swipes(monkeypatch) -> None:
+def test_slide_solver_refreshes_after_four_failures_and_stops_at_sixteen(monkeypatch) -> None:
     class _Shot:
         data = _synthetic_slide_png()
 
@@ -257,26 +257,89 @@ def test_slide_solver_stops_after_fifteen_swipes(monkeypatch) -> None:
             return None
 
     swipes = []
+    class _Device:
+        taps = []
+
+        def tap_point(self, x, y):
+            self.taps.append((x, y))
+
+    device = _Device()
     monkeypatch.setattr(
         SlideCaptchaSolver,
         "_humanize_swipe",
         lambda self, *args: swipes.append(args),
     )
     result = SlideCaptchaSolver(
-        observer=_Observer(), device=object(), settle_seconds=0
+        observer=_Observer(), device=device, settle_seconds=0
     ).solve(make_context(PageObservation.empty(), run_state=RunState.CAPTCHA))
     assert result.solved is False
-    assert len(swipes) == 15
-    assert "15 轮" in result.reason
+    assert len(swipes) == 16
+    assert device.taps == [(125, 897)] * 3
+    assert "16 轮" in result.reason
 
 
-def test_default_slide_guard_does_not_restart_fifteen_rounds() -> None:
+def test_slide_detection_miss_retries_next_round_instead_of_stopping(monkeypatch) -> None:
+    class _Shot:
+        data = b"frame"
+
+    swipes = []
+    class _Observer:
+        last_screenshot = _Shot()
+
+        def observe(self, context, *, deep=False):
+            return PageObservation(ocr_texts=("安全验证",)) if not swipes else PageObservation.empty()
+
+    calls = []
+    def detect(data):
+        calls.append(1)
+        if len(calls) <= 2:
+            return SlideDetection(False, "缺口未识别")
+        return SimpleNamespace(found=True, slider_center=(168, 818), distance=232)
+
+    monkeypatch.setattr("qqreader.captcha.slide.detect_slide", detect)
+    monkeypatch.setattr(SlideCaptchaSolver, "_humanize_swipe", lambda self, *a: swipes.append(a))
+    device = SimpleNamespace(tap_point=lambda *a: pytest.fail("不应刷新"))
+    result = SlideCaptchaSolver(
+        observer=_Observer(), device=device, settle_seconds=0
+    ).solve(make_context(PageObservation.empty(), run_state=RunState.CAPTCHA))
+    assert result.solved is True
+    assert len(calls) == 3
+    assert len(swipes) == 1
+
+
+def test_slide_refresh_requires_visible_captcha(monkeypatch) -> None:
+    class _Observer:
+        last_screenshot = SimpleNamespace(data=b"frame")
+
+        def __init__(self):
+            self.calls = 0
+
+        def observe(self, context, *, deep=False):
+            self.calls += 1
+            return PageObservation(ocr_texts=("安全验证",)) if self.calls <= 8 else PageObservation.empty()
+
+    swipes = []
+    monkeypatch.setattr(
+        "qqreader.captcha.slide.detect_slide",
+        lambda data: SimpleNamespace(found=True, slider_center=(168, 818), distance=232),
+    )
+    monkeypatch.setattr(SlideCaptchaSolver, "_humanize_swipe", lambda self, *a: swipes.append(a))
+    device = SimpleNamespace(tap_point=lambda *a: pytest.fail("验证码状态不明时不应刷新"))
+    result = SlideCaptchaSolver(
+        observer=_Observer(), device=device, settle_seconds=0
+    ).solve(make_context(PageObservation.empty(), run_state=RunState.CAPTCHA))
+    assert result.solved is False
+    assert len(swipes) == 4
+    assert "停止自动点击等待人工" in result.reason
+
+
+def test_default_slide_guard_does_not_restart_sixteen_rounds() -> None:
     guard = build_default_captcha_guard(
         observer=object(), device=object(), recognizer=object(),
         captcha_condition=object(),
     )
     assert guard._max_attempts == 1
-    assert guard._solver._max_rounds == 15
+    assert guard._solver._max_rounds == 16
 
 
 def test_detect_slide_on_issue11_real_screenshots() -> None:
