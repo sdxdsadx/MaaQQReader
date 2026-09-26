@@ -132,6 +132,7 @@ def test_formal_preset_selects_complete_daily_flow_and_restores_defaults() -> No
     settings = default_settings()
     settings["DailyReadingFlow"].values["minutes"] = 1
     settings["DailyGameFlow"].values["duration_minutes"] = 1
+    settings["DailyAdFlow"].values["timeout_minutes"] = 2
 
     apply_daily_preset(settings, formal=True)
 
@@ -145,6 +146,7 @@ def test_formal_preset_selects_complete_daily_flow_and_restores_defaults() -> No
     }
     assert settings["DailyReadingFlow"].values["minutes"] == 35
     assert settings["DailyGameFlow"].values["duration_minutes"] == 25
+    assert settings["DailyAdFlow"].values["timeout_minutes"] == 45
 
 
 def test_trial_preset_runs_only_timed_tasks_once_for_one_minute() -> None:

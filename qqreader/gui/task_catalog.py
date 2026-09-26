@@ -303,6 +303,8 @@ def apply_daily_preset(
                 task_settings.values[item.key] = item.default if formal else 1
             elif item.key in {"minutes", "duration_minutes"}:
                 task_settings.values[item.key] = item.default if formal else 1
+            elif item.key == "timeout_minutes" and formal:
+                task_settings.values[item.key] = item.default
 
 
 def default_settings(
