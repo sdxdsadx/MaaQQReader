@@ -15,7 +15,12 @@ dev = "127.0.0.1:16384"
 
 from qqreader.config import load_config
 from qqreader.maa.factory import build_maa_client
-from auto_read_30min import _verify_book_allowed
+from auto_read_30min import (
+    _verify_book_allowed,
+    click_target_book,
+    return_to_capturable,
+    return_to_shelf,
+)
 
 LOG = Path(r"G:\project_X\runtime\logs\swipe280.log")
 client = None
@@ -50,10 +55,16 @@ def main() -> int:
     client = build_maa_client(config)
     client.connect()
 
+    # 书源守门改用「书架上的 Maa 选书结果」判定（不再扫正文页顶部），
+    # 所以先回书架再校验，随后由 Maa 选中白名单书目进正文，与 auto_read 一致。
+    return_to_capturable()
+    return_to_shelf()
     allowed, message = _verify_book_allowed(client)
     if not allowed:
         log(message)
         sys.exit(3)
+    log(f"书源校验通过：{message}")
+    click_target_book()
 
     total = 280 * 60
     log("=== 滑动翻页模式启动（280 分钟） ===")

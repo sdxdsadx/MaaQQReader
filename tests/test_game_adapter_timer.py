@@ -240,3 +240,67 @@ def test_game_flow_end_to_end_with_real_adapter() -> None:
     # 不再要求「立即领取」点击（该按钮在真实奖励页不存在）。
     kinds = [event.kind for event in result.diagnostics]
     assert "task.success" in kinds
+
+
+def test_game_hud_generic_words_do_not_reset_running_timer() -> None:
+    """2026-09-23：HUD「活动」按钮/聊天文字间歇命中不能清零挂机计时。"""
+    from tests.helpers import make_recognizer
+
+    clock = FakeClock()
+    device = SimulatedDevice()
+    adapter = _make_game_adapter(device, duration=60.0)
+    running = make_context(
+        game_running_observation(),
+        contract=build_game_contract(KEYS),
+        clock=clock,
+        run_state=RunState.RUNNING,
+    )
+    assert adapter.advance(running).actions == ("GAME_TIMER_START",)
+
+    hud = game_running_observation(ocr_texts=("领币", "活动", "同意"))
+    running.update_observation(hud, make_recognizer().evaluate(hud))
+    clock.advance(30.0)
+    adapter.advance(running)
+    assert running.get("game_started_at") == 0.0
+
+    clock.advance(30.0)  # 累计 60s：应按原计时起点退出
+    step = adapter.advance(running)
+    assert step.actions == (ActionKind.TAP_POINT.value,)
+    assert running.get("game_exit_done") is True
+
+
+def test_game_real_loading_after_start_keeps_timer_origin() -> None:
+    from tests.helpers import make_recognizer
+
+    clock = FakeClock()
+    device = SimulatedDevice()
+    adapter = _make_game_adapter(device, duration=60.0)
+    running = make_context(
+        game_running_observation(),
+        contract=build_game_contract(KEYS),
+        clock=clock,
+        run_state=RunState.RUNNING,
+    )
+    adapter.advance(running)
+    loading = game_running_observation(ocr_texts=("领币", "正在连接服务器"))
+    running.update_observation(loading, make_recognizer().evaluate(loading))
+    step = adapter.advance(running)
+    assert step.progress is False
+    assert running.get("game_started_at") == 0.0
+
+
+def test_game_from_mine_tab_switches_to_shelf_before_looking_for_entry() -> None:
+    """2026-09-24：App 停在「我的」tab 时先切回书架，不能空转到超时。"""
+    from tests.helpers import make_recognizer
+
+    device = SimulatedDevice()
+    adapter = _make_game_adapter(device, duration=60.0)
+    observation = home_observation(ocr_texts=("我的账户", "等级", "书架", "我的"))
+    context = make_context(
+        observation, contract=build_game_contract(KEYS), run_state=RunState.RUNNING
+    )
+    if context.state.value != "HOME":
+        pytest.skip("观测未被识别为 HOME")
+    step = adapter.advance(context)
+    assert step.actions == (ActionKind.TAP_POINT.value,)
+    assert ("tap_point", 89, 1263) in device.calls

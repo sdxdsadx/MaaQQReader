@@ -82,3 +82,40 @@ def test_announcement_exits_after_timer_even_when_skip_is_visible() -> None:
     assert any("PRESS_BACK" in str(action) for action in step.actions)
     assert context.get("game_exit_done") is True
     assert ("press_back",) in device.calls
+
+
+def test_announcement_title_overrides_false_loading_match() -> None:
+    adapter, device = _adapter()
+    observation = PageObservation(
+        current_app=None,
+        orientation=Orientation.PORTRAIT,
+        ocr_texts=(
+            "亲爱的仙使大人：",
+            "间无法进入游戏，不便之处，敬请谅解！",
+            "领币",
+        ),
+    )
+    context = make_context(observation, run_state=RunState.RUNNING)
+    assert context.state is PageState.GAME_LOADING
+
+    step = adapter.advance(context)
+
+    assert step.description == "确认游戏公告/登录落地页，开始挂机计时"
+    assert step.actions == ("GAME_TIMER_START",)
+    assert device.calls == []
+
+
+def test_open_server_announcement_is_a_valid_hang_page() -> None:
+    observation = PageObservation(
+        current_app=None,
+        orientation=Orientation.PORTRAIT,
+        ocr_texts=("版本号：1.7.1118744", "开服公告", "亲爱的各位玩家："),
+    )
+    context = make_context(observation, run_state=RunState.RUNNING)
+    assert context.state is PageState.GAME_ANNOUNCEMENT
+    adapter, device = _adapter()
+
+    step = adapter.advance(context)
+
+    assert step.actions == ("GAME_TIMER_START",)
+    assert device.calls == []

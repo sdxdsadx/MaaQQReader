@@ -21,6 +21,113 @@
 
 ---
 
+## 2026-09-27 · 实机极端场景测试：去掉交接检查与自动阅读中的三处盲点（QQR-53 / QQR-55）
+
+**触发**：用户要求设计极端场景并实机测试。MuMu 实例 0（`127.0.0.1:16384`），用 worktree 新代码直接运行 `scripts/run_task.py --task HandoffCheck` 和 `scripts/auto_read_30min.py`，没有经过主检出的旧 GUI。
+
+| 场景 | 实机结果 |
+| --- | --- |
+| S1 冷启动开屏阶段（OCR 为空） | READY，20 秒：返回 → 退出确认框点「取消」→ 书架 |
+| S2 App 被强杀、停在桌面 | READY，41 秒：返回 4 次无效 → 重启 App → 退出确认框点「取消」→ 书架 |
+| S3 正文页（FLAG_SECURE，截图 0 字节） | READY，25 秒：只按返回，不点击 |
+| S4a 书城 → 排行榜二级页 | **修复前 UNSAFE**：按固定坐标 (89,1262) 连点 16 次（落在空白处，未造成副作用）；**修复后** READY，11 秒：返回 1 次 → 点 OCR 看到的书架 tab |
+| S4b 书城 → 排行榜 → 详情 → 目录（4 层） | READY，17 秒：返回 3 次 → 书架 tab，没有碰「加书架 / 下载 / 免费阅读」 |
+| S5 书架上的「确定退出QQ阅读？」 | READY，7 秒：点「取消」(538,1241)，没有点「退出」，App 仍在前台 |
+| S6 书城主页 | READY，11 秒：点书架 tab 1 次 |
+| S7 从书城主页启动自动阅读 1 分钟（QQR-55） | exit 0：书城 → 书架 tab → 找到《宇智波》→ 正文读满 1 分钟。**修复前**日志出现「活动弹窗未见关闭文本，已点右上角关闭位」，即在书城页盲点 (307,764)；**修复后**复测没有这一步 |
+| S8 实跑「每日等级广告」，随后交接检查 | 等级广告 exit 2：赠币入口未出现，积分入口点了 3 次广告都没拉起，随后核对“今日已完成”失败——**QQR-54 的倒计时和挽留弹窗路径没有被触发**；pipeline 运行前后 md5 一致（已恢复）。随后的交接检查在等级页上返回 2 次，READY，9.6 秒 |
+| S9 「我的」/「发现」tab | 均 READY，约 7 秒：返回 1 次 |
+
+| 模块 | 问题 | 修改 |
+| --- | --- | --- |
+| `qqreader/runner/handoff.py` | 排行榜二级页有「男生 / 女生」，被判为书城，然后按固定坐标盲点书架 tab，而且无限重复 | 去掉 `SHELF_TAB_FALLBACK`，只有 OCR 在底部导航区实际看到「书架」才判为书城并点它，否则按其他页面返回；新增 `_targeted_action`，同一页面类型上的定向点击连续 2 次无效后改走返回 / 重启（重启后重新计数） |
+| `scripts/auto_read_30min.py::go_to_shelf_tab` | 固定坐标 (89,1242) 盲点 | 只点 OCR 看到的底部「书架」tab，看不到就不点 |
+| `scripts/auto_read_30min.py::dismiss_blocking_dialogs` | 书城横幅「勋章/装扮限时返场」「免费读一年」被当成活动弹窗，盲点 (307,764) 或页面上的任意「X」；很可能就是 QQR-55 现场 05:50:04“点 X 后跳到书城”的原因 | 确认是书城页时，活动文案不算弹窗；`DISMISS_TEXTS` 由 set 改为有序 tuple，「取消」优先于「X」（set 的遍历顺序随进程哈希随机） |
+
+**改动文件**：`qqreader/runner/handoff.py`、`scripts/auto_read_30min.py`、`tests/test_qqr53_handoff.py`、`tests/test_qqr55_reading_shelf.py`、`tests/fixtures/handoff_ocr_frames.json`（新增 2 帧实机 OCR：排行榜二级页、书城主页）、本日志。
+**验证**：新增 5 项回归测试（排行榜二级页不盲点、同一定向点击不无限重复、自动阅读二级页不点书架、书城横幅不算弹窗、升级弹窗先点取消）；全量 396 passed、4 failed（与基线相同）、2 skipped。实机结果见上表，交接证据截图在 `runtime/screenshots/handoff/`。
+**未覆盖 / 遗留**：验证码场景无法人为触发，只由单元测试覆盖；QQR-54 实机未触发（广告没拉起）；积分广告点了不拉起的原因未查（可能与“今日获得29积分”的上限有关，也可能是广告推荐隐私政策提示，需要单独确认，不能替用户同意协议）；App 不在前台时交接检查仍会先白按 4 次返回才重启（约 8 秒，可优化）；`find_text` 对「X」是子串匹配，会命中 “HIXAXHSOH” 这类文字，本次只调整了优先级；串行调度（GUI 先交接检查再启动下一项）的整链只由故障注入单元测试覆盖，实机是手动分步执行的。
+**分支**：`claude/qqr-55-reading-shelf-20260927`
+**回滚**：`git log --oneline -S "实机极端场景测试：去掉交接检查" -- CHANGELOG.md` 定位后 `git revert <hash>`。
+
+---
+
+## 2026-09-27 · 自动阅读不再把书城排行榜页当成书架（QQR-55）
+
+**触发**：每日批次 `daily_20260927_114947_a58b6564` 第一轮 35 分钟阅读启动约 25 秒后 exit 3。`runtime/logs/auto_read.log` 05:50:12 记“已返回书架”，05:50:13 的 OCR 却是书城排行榜。用 `maafw.bak.2026.09.27-07.03.17.990.log` 第 15300～16261 行逐帧还原：05:50:02 画面是书架 + 活动弹窗，点 X 后变成书城 + 升级弹窗，点「取消」和 X 后一直停在书城；05:50:12 那帧书城页被 `is_on_shelf()` 判成书架。
+
+| 模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| 书架判定 | 书城排行榜页被确认成书架 | `SHELF_ONLY_MARKERS` 里的子串 `"章/"`（本意是进度行「84章/372章」）误中书城活动横幅 **「勋章/装扮限时返场」** | `scripts/auto_read_30min.py`：进度行改为正则 `\d+章/\d+章`；新增 `classify_page()`，命中 ≥2 个书城标记（男生 / 排行榜 / 本周强推 / 今日必读 / 高分必读）即判为书城；`is_on_shelf()` 改用它 |
+| 回书架 | 书城页上按返回只会弹「确定退出」 | — | `return_to_shelf()`：确认是书城页时直接点底部「书架」tab 并重新确认 |
+| 入口校验 | 白名单预检失败立即 exit 3，不区分“不在书架”和“书架上没有这本书” | `main()` 只做一次 `locate_allowed_book_ui()` | 新增 `confirm_allowed_book_on_shelf()`：先确认书架（最多 3 次，每次回书架后重新截图）；确认在书架但没有白名单书 → 仍 exit 3，白名单不放宽；始终确认不了书架 → `RuntimeError`，exit 2。两种失败都用 `record_page_evidence()` 记录页面类型、完整 OCR，并截图到 `screenshots/auto_read/` |
+| 交接检查 / 退出码说明 | 同一子串判据 | — | `qqreader/runner/handoff.py` 的书架判定改用同一正则；`exit_codes` 中 3 的说明改为“致命错误或书源白名单拒绝” |
+
+**改动文件**：`scripts/auto_read_30min.py`、`qqreader/runner/handoff.py`、`qqreader/runner/exit_codes.py`、`tests/test_qqr55_reading_shelf.py`（新）、`tests/fixtures/autoread_shelf_frames.json`（新，2 帧真实 OCR：05:50:12 被误判的书城页、05:50:27 真实书架）、本日志。
+**验证**：`tests/test_qqr55_reading_shelf.py` 7 项通过：真实书城帧判为书城、真实书架帧判为书架；「勋章/装扮限时返场」不算进度行；书城 → 只点书架 tab → 确认后才找到白名单书，不点任何书；确认在书架但没有目标书时抛 `BookNotAllowed`，并记录完整 OCR；一直是书城时抛普通 `RuntimeError`，页面类型、OCR、截图都有记录。原有 `test_autoread_book_guard.py` 10 项仍通过。全量 391 passed、4 failed（与基线相同）、2 skipped。**未实机验证**（需要 GUI 从相同起点单跑「每日自动阅读」）。
+**未覆盖 / 遗留**：05:50:04 点活动弹窗 X 后页面为什么从书架跳到书城，日志不足以确定（可能点到了弹窗下的元素，也可能是 App 自己切的 tab），本次没有修改 `dismiss_blocking_dialogs`。Issue 里“每轮记录实际累计阅读时长”没有做：串行记录已按轮次分别记录状态和耗时，第一轮失败不会被第二轮覆盖，但还没有“正文页累计分钟”字段。
+**分支**：`claude/qqr-55-reading-shelf-20260927`（基于 `claude/qqr-54-level-ad-retention-20260927`）
+**回滚**：`git log --oneline -S "自动阅读不再把书城排行榜页当成书架" -- CHANGELOG.md` 定位后 `git revert <hash>`。
+
+---
+
+## 2026-09-27 · 等级页广告：识别截断的倒计时，挽留弹窗点「继续观看」（QQR-54）
+
+**触发**：GUI 批次 `daily_20260927_114947_a58b6564`，`DailyLevelAdFlow` 07:03:13 失败，留下的广告弹窗又拖垮了听书。逐帧核对 `runtime/logs/maafw.bak.2026.09.27-07.03.17.990.log` 第 26519～28318 行的 OCR 结果。
+
+| 模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| 倒计时识别 | 07:02:30～33 广告仍在倒计时（OCR「观看20秒」「前观看17秒」），链路却去关广告 | `AdCountdown` 只认 `观看.*秒.*可获得奖励`，截断的倒计时认不出；`AdBrowseOfferModal` 的「了解详情 / 跳转详情页或第三方应用」在普通视频广告上也有，于是倒计时中点了左上角 ×，触发挽留弹窗 | 等级广告覆盖里 `AdCountdown.expected` 增加 `观看\s*\d+\s*秒`（不会匹配弹窗正文「观看视频30秒」）；所有 next 列表里 `AdCountdown` 排到 `AdBrowseOfferModal` 之前 |
+| 挽留弹窗 | 07:02:36 起弹窗停留 37 秒，返回 8 次无效后失败 | 调查结论修正了 Issue 的说法：弹窗是提前关闭造成的；`AdBrowseOfferModal` / `AdCloseByBackKey` / `AdBackUntilRewardOrShelf` 等节点的 next 都没有弹窗分支 | `scripts/run_task.py::_apply_level_ad_retention_overrides`：新增 `LevelAdRetentionContinue`（点「继续观看」，最多 3 次）和 `LevelAdRetentionGiveUp`（之后点「放弃奖励」，回等级页走原有的换广告重试和“今日已完成”核对）；插入 8 个关闭/返回/倒计时节点的 next，位置在验证码节点之后、其余节点之前。该函数放在覆盖函数末尾执行，避免被 `AdStaticDownloadClose` 的重建冲掉 |
+
+**改动文件**：`scripts/run_task.py`、`tests/test_qqr54_level_ad_retention.py`（新）、`tests/fixtures/level_ad_ocr_frames.json`（新，3 帧真实 OCR）、本日志。
+**验证**：`tests/test_qqr54_level_ad_retention.py` 9 项通过：用本机真实 pipeline 加覆盖，再按 MaaFW next 顺序模拟识别真实 OCR 帧。先复现原链：弹窗上只会落到返回键节点，截断倒计时会命中 `AdBrowseOfferModal`。修复后：倒计时帧从 4 个入口都停在 `AdCountdown` 等待；弹窗帧从 8 个入口都点真实「继续观看」框 (291,754,133,39)；3 次后改点「放弃奖励」(299,840,119,37)；验证码节点仍排在最前；可重复应用、无悬空引用。全量 384 passed、4 failed（与基线相同）、2 skipped。**未实机验证**。
+**未覆盖 / 遗留**：模拟器不评估 TemplateMatch（验证码模板）和 MaaFW 的 timeout / on_error 细节，实机行为仍需 GUI 单跑「每日等级广告」确认。赠币卡没有像积分卡那样的“今日已完成”核对：我手上没有赠币卡完成状态的真实截图，没有贸然加判定，本条仍需补。覆盖只在 `DailyLevelAdFlow` 启动时注入，`DailyAdFlow`（新流程）不受影响。
+**分支**：`claude/qqr-54-level-ad-retention-20260927`（基于 `claude/qqr-53-handoff-20260927`）
+**回滚**：`git log --oneline -S "等级页广告：识别截断的倒计时" -- CHANGELOG.md` 定位后 `git revert <hash>`。
+
+---
+
+## 2026-09-27 · 串行任务之间先做交接检查，验证码阻塞不再继续下一项（QQR-53）
+
+**触发**：GUI 批次 `daily_20260927_114947_a58b6564`：等级广告停在「继续观看 / 放弃奖励」挽留弹窗上失败（exit 2），听书随即从广告页启动，`AudiobookBackUntilShelf` 返回 8 次后也失败（`runtime/logs/maafw.log` 第 507 行是听书启动时的画面）。另外离线核对确认：新流程除 SUCCESS 外一律 exit 2，验证码阻塞后继续排下一项是可达的代码路径。
+
+| 模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| 退出码 | 验证码阻塞 / 超时 / 设备错误都是 2 | `scripts/run_task.py` 新流程 `return 0 if result.succeeded else 2` | 新增 `qqreader/runner/exit_codes.py`：10 验证码阻塞、11 超时、12 设备错误、13 取消、20 交接失败；0/2/3 原义不变。新流程用 `exit_code_for_outcome`；设备预检失败、重试耗尽、`MaaClientError` 改为 12 |
+| 交接检查 | 前一项结束后不看现场就启动下一项 | GUI `_on_task_finished` 只看退出码并按固定间隔 `_start_next_task` | 新增 `qqreader/runner/handoff.py::check_handoff`：每帧先查验证码（有则不做任何动作，返回 CAPTCHA）；确认书架才 READY；确认框点「取消」、挽留弹窗点「放弃奖励」、书城点书架 tab、开屏点「跳过」，其余返回最多 4 次，再重启一次 App；每个动作后重新截图确认；最后一帧存证据 `screenshots/handoff/`。`run_task.py` 新增 `--task HandoffCheck --next-task --handoff-report` |
+| 流水线记录 | 失败原因只剩“子进程退出码 N” | `DailyFlowRun` 只有成功/失败 | `qqreader/workflow.py`：新增步骤状态与流水线状态 `BLOCKED_BY_CAPTCHA`；步骤记录 `outcome`（退出码含义）和 `handoff`（结论、原因、动作、OCR、证据、前项结果）；`apply_handoff` 统一决定启动 / 跳过 / 验证码阻塞；`record_version` 升到 2 |
+| GUI 串行 | 同上 | 同上 | `qqreader/gui/app.py`：`_on_task_finished` → `_after_step_finished` → `_start_handoff_check` → `_on_handoff_finished`；退出码 10 或交接发现验证码时停止整轮；交接失败只跳过这一项，下一项再做自己的交接检查。`theme.STEP_STYLES` 增加「验证码阻塞」 |
+| `scripts/daily_all.py` | 与 GUI 语义不一致 | 自己写死 0/2 | 改用同一个 `apply_handoff`，每项（第 2 项起）启动前跑 `HandoffCheck`，记录真实退出码 |
+
+**改动文件**：`qqreader/runner/exit_codes.py`（新）、`qqreader/runner/handoff.py`（新）、`qqreader/workflow.py`、`qqreader/gui/app.py`、`qqreader/gui/commands.py`、`qqreader/gui/theme.py`、`scripts/run_task.py`、`scripts/daily_all.py`、`docs/usage.md`、`README.md`、`tests/test_qqr53_handoff.py`（新）、`tests/fixtures/handoff_ocr_frames.json`（新，5 帧真实 OCR，来源写在文件里）、本日志。
+**验证**：`tests/test_qqr53_handoff.py` 21 项通过：真实 OCR 帧分类（挽留弹窗、书架、书城+升级弹窗、书架+退出确认框、奖励页上的验证码）；挽留弹窗 → 点「放弃奖励」→ 书架 READY；验证码首帧 / 返回后出现都立即停手（无点击、无返回、无重启）；退不回去 → 返回 + 重启一次 → UNSAFE；GUI 故障注入：等级广告 exit 2 后先跑交接检查，UNSAFE 时听书记为跳过并保留原因，READY 后才启动听书；exit 10 或交接发现验证码时不再启动任何任务。全量 `py -3.10 -m pytest`：375 passed、4 failed、2 skipped，4 项失败与导入基线相同。**未实机验证**：交接检查会按返回键、重启 App，GUI 可能正在使用模拟器，未经用户同意没有在实机上跑。
+**未覆盖 / 遗留**：只由单元测试覆盖——实机上的挽留弹窗交接、重启 App 分支、验证码阻塞停整轮。第 1 项任务前不做交接检查（一键执行已先启动 QQ 阅读并清理弹窗；单项运行保留用户选择的起点）。任务间隔等待期间按「停止」仍不会立即生效（原有行为）。旧流程（等级广告、听书）自身识别不到验证码，只能靠下一次交接检查发现。
+**分支**：`claude/qqr-53-handoff-20260927`（基于 `claude/import-wip-20260927`）
+**回滚**：`git log --oneline -S "串行任务之间先做交接检查" -- CHANGELOG.md` 定位后 `git revert <hash>`。
+
+---
+
+## 2026-09-27 · 入库主检出中已在使用但未提交的工作区改动（QQR-53 前置）
+
+**触发**：用户要求依次修复 QQR-53 / 54 / 55。主检出 `G:\project_X` 的 `master` 工作区有约 2,500 行未提交改动（GUI、广告/奖励/游戏任务、自动阅读、验证码求解器），GUI 每天实际运行的是这版代码，但 Git 里没有；基于 `master` 修复会与之冲突，也会改到过时代码。用户同意先入库再修复。
+
+| 分组 | 文件 | 对应的既有 CHANGELOG 条目 |
+| --- | --- | --- |
+| GUI | `qqreader/gui/app.py`、`dynamic_plan.py`、`task_catalog.py`，新增 `theme.py`、`widgets.py`；`启动QQReaderGUI.cmd`；测试 `test_dynamic_plan`、`test_gui_task_catalog`、`test_issue12_gui_observability`，新增 `test_gui_stale_settings` | 09-26「修复旧 GUI 沿用 2 分钟任务超时」、09-24「整理启动脚本」 |
+| 验证码求解器 | `qqreader/captcha/factory.py`、`slide.py`；`test_qqr29_captcha` | 09-26「滑动验证每 4 次失败刷新」「修正滑块缺口定位」 |
+| 自动阅读 | `scripts/auto_read_30min.py`、`_autoread_final300.py`、`_swipe280b.py`；`test_autoread_book_guard` | 09-24「修复 09-23 日志中…阅读失败」 |
+| 广告 / 奖励 / 游戏任务 | `qqreader/page/*`、`reward/nav.py`、`runner/recording.py`、`tasks/*`、`scripts/run_task.py` 及对应测试，新增 `test_ad_corner_close` | 09-26「广告观看后识别左右上角 X」「恢复 45 分钟超时」「阅读卡标题 OCR 误读」、09-24 条目 |
+
+**改动文件**：见上表；文件内容与主检出工作区逐字一致（复制，无编辑）。
+**未入库**：`qqreader/runner/runner.py`、`tests/test_qqr39_observe_interrupt.py`（QQR-39，另一会话在做）；根目录 `build-gui-exe.cmd`、`start-gui.cmd` 的删除；`runtime/screenshots/ad_watch/captcha_now.png` 的删除（需用户同意）；约 480 个未跟踪的 `scripts/_*.py` 临时脚本和 `docs/` 未跟踪文档；`scripts/live_sendevent.py`（`scripts/live_captcha_auto.py` 依赖它，但内含写死的 `G:\project_X\runtime` 路径，归 QQR-34 处理）。
+**验证**：worktree 通过目录联接引用主检出的 `dev/` 与 `_backup_old_project_20260909_200716/` 后，`py -3.10 -m pytest`：353 passed、4 failed、3 skipped。4 项失败都是原本就有的：`test_qqr27_ad_flow::test_ad_play_waits_40_seconds_before_handling_buttons`、`test_ad_round_regressions::test_each_ad_round_has_its_own_initial_wait`（40 秒 vs 35 秒）、`test_ad_round_regressions::test_live_exit_attempt_does_not_restart_eight_swipe_cycle`、`test_issue15_reward_nav::test_live_snap_detects_saved_png_not_raw_screenshot_data`（`live_sendevent` 未入库）。未实机验证（代码与每日实际运行版本相同）。
+**未覆盖 / 遗留**：分组提交的中间状态不保证单独可测，只保证最后一个提交全量测试结果如上。
+**分支**：`claude/import-wip-20260927`
+**回滚**：`git log --oneline -S "入库主检出中已在使用但未提交" -- CHANGELOG.md` 定位后，对 4 个导入提交逐个 `git revert <hash>`。
+
+---
+
 ## 2026-09-27 · README 补充每日听书书目说明，合并为「书目白名单」
 
 **触发**：用户要求把每日听书的白名单也写进 README。

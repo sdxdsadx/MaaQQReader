@@ -190,16 +190,19 @@ class FileRunRecorder:
         self._config.screenshot_dir.mkdir(parents=True, exist_ok=True)
 
     def _screenshot_target(self, at: float, kind: str) -> Path:
-        date = datetime.fromtimestamp(at).strftime("%Y%m%d")
+        # ``at`` 来自 RealClock（time.monotonic，开机秒数），不能当日期用；
+        # 否则文件名会变成 19700102_xxx。文件名统一用墙钟时间。
+        wall = time.time()
+        date = datetime.fromtimestamp(wall).strftime("%Y%m%d")
         filename = (
-            f"{_safe_name(self._task)}_{_stamp(at)}_"
+            f"{_safe_name(self._task)}_{_stamp(wall)}_"
             f"{self._sequence:03d}_{_safe_name(kind)}.png"
         )
         return self._config.screenshot_dir / date / filename
 
     def _record_target(self, result: TaskResult) -> Path:
         return self._config.record_dir / (
-            f"{_safe_name(result.task)}_{_stamp(result.ended_at or time.time())}.json"
+            f"{_safe_name(result.task)}_{_stamp(time.time())}.json"
         )
 
     def _save_screenshot(

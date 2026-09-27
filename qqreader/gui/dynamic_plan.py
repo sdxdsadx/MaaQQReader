@@ -18,6 +18,27 @@ MARKERS = {
 }
 
 
+def _normalized_ocr(text: str) -> str:
+    """Normalize a small set of observed, unambiguous reward-page OCR errors."""
+    return text.replace(" ", "").replace("赠市", "赠币")
+
+
+def _has_daily_reading_card(boxes) -> bool:
+    return any("每日阅读领赠币" in _normalized_ocr(text) for text, _ in boxes)
+
+
+def _dismiss_checkin_popup(client, boxes) -> bool:
+    if not any("签到成功" in text for text, _ in boxes):
+        return False
+    button = next((box for text, box in boxes if "我知道了" in text), None)
+    if button is None:
+        return False
+    x, y, width, height = button
+    client.click(x + width // 2, y + height // 2)
+    time.sleep(1)
+    return True
+
+
 def plan_from_cards(cards):
     settings = default_settings()
     for setting in settings.values():
@@ -89,7 +110,9 @@ def collect_cards(client, evidence_dir: Path):
         boxes = client.recognize("OCR", {}, shot).text_boxes()
         if any("安全验证" in t or "完成拼图" in t for t, _ in boxes):
             raise RuntimeError("验证码阻塞规划，请先处理")
-        if any("每日阅读领赠币" in t for t, _ in boxes):
+        if _dismiss_checkin_popup(client, boxes):
+            continue
+        if _has_daily_reading_card(boxes):
             break
         client.swipe(360, 350, 360, 1100, 500)
         time.sleep(1)
@@ -104,7 +127,7 @@ def collect_cards(client, evidence_dir: Path):
         if any("安全验证" in t or "完成拼图" in t for t, _ in boxes):
             raise RuntimeError("验证码阻塞规划，请先处理")
         for key, marker in MARKERS.items():
-            anchor = next((b for t, b in boxes if marker in t.replace(" ", "")), None)
+            anchor = next((b for t, b in boxes if marker in _normalized_ocr(t)), None)
             if anchor is None:
                 continue
             height = 330 if key == "DailyReadingFlow" else 100

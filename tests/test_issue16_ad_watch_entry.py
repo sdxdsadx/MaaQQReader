@@ -6,7 +6,7 @@ import pytest
 
 from qqreader.page.feature_keys import DEFAULT_FEATURE_KEYS
 from qqreader.page.states import RunState
-from qqreader.tasks.ad import AdTaskAdapter, build_ad_action_plan
+from qqreader.tasks.ad import AdTaskAdapter, build_ad_action_plan, build_ad_contract
 from qqreader.tasks.common import feature_key
 from tests.helpers import QQ, SimulatedDevice, home_observation, make_context, reward_observation
 from tests.test_issue15_reward_nav import FakeClient, Frame
@@ -61,6 +61,22 @@ def test_watch_entry_click_waits_for_async_ad_transition(adapter_factory) -> Non
     assert client.swipes == []
 
 
+def test_ignored_watch_entry_click_reopens_reward_page_after_three_rounds(
+    adapter_factory,
+) -> None:
+    client = FakeClient([[('立即观看', (540, 1080, 120, 50))]])
+    adapter = adapter_factory(client)
+    context, _ = _advance(adapter)
+
+    actions = []
+    for _ in range(3):
+        actions.append(adapter.advance(context).actions)  # transition wait
+        actions.append(adapter.advance(context).actions)  # retry or BACK
+
+    assert actions[-1] == ("PRESS_BACK",)
+    assert len(client.clicks) == 3
+
+
 def test_watch_entry_below_fold_is_clicked_after_n_scrolls(adapter_factory) -> None:
     frames: list[Frame] = [
         [("今日游戏", (50, 800, 180, 40))],
@@ -111,3 +127,21 @@ def test_home_reuses_reward_page_navigation_for_changed_entry_copy(adapter_facto
     assert step.description == "从首页定位奖励入口并确认进入奖励页"
     assert client.clicks == [(200, 200)]
     assert context.get("ad_watch_entry_error") is None
+
+
+def test_home_entry_error_does_not_stay_fatal_after_reward_page_arrives() -> None:
+    contract = build_ad_contract(KEYS)
+    context = make_context(home_observation(), run_state=RunState.RUNNING)
+    context.update_data(
+        ad_watch_entry_error="无法从首页定位奖励入口并确认进入奖励页",
+        ad_watch_entry_error_state="HOME",
+    )
+
+    assert next(rule for rule in contract.fatal_error if rule.name == "ad_watch_entry_not_found").when.evaluate(context).satisfied is True
+
+    reward_context = make_context(reward_observation(), run_state=RunState.RUNNING)
+    reward_context.update_data(
+        ad_watch_entry_error="无法从首页定位奖励入口并确认进入奖励页",
+        ad_watch_entry_error_state="HOME",
+    )
+    assert next(rule for rule in contract.fatal_error if rule.name == "ad_watch_entry_not_found").when.evaluate(reward_context).satisfied is False

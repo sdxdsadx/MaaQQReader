@@ -1,11 +1,11 @@
-"""Issue #2: offerwall ads use a bounded fast-abandon path."""
+"""Issue #2: offerwall ads wait before a single verified exit."""
 
 from __future__ import annotations
 
 from qqreader.page.feature_keys import DEFAULT_FEATURE_KEYS
 from qqreader.page.observation import PageObservation
 from qqreader.page.states import Orientation, RunState
-from qqreader.tasks.ad import AdTaskAdapter, build_ad_action_plan
+from qqreader.tasks.ad import AdTaskAdapter, build_ad_action_plan, build_ad_contract
 from qqreader.tasks.common import feature_key
 from tests.helpers import QQ, SimulatedDevice, ad_playing_observation, make_context, make_recognizer
 
@@ -57,8 +57,9 @@ def test_offerwall_with_x_clicks_x_then_abandon_reward() -> None:
     adapter = _adapter(device)
     context = _context()
 
+    _wait_for_video(adapter, context, device)
     assert adapter.advance(context).actions == ("TAP_POINT",)
-    assert ("tap_point", 34, 58) in device.calls
+    assert ("tap_point", 48, 70) in device.calls
     _finish_exit_settle(adapter, context)
     _observe(context, OFFER_TEXT + ("继续观看", "放弃奖励"))
 
@@ -85,6 +86,7 @@ def test_offerwall_without_x_presses_back_then_abandons_reward() -> None:
     texts = tuple(text for text in OFFER_TEXT if text != "X")
     context = _context(texts)
 
+    _wait_for_video(adapter, context, device)
     assert adapter.advance(context).actions == ("PRESS_BACK",)
     assert ("press_back",) in device.calls
     _finish_exit_settle(adapter, context)
@@ -102,23 +104,58 @@ def test_offerwall_after_countdown_still_uses_fast_exit() -> None:
         "大众点评",
     ))
 
-    assert _adapter(device).advance(context).actions == ("TAP_POINT",)
-    assert ("tap_point", 34, 58) in device.calls
+    adapter = _adapter(device)
+    _wait_for_video(adapter, context, device)
+    assert adapter.advance(context).actions == ("TAP_POINT",)
+    assert ("tap_point", 48, 70) in device.calls
 
 
-def test_offerwall_three_ineffective_rounds_restart_app_and_stop_retrying() -> None:
+def _wait_for_video(adapter, context, device):
+    started = context.now
+    assert adapter.advance(context).actions == ("WAIT",)
+    assert context.now - started == 35.0
+    assert device.calls == []
+
+
+def test_offerwall_corrupted_countdown_waits_before_back():
     device = SimulatedDevice()
     adapter = _adapter(device)
-    context = _context()
+    context = _context(("大众点29秒，", "可获得奖励", "了解详情", "跳转详情页或第三方应用"))
+    _wait_for_video(adapter, context, device)
+    assert adapter.advance(context).actions == ("PRESS_BACK",)
+    _finish_exit_settle(adapter, context)
+    for _ in range(80):
+        adapter.advance(context)
+    # 返回键 20 秒无效后，依次改点左上角 X、再按一次返回；仍无效才判失败。
+    assert device.calls == [("press_back",), ("tap_point", 48, 70), ("press_back",)]
+    assert context.get("ad_exit_error")
 
-    assert adapter.advance(context).actions == ("TAP_POINT",)
-    _finish_exit_settle(adapter, context)
-    assert adapter.advance(context).actions == ("TAP_POINT",)
-    _finish_exit_settle(adapter, context)
-    assert adapter.advance(context).actions == ("TAP_POINT",)
-    _finish_exit_settle(adapter, context)
-    assert adapter.advance(context).actions == (f"RESTART_APP:{QQ}",)
 
-    assert device.calls.count(("tap_point", 34, 58)) == 3
-    assert ("stop_app", QQ) in device.calls
-    assert ("launch_app", QQ) in device.calls
+def test_offerwall_reward_granted_card_taps_x_instead_of_back():
+    """2026-09-23：「恭喜获得奖励」+「了解详情」卡不响应返回键，必须点 X。"""
+    device = SimulatedDevice()
+    adapter = _adapter(device)
+    context = _context(("恭喜获得奖励", "了解详情", "跳转详情页或第三方应用"))
+    _wait_for_video(adapter, context, device)
+    assert adapter.advance(context).actions == ("TAP_POINT",)
+    assert device.calls == [("tap_point", 48, 70)]
+
+
+def test_rating_end_card_closes_once_after_video_exit():
+    device = SimulatedDevice()
+    adapter = _adapter(device)
+    context = _context(tuple(t for t in OFFER_TEXT if t != "X"))
+    _wait_for_video(adapter, context, device)
+    assert adapter.advance(context).actions == ("PRESS_BACK",)
+    _finish_exit_settle(adapter, context)
+    _observe(context, ("大众点评", "5.0", "了解详情", "跳转详情页或第三方应用"))
+    assert adapter.advance(context).actions == ("TAP_POINT",)
+    _finish_exit_settle(adapter, context)
+    adapter.advance(context)
+    assert device.calls == [("press_back",), ("tap_point", 53, 112)]
+
+
+def test_entered_ad_satisfies_ready_without_reward_banner():
+    context = _context(("大众点29秒，", "可获得奖励", "了解详情", "跳转详情页或第三方应用"))
+    assert build_ad_contract().ready_condition.evaluate(context).satisfied
+    assert not build_ad_contract().success_condition.evaluate(context).satisfied

@@ -1,4 +1,4 @@
-from qqreader.gui.dynamic_plan import plan_from_cards
+from qqreader.gui.dynamic_plan import _dismiss_checkin_popup, _has_daily_reading_card, plan_from_cards
 
 
 def test_remaining_time_gets_one_buffer_and_completed_ads_are_skipped():
@@ -37,3 +37,22 @@ def test_completed_listening_only_schedules_claim():
     settings, _ = plan_from_cards({"DailyAudiobookFlow": "每日听书30分钟 立即领取 已听83分钟"})
     assert settings["ClaimAudiobookReward"].enabled
     assert not settings["DailyAudiobookFlow"].enabled
+
+
+def test_daily_reading_card_tolerates_observed_coin_ocr_error():
+    assert _has_daily_reading_card([("每日阅读领赠市", (58, 953, 159, 27))])
+
+
+def test_checkin_popup_is_dismissed_by_recognized_button(monkeypatch):
+    monkeypatch.setattr("qqreader.gui.dynamic_plan.time.sleep", lambda _: None)
+
+    class Client:
+        clicks = []
+
+        def click(self, x, y):
+            self.clicks.append((x, y))
+
+    client = Client()
+    boxes = [("签到成功，获得10赠币", (183, 502, 350, 40)), ("我知道了", (312, 752, 93, 28))]
+    assert _dismiss_checkin_popup(client, boxes)
+    assert client.clicks == [(358, 766)]

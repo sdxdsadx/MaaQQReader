@@ -92,6 +92,31 @@ def build_run_task_command(
     return tuple(command)
 
 
+def build_handoff_command(
+    python_executable: str,
+    repo_root: Path,
+    config_path: Path,
+    next_task: str,
+    report_path: Path,
+    *,
+    python_args: Sequence[str] = (),
+) -> Tuple[str, ...]:
+    """构造串行交接检查命令（QQR-53）：确认现场可交给 ``next_task`` 再启动它。"""
+    command = build_run_task_command(
+        python_executable,
+        repo_root,
+        config_path,
+        "HandoffCheck",
+        python_args=python_args,
+    )
+    return command + (
+        "--next-task",
+        next_task,
+        "--handoff-report",
+        str(report_path),
+    )
+
+
 def build_emulator_launch_command(
     emulator_path: Path,
     *,

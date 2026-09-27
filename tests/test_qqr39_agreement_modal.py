@@ -12,6 +12,7 @@ from tests.helpers import QQ, SimulatedDevice, make_context, make_recognizer
 KEYS = DEFAULT_FEATURE_KEYS
 CONFIRM_KEY = feature_key(KEYS, KEYS.game_ocr_confirm)
 ENTER_KEY = feature_key(KEYS, KEYS.game_ocr_enter)
+AGREE_KEY = feature_key(KEYS, KEYS.game_ocr_agree)
 
 
 def modal_observation() -> PageObservation:
@@ -42,6 +43,20 @@ def enter_page_observation() -> PageObservation:
         current_app=QQ,
         orientation=Orientation.PORTRAIT,
         ocr_texts=("进入游戏",),
+    )
+
+
+def privacy_dialog_observation() -> PageObservation:
+    return PageObservation(
+        current_app=None,
+        orientation=Orientation.PORTRAIT,
+        ocr_texts=(
+            "护.在您进入游戏前，请您务必谨慎阅读《用户协议》",
+            "议》和《隐私协议》并请点击“同意”开始使用我们的服务",
+            "不同意",
+            "同意",
+            "领币",
+        ),
     )
 
 
@@ -163,6 +178,18 @@ def test_agreement_page_without_modal_keeps_legacy_behavior() -> None:
     adapter.advance(context)
     assert ("tap_feature", ENTER_KEY) in device.calls
     assert ("tap_feature", CONFIRM_KEY) not in device.calls
+
+
+def test_privacy_dialog_prefers_exact_agree_button_over_body_enter_text() -> None:
+    adapter, device = _adapter_and_device()
+    context = make_context(privacy_dialog_observation(), run_state=RunState.RUNNING)
+    assert context.state is PageState.GAME_LOADING
+
+    step = adapter.advance(context)
+
+    assert step.actions == (ActionKind.TAP_POINT.value,)
+    assert ("tap_point", 494, 761) in device.calls
+    assert ("tap_feature", ENTER_KEY) not in device.calls
 
 
 def test_modal_garbled_text_still_triggers_via_confirm_enter_combo() -> None:

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 import sys
 import time
@@ -23,6 +24,7 @@ for _stream in (sys.stdout, sys.stderr):
         reconfigure(encoding="utf-8", errors="replace")
 
 from qqreader.config import load_config
+from qqreader.captcha.guard import ManualCaptchaGuard
 from qqreader.errors import ContractViolation
 from qqreader.maa.catalog import FeatureCatalog
 from qqreader.maa.device import MaaDeviceController
@@ -34,6 +36,14 @@ from qqreader.page.profiles import build_default_state_definitions
 from qqreader.page.recognizer import PageStateRecognizer
 from qqreader.recovery.policy import EscalationPolicy
 from qqreader.runner.recording import FileRunRecorder, RecordingConfig
+from qqreader.runner.exit_codes import (
+    EXIT_BLOCKED_BY_CAPTCHA,
+    EXIT_DEVICE_ERROR,
+    EXIT_HANDOFF_UNSAFE,
+    EXIT_SUCCESS,
+    exit_code_for_outcome,
+)
+from qqreader.runner.handoff import HandoffVerdict, check_handoff
 from qqreader.runner.retry import BackoffPolicy, RetryExhaustedError, run_with_retry
 from qqreader.runner.runner import RunnerConfig, TaskRunner
 from qqreader.runtime.clock import RealClock
@@ -55,6 +65,8 @@ from qqreader.runner.gui_observability import (
 _LOG = logging.getLogger("qqreader.task")
 
 SYSTEM_TASKS = ("LaunchQQReader", "SmokeTest")
+#: QQR-53：串行调度在两项任务之间调用，确认现场可交接后才启动下一项。
+HANDOFF_TASK = "HandoffCheck"
 NEW_FLOW_TASKS = (GAME_TASK_NAME, AD_TASK_NAME)
 LEGACY_NOT_IMPLEMENTED = (
     "DailyReadingFlow",
@@ -62,7 +74,12 @@ LEGACY_NOT_IMPLEMENTED = (
     "DailyExternalAppFlow",
     "DailyLevelAdFlow",
 )
-TASK_NAMES = NEW_FLOW_TASKS + SYSTEM_TASKS + LEGACY_NOT_IMPLEMENTED + ("ClaimOneReward", "ClaimAudiobookReward")
+TASK_NAMES = (
+    NEW_FLOW_TASKS
+    + SYSTEM_TASKS
+    + LEGACY_NOT_IMPLEMENTED
+    + ("ClaimOneReward", "ClaimAudiobookReward", HANDOFF_TASK)
+)
 
 LEGACY_ENTRY = {
     "DailyReadingFlow": "DirectReadingFlow",
@@ -134,6 +151,36 @@ def _apply_level_ad_runtime_overrides(data: Dict[str, Any]) -> None:
     if isinstance(level_ready, dict):
         level_ready["next"] = ["LevelTopReady", "LevelScrollToTop"]
 
+    # 返回广告后要按来源区分两张等级卡。原链先用宽泛的
+    # LevelAfterCoinAd 命中“用户等级”，导致积分广告结束后再次进入
+    # LevelFindPointsAd，最后滑到底触发 max_hit=8。
+    coin_return = data.get("LevelAfterCoinAd")
+    if isinstance(coin_return, dict):
+        coin_return["expected"] = "看小视频.*积分"
+    stable = data.get("AdReturnStable")
+    if isinstance(stable, dict) and isinstance(stable.get("next"), list):
+        _insert_before(stable["next"], "LevelAfterPointsAd", "AdDailyComplete")
+    points_return = data.get("LevelAfterPointsAd")
+    if isinstance(points_return, dict):
+        # 返回等级页仅证明广告关闭，仍须看见积分任务行的“今日已完成”。
+        # 2026-09-24 实测：积分广告可能是需跳第三方的浏览型广告，流程会
+        # 「跳过」放弃奖励后返回，积分行仍是「看小视频」。此时换一条广告
+        # 重试（LevelClickPointsAdAgain 最多 2 次），而不是直接判失败。
+        points_return["next"] = [
+            "LevelPointsSectionFound", "LevelClickPointsAdAgain", "LevelVerifyPointsScroll",
+        ]
+    data["LevelVerifyPointsScroll"] = {
+        "action": "Swipe",
+        "begin": [360, 420],
+        "end": [360, 1120],
+        "duration": 500,
+        "post_delay": 700,
+        "max_hit": 5,
+        "next": [
+            "LevelPointsSectionFound", "LevelClickPointsAdAgain", "LevelVerifyPointsScroll",
+        ],
+    }
+
     points_done = data.get("LevelPointsSectionFound")
     if isinstance(points_done, dict):
         # 不能只凭左侧“看小视频，+5积分”标题判完成：未执行时该标题
@@ -145,6 +192,9 @@ def _apply_level_ad_runtime_overrides(data: Dict[str, Any]) -> None:
             "roi": [520, 500, 180, 300],
             "focus": "等级页积分广告已显示今日完成，流程结束",
         })
+
+    _apply_level_entry_popup_overrides(data)
+    _apply_level_ad_launch_retry_overrides(data)
 
     data["LevelTopReady"] = {
         "recognition": "OCR",
@@ -193,10 +243,171 @@ def _apply_level_ad_runtime_overrides(data: Dict[str, Any]) -> None:
             "AdCloseByBackKey",
         ],
     }
+    # 必须最后执行：上面会整体重建 AdStaticDownloadClose 等节点。
+    _apply_level_ad_retention_overrides(data)
+
+
+LEVEL_POPUP_CLOSE_NODES = ("LevelTeenModeDismiss",)
+
+
+def _apply_level_entry_popup_overrides(data: Dict[str, Any]) -> None:
+    """点击「等级」后没进入等级页时，关掉青少年模式提示并重新点击。
+
+    2026-09-23 20:30 实测：点「等级」时青少年模式提示正在弹出/收起，点击被
+    吞掉，页面停在「我的」；原 LevelClickLevelIcon 的 next 只有
+    LevelPageReady，20 秒后整条等级广告流程超时失败。
+    注意：「我的」页「基因」图标会被 OCR 成孤立的 “X”，因此绝不能按
+    OCR “X” 去点关闭（2026-09-24 验证时误入「我的阅读基因」页）。
+    """
+    retry_next = ["LevelPageReady", *LEVEL_POPUP_CLOSE_NODES, "LevelClickLevelIconAgain"]
+    data.pop("LevelMyPopupClose", None)
+    data["LevelTeenModeDismiss"] = {
+        "recognition": "OCR",
+        "expected": "^(我知道了|知道了)$",
+        "action": "Click",
+        "post_delay": 1200,
+        "max_hit": 3,
+        "focus": "关闭青少年模式提示",
+        "next": list(retry_next),
+    }
+    data["LevelClickLevelIconAgain"] = {
+        "recognition": "OCR",
+        "expected": "^等级$",
+        "roi": [0, 560, 720, 240],
+        "action": "Click",
+        "post_delay": 3000,
+        "max_hit": 3,
+        "focus": "上次点击「等级」未进入等级页，重新点击",
+        "next": list(retry_next),
+    }
+    icon = data.get("LevelClickLevelIcon")
+    if isinstance(icon, dict):
+        icon["next"] = list(retry_next)
+    my_ready = data.get("LevelMyPageReady")
+    if isinstance(my_ready, dict) and isinstance(my_ready.get("next"), list):
+        my_ready["next"] = [n for n in my_ready["next"] if n != "LevelMyPopupClose"]
+        for name in reversed(LEVEL_POPUP_CLOSE_NODES):
+            if name not in my_ready["next"]:
+                my_ready["next"].insert(0, name)
+
+
+def _apply_level_ad_launch_retry_overrides(data: Dict[str, Any]) -> None:
+    """点击等级页广告入口后广告没拉起来时，等待并重试，而不是去滑等级页。
+
+    2026-09-23 18:16 实测：点「看小视频」3.5 秒后仍停在等级页，链路落到
+    AdScrollDownRepeat 把等级页本身下滑，再被 AdReturnedAfterClose 当成
+    “广告已关闭”，最终积分行没有“今日已完成”而失败。
+    """
+    for click_name, wait_name, again_name in (
+        ("LevelClickPointsAd", "LevelPointsAdNotStarted", "LevelClickPointsAdAgain"),
+        ("LevelClickCoinAd", "LevelCoinAdNotStarted", "LevelClickCoinAdAgain"),
+    ):
+        click = data.get(click_name)
+        if not isinstance(click, dict) or not isinstance(click.get("next"), list):
+            continue
+        base_next = [n for n in click["next"] if n not in (wait_name, again_name)]
+        _insert_before(base_next, wait_name, "AdScrollDownRepeat")
+        click["next"] = base_next
+        wait_next = [n for n in base_next if n != wait_name]
+        _insert_before(wait_next, again_name, "AdScrollDownRepeat")
+        _insert_before(wait_next, wait_name, "AdScrollDownRepeat")
+        data[wait_name] = {
+            "recognition": "OCR",
+            "expected": "完成任务积分自动下发|用户等级|提升等级",
+            "action": "DoNothing",
+            "post_delay": 3000,
+            "max_hit": 4,
+            "focus": "广告入口已点击但仍停在等级页，等待广告拉起",
+            "next": wait_next,
+        }
+        again = {k: v for k, v in click.items() if k != "next"}
+        again.update({
+            "max_hit": 2,
+            "focus": "广告未拉起，重新点击等级页广告入口",
+            "next": list(base_next),
+        })
+        data[again_name] = again
+
+
+#: 挽留弹窗要先于倒计时处理：弹窗背后的倒计时文字（「首观看16秒」）仍可见。
+LEVEL_RETENTION_NODES = ("LevelAdRetentionContinue", "LevelAdRetentionGiveUp")
+#: 关闭 / 返回后可能落到挽留弹窗的节点；原 next 没有弹窗分支，只会连按返回。
+LEVEL_RETENTION_ENTRY_NODES = (
+    "AdBrowseOfferModal",
+    "AdCloseByBackKey",
+    "AdBackUntilRewardOrShelf",
+    "AdStaticDownloadClose",
+    "AdCloseAfterNormalCountdown",
+    "AdCountdown",
+    "AdScrollDownRepeat",
+    "AdSkipBrowseOffer",
+)
+LEVEL_CAPTCHA_NODES = ("AdSlideCaptchaDetected", "AdCaptchaDetected")
+
+
+def _apply_level_ad_retention_overrides(data: Dict[str, Any]) -> None:
+    """QQR-54：等级页广告的倒计时识别与「继续观看 / 放弃奖励」挽留弹窗。
+
+    2026-09-27 ``daily_20260927_114947_a58b6564`` 实测：赠币广告左上角倒计时 OCR
+    只有「观看20秒」「前观看17秒」（截断，没有「可获得奖励」），``AdCountdown``
+    识别不到，链路落到 ``AdBrowseOfferModal`` 在倒计时中点左上角 × 提前关闭，
+    触发挽留弹窗「观看视频30秒，才能获得奖励 / 继续观看 / 放弃奖励」；之后
+    ``AdCloseByBackKey`` / ``AdBackUntilRewardOrShelf`` 没有弹窗分支，返回键对
+    弹窗无效，8 次后任务失败并把弹窗留给下一项。
+    """
+    countdown = data.get("AdCountdown")
+    if isinstance(countdown, dict):
+        # 短倒计时：数字紧跟「观看」，不会误中弹窗正文「观看视频30秒」。
+        countdown["expected"] = "观看.*秒.*可获得奖励|观看\\s*\\d+\\s*秒"
+
+    data["LevelAdRetentionContinue"] = {
+        "recognition": "OCR",
+        "expected": "^继续观看$",
+        "action": "Click",
+        "post_delay": 1500,
+        "max_hit": 3,
+        "focus": "广告挽留弹窗：奖励需要看满，点「继续观看」回到广告",
+        "next": [
+            *LEVEL_CAPTCHA_NODES,
+            "AdCompleted",
+            "AdRewardIssued",
+            "AdCountdown",
+            "AdCloseAfterNormalCountdown",
+            "AdScrollDownRepeat",
+        ],
+    }
+    data["LevelAdRetentionGiveUp"] = {
+        "recognition": "OCR",
+        "expected": "^(放弃奖励|坚持退出)$",
+        "action": "Click",
+        "post_delay": 1800,
+        "max_hit": 2,
+        "focus": "继续观看 3 次后仍回到挽留弹窗：放弃本条广告，回等级页由换广告重试和“今日已完成”核对决定结果",
+        "next": [*LEVEL_CAPTCHA_NODES, "AdReturnedAfterClose", "AdCloseByBackKey"],
+    }
+    for name in LEVEL_RETENTION_ENTRY_NODES:
+        node = data.get(name)
+        if not isinstance(node, dict) or not isinstance(node.get("next"), list):
+            continue
+        rest = [n for n in node["next"] if n not in LEVEL_RETENTION_NODES]
+        captcha = [n for n in rest if n in LEVEL_CAPTCHA_NODES]
+        others = [n for n in rest if n not in LEVEL_CAPTCHA_NODES]
+        # 验证码仍然最先判断；挽留弹窗紧随其后，先于倒计时和返回键。
+        node["next"] = [*captcha, *LEVEL_RETENTION_NODES, *others]
+    # 倒计时仍在走时不能去点左上角 ×：所有 next 里 AdCountdown 先于 AdBrowseOfferModal。
+    for node in data.values():
+        if not isinstance(node, dict) or not isinstance(node.get("next"), list):
+            continue
+        nexts = node["next"]
+        if "AdCountdown" in nexts and "AdBrowseOfferModal" in nexts:
+            if nexts.index("AdCountdown") > nexts.index("AdBrowseOfferModal"):
+                nexts.remove("AdCountdown")
+                nexts.insert(nexts.index("AdBrowseOfferModal"), "AdCountdown")
 
 
 def _patch_legacy_pipeline(
-    resource_dir: Path, node: Optional[str], minutes: Optional[float]
+    resource_dir: Path, node: Optional[str], minutes: Optional[float],
+    task: Optional[str] = None,
 ):
     pipeline_path = resource_dir / "pipeline" / "qq_reader_trial.json"
     if not pipeline_path.is_file():
@@ -204,7 +415,8 @@ def _patch_legacy_pipeline(
     original = pipeline_path.read_bytes()
     try:
         data = json.loads(original.decode("utf-8"))
-        _apply_level_ad_runtime_overrides(data)
+        if task == "DailyLevelAdFlow":
+            _apply_level_ad_runtime_overrides(data)
         if node and minutes and node in data:
             data[node]["post_delay"] = int(float(minutes) * 60000)
         pipeline_path.write_text(
@@ -242,7 +454,7 @@ def _run_legacy_task(task: str, config: Any, minutes: Optional[float]) -> int:
     if not ready:
         print("[legacy] 设备不可截图，旧流程可能仍会失败。", flush=True)
     patched_minutes = float(minutes) if minutes and float(minutes) > 0 else None
-    original = _patch_legacy_pipeline(resource_dir, node, patched_minutes)
+    original = _patch_legacy_pipeline(resource_dir, node, patched_minutes, task)
     command = [
         sys.executable,
         str(runner),
@@ -367,6 +579,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="可重试瞬断错误的最大重试次数",
     )
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--next-task", default="", help="HandoffCheck：下一项任务名，仅用于记录")
+    parser.add_argument("--handoff-report", default="", help="HandoffCheck：结果 JSON 输出路径")
     return parser
 
 
@@ -389,6 +603,13 @@ def _build_runtime(client: Any, *, verbose: bool):
     device = MaaDeviceController(client, locator)
     recognizer = PageStateRecognizer(build_default_state_definitions(keys))
     return keys, observer, device, recognizer
+
+
+def _captcha_guard_from_config(config: Any):
+    """把 CLI 使用的验证码配置传给直接构造的任务定义。"""
+    if config.captcha.solver == "manual":
+        return ManualCaptchaGuard()
+    return None
 
 
 def _run_system_task(
@@ -451,13 +672,98 @@ def run_device_preflight(client, config, policy, *, adb_probe=run_adb, log=None)
     )
 
 
+def _run_reading_task(config_path: str, minutes: Optional[float]) -> int:
+    """正文页禁止截图，使用按 Activity 计时的自动阅读流程。"""
+    duration = math.ceil(float(minutes)) if minutes is not None else 35
+    if duration < 1:
+        print("[配置错误] 阅读分钟必须 > 0", file=sys.stderr, flush=True)
+        return 2
+    command = [
+        sys.executable,
+        str(_ROOT / "scripts" / "auto_read_30min.py"),
+        "--config", str(config_path),
+        "--minutes", str(duration),
+        "--skip-claim",
+    ]
+    print(f"[reading] 正文保护页按 Activity 看护 {duration} 分钟", flush=True)
+    return subprocess.run(command, cwd=str(_ROOT), check=False).returncode
+
+
+_HANDOFF_EXIT_CODES = {
+    HandoffVerdict.READY: EXIT_SUCCESS,
+    HandoffVerdict.CAPTCHA: EXIT_BLOCKED_BY_CAPTCHA,
+    HandoffVerdict.UNSAFE: EXIT_HANDOFF_UNSAFE,
+}
+
+
+def _write_handoff_report(path: str, report: Dict[str, Any]) -> None:
+    if not path:
+        return
+    target = Path(path)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+    except OSError as exc:
+        print(f"[handoff] 报告写入失败: {exc}", flush=True)
+
+
+def _run_handoff_check(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
+    """QQR-53：两项任务之间确认现场。验证码 → 10；无法确认书架 → 20。"""
+    print(f"[handoff] 启动 {args.next_task or '下一项'} 前检查现场", flush=True)
+    client = build_maa_client(config)
+    try:
+        run_with_retry(client.connect, policy, log=_retry_log)
+        result = check_handoff(
+            client,
+            package=config.machine.package_name,
+            evidence_dir=Path(config.machine.screenshot_dir) / "handoff",
+        )
+    except Exception as exc:  # noqa: BLE001 - 设备异常时不放行下一项
+        reason = f"交接检查异常 {type(exc).__name__}: {exc}"
+        print(f"[handoff] verdict=UNSAFE reason={reason}", flush=True)
+        _write_handoff_report(
+            args.handoff_report,
+            {"verdict": "UNSAFE", "reason": reason, "next_task": args.next_task},
+        )
+        return EXIT_DEVICE_ERROR
+    finally:
+        client.close()
+    report = {
+        "verdict": result.verdict.value,
+        "reason": result.reason,
+        "frame": result.frame.value,
+        "actions": list(result.actions),
+        "last_ocr": list(result.last_ocr[:40]),
+        "evidence": str(result.evidence) if result.evidence else None,
+        "next_task": args.next_task,
+    }
+    print(
+        f"[handoff] verdict={result.verdict.value} frame={result.frame.value} "
+        f"reason={result.reason}",
+        flush=True,
+    )
+    print(f"[handoff] actions={list(result.actions)}", flush=True)
+    print(f"[handoff] ocr={list(result.last_ocr[:20])}", flush=True)
+    if result.evidence:
+        print(f"[evidence] {result.evidence}", flush=True)
+    _write_handoff_report(args.handoff_report, report)
+    return _HANDOFF_EXIT_CODES[result.verdict]
+
+
 def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
+    if args.task == HANDOFF_TASK:
+        return _run_handoff_check(args, policy, config)
     if args.task == "ClaimAudiobookReward":
         from scripts.daily_all import claim_audiobook_reward
         return 0 if claim_audiobook_reward(args.config) else 2
     if args.task in LEGACY_NOT_IMPLEMENTED:
         minutes = args.minutes if args.minutes is not None else args.duration_minutes
-        code = _run_legacy_task(args.task, config, minutes)
+        if args.task == "DailyReadingFlow":
+            code = _run_reading_task(args.config, minutes)
+        else:
+            code = _run_legacy_task(args.task, config, minutes)
         if code != 0:
             return code
         if args.task == "DailyAudiobookFlow":
@@ -476,9 +782,11 @@ def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
                     evidence_prefix="reading_reward_after_flow",
                 )
                 print("[result] " + result.reason, flush=True)
+                _LOG.info("reading reward: %s", result.reason)
                 return 0 if result.succeeded else 2
             except Exception as exc:
                 print(f"[post-task] 阅读奖励领取异常: {exc}", flush=True)
+                _LOG.error("reading reward exception: %s", exc)
                 return 2
             finally:
                 client.close()
@@ -518,7 +826,7 @@ def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
             print("[reason] 设备冒烟预检失败，任务未启动: " + preflight_detail, flush=True)
             if path:
                 print("[record] " + str(path), flush=True)
-            return 3
+            return EXIT_DEVICE_ERROR
         if args.task == "ClaimOneReward":
             result = claim_reading_rewards(
                 client,
@@ -545,6 +853,7 @@ def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
             )
 
         recovery = EscalationPolicy()
+        captcha_guard = _captcha_guard_from_config(config)
         if args.task == GAME_TASK_NAME:
             definition = build_game_definition(
                 keys,
@@ -554,6 +863,7 @@ def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
                 recognizer,
                 timeout_seconds=args.timeout_minutes * 60.0,
                 game_duration_seconds=float(game_duration) * 60.0,
+                captcha_guard=captcha_guard,
             )
         else:
             definition = build_ad_definition(
@@ -563,6 +873,7 @@ def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
                 recovery,
                 recognizer,
                 timeout_seconds=args.timeout_minutes * 60.0,
+                captcha_guard=captcha_guard,
                 navigation_client=client,
             )
         recorder = FileRunRecorder(
@@ -638,21 +949,34 @@ def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
         print("[result] " + result.summary(), flush=True)
         print("[outcome] " + result.outcome.value, flush=True)
         print("[reason] " + result.reason, flush=True)
+        _LOG.info(
+            "outcome=%s reason=%s record=%s",
+            result.outcome.value, result.reason, result.record_path,
+        )
         if result.record_path:
             print("[record] " + result.record_path, flush=True)
         for event in result.diagnostics[-60:]:
             print("  " + event.render(), flush=True)
-        return 0 if result.succeeded else 2
+        # QQR-53：验证码阻塞 / 超时 / 设备错误各有独立退出码，串行调度据此停下或跳过。
+        return exit_code_for_outcome(result.outcome)
     finally:
         client.close()
 
 
-# 退出码语义：0=成功；2=瞬断重试耗尽；3=致命错误/未预期异常。
-# （2 同时保留 run_task 原有的「任务未成功 / 参数配置错误」失败路径。）
+# 退出码语义见 qqreader/runner/exit_codes.py：0=成功；2=任务未成功/参数错误；
+# 3=致命错误/未预期异常；10=验证码阻塞；11=超时；12=设备错误；13=取消；
+# 20=交接检查无法确认安全起点。
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
     setup_task_file_logging(_ROOT / "runtime" / "logs", args.task)
     _LOG.info("task start argv=%s", " ".join(sys.argv[1:]))
+    code = _main_guarded(args)
+    # 之前 gui_*.log 只有 "task start" 一行，排查时看不到任务结果。
+    _LOG.info("task end exit=%s", code)
+    return code
+
+
+def _main_guarded(args: argparse.Namespace) -> int:
     try:
         policy = BackoffPolicy(max_retries=args.max_retries)
         # 配置缺失等致命错误由 is_retryable 判定为不可重试，直接上抛。
@@ -668,7 +992,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         print(f"[error] {type(exc.last_error).__name__}: {exc.last_error}", flush=True)
         _LOG.error("retry exhausted: %s", exc)
-        return 2
+        return EXIT_DEVICE_ERROR
     except MaaClientError as exc:
         print("[outcome] DEVICE_ERROR", flush=True)
         print(
@@ -676,7 +1000,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             flush=True,
         )
         _LOG.error("maa client error: %s", exc)
-        return 3
+        return EXIT_DEVICE_ERROR
     except ContractViolation as exc:
         print("[outcome] fatal_contract_violation", flush=True)
         print(f"[reason] 违反运行契约，任务终止: {exc}", flush=True)
