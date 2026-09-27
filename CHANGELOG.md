@@ -21,6 +21,22 @@
 
 ---
 
+## 2026-09-27 · README 补充每日听书书目说明，合并为「书目白名单」
+
+**触发**：用户要求把每日听书的白名单也写进 README。
+
+| 模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| README.md | 只写了自动阅读白名单，看不出听书固定播放哪本书 | 听书书目只写在本机 `dev/resource/pipeline/qq_reader_trial.json`（`AudiobookFindBook.expected = "全职法师"`） | 「自动阅读白名单」改为「书目白名单」表格，列出两个任务的目标书、找不到时的行为和修改位置；快速开始第 2 步改为两本书都加入书架；功能表「每日听书」注明书名 |
+
+**改动文件**：`README.md`、本日志。
+**验证**：未跑测试，原因：仅文档。内容对照 `dev/resource/pipeline/qq_reader_trial.json` 的 `DailyAudiobookFlow` → `AudiobookFindBook` / `AudiobookOpenFirstShelfBook` 节点，以及 `scripts/run_task.py`（`DailyAudiobookFlow` 走 `_run_legacy_task`，无听书相关运行时覆盖）核对。
+**未覆盖 / 遗留**：听书不是严格白名单——找不到《全职法师》时 `AudiobookOpenFirstShelfBook` 会打开书架第一本书，可能听错书；这是行为问题，本次只写入文档，未修改。`dev/` 不受 Git 管理，听书书目无法通过仓库同步。
+**分支**：`claude/readme-audiobook-whitelist-20260927`
+**回滚**：`git log --oneline -S "README 补充每日听书书目说明" -- CHANGELOG.md` 找到提交后 `git revert <hash>`。
+
+---
+
 ## 2026-09-27 · README 补充自动阅读白名单说明
 
 **触发**：用户要求在 README 告知自动阅读白名单。README 此前完全没有提到这一限制，新用户书架上没有目标书时，自动阅读会以退出码 3 失败，却看不出原因。
