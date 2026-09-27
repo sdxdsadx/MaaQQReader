@@ -11,7 +11,12 @@ sys.path.insert(0, str(ROOT))
 from qqreader.config import load_config
 from qqreader.maa.factory import build_maa_client
 from qqreader.gui.dynamic_plan import collect_cards, plan_from_cards
-from qqreader.gui.task_catalog import build_serial_plan, save_task_settings
+from qqreader.gui.task_catalog import (
+    build_serial_plan,
+    carry_over_selection,
+    load_task_settings,
+    save_task_settings,
+)
 from qqreader.gui.commands import build_run_task_command
 
 
@@ -28,10 +33,13 @@ def main():
     finally:
         client.close()
     settings, notes = plan_from_cards(cards)
+    settings_path = ROOT / "runtime" / "gui_tasks.json"
+    # 规划只决定勾选和时长；GUI 里选好的书名、封面沿用原设置。
+    carry_over_selection(settings, load_task_settings(settings_path))
     report = {"cards": cards, "pages": pages, "notes": notes}
     (directory / "evidence.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     order = ["ClaimAudiobookReward", "ClaimOneReward", "DailyGameFlow", "DailyAdFlow", "DailyLevelAdFlow", "DailyAudiobookFlow", "DailyReadingFlow"]
-    save_task_settings(ROOT / "runtime" / "gui_tasks.json", settings, order=order)
+    save_task_settings(settings_path, settings, order=order)
     print("\n".join(notes), flush=True)
     print(f"证据：{directory}", flush=True)
     if args.run:

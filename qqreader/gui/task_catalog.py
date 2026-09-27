@@ -14,7 +14,7 @@ class TaskSettingField:
 
     key: str
     label: str
-    kind: str = "float"  # float / int / bool
+    kind: str = "float"  # float / int / bool / text / file
     default: Any = 0
     minimum: Optional[float] = None
     maximum: Optional[float] = None
@@ -29,6 +29,8 @@ class TaskSettingField:
             if isinstance(raw, str):
                 return raw.strip().lower() in {"1", "true", "yes", "on"}
             return bool(raw)
+        if self.kind in ("text", "file"):
+            return "" if raw is None else str(raw).strip()
         if self.kind == "int":
             value = int(float(raw))
         else:
@@ -152,6 +154,20 @@ def _timeout_field(default: float = 30) -> TaskSettingField:
     )
 
 
+def _book_title_field(default: str, label: str, help_text: str) -> TaskSettingField:
+    return TaskSettingField(
+        key="book_title",
+        label=label,
+        kind="text",
+        default=default,
+        help=help_text,
+    )
+
+
+#: 书目选择参数：动态规划重建任务设置时要保留用户选好的书（见 carry_over_selection）。
+SELECTION_FIELD_KEYS = ("book_title", "cover_image", "first_book_fallback")
+
+
 def _max_steps_field(default: int = 2000) -> TaskSettingField:
     return TaskSettingField(
         key="max_steps",
@@ -192,8 +208,17 @@ DEFAULT_TASK_CATALOG: Tuple[TaskSpec, ...] = (
         legacy_name="01 每日自动阅读（默认2次×35分钟）",
         entry="DailyReadingFlow",
         default_enabled=True,
-        description="宇智波书籍自动阅读；每次结束后自动检查并领取阅读奖励。",
-        fields=(_count_field(2), _minutes_field(35), _timeout_field(50)),
+        description="在书架上按「小说书名」找书并自动阅读；每次结束后自动检查并领取阅读奖励。",
+        fields=(
+            _count_field(2),
+            _minutes_field(35),
+            _timeout_field(50),
+            _book_title_field(
+                "宇智波",
+                "小说书名",
+                "书架上可见的书名关键词，多个用 / 分隔；书必须已在书架上，找不到时不读别的书",
+            ),
+        ),
     ),
     TaskSpec(
         key="DailyAudiobookFlow",
@@ -202,8 +227,31 @@ DEFAULT_TASK_CATALOG: Tuple[TaskSpec, ...] = (
         legacy_name="02 每日听书（默认35分钟，结束后暂停）",
         entry="DailyAudiobookFlow",
         default_enabled=True,
-        description="播放《全职法师》；结束后关闭听书悬浮框并领取20赠币。",
-        fields=(_count_field(1), _minutes_field(35), _timeout_field(50)),
+        description="按「听书书名」或「听书封面」在书架上找书并播放；结束后关闭听书悬浮框并领取20赠币。",
+        fields=(
+            _count_field(1),
+            _minutes_field(35),
+            _timeout_field(50),
+            _book_title_field(
+                "全职法师",
+                "听书书名",
+                "书架上可见的书名；书必须已在书架上",
+            ),
+            TaskSettingField(
+                key="cover_image",
+                label="听书封面",
+                kind="file",
+                default="",
+                help="可选：书名识别不到时按封面找；封面须是书架画面里的原尺寸截图，建议用「截取…」框选",
+            ),
+            TaskSettingField(
+                key="first_book_fallback",
+                label="找不到时换书",
+                kind="bool",
+                default=True,
+                help="勾选：找不到指定书就打开书架第一本（旧行为）；不勾选：找不到就失败，不会听错书",
+            ),
+        ),
     ),
     TaskSpec(
         key="DailyGameFlow",
@@ -327,6 +375,22 @@ def apply_weekly_reading_preset(
     reading = settings["DailyReadingFlow"]
     reading.values["count"] = 10
     reading.values["minutes"] = 35
+
+
+def carry_over_selection(
+    target: Dict[str, TaskSettings],
+    previous: Mapping[str, TaskSettings],
+    catalog: Sequence[TaskSpec] = DEFAULT_TASK_CATALOG,
+) -> None:
+    """把 ``previous`` 里的书目选择（书名、封面等）拷到 ``target``。"""
+    for spec in catalog:
+        old = previous.get(spec.key)
+        new = target.get(spec.key)
+        if old is None or new is None:
+            continue
+        for item in spec.fields:
+            if item.key in SELECTION_FIELD_KEYS and item.key in old.values:
+                new.values[item.key] = old.values[item.key]
 
 
 def default_settings(

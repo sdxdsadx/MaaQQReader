@@ -8,9 +8,12 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
+import shutil
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
@@ -97,6 +100,30 @@ LEGACY_TIMING_NODE = {
 # 析构挂死而不退出（实测 4000 后挂 25 分钟）。检测到最终 JSON 后最多再
 # 给这个宽限期，超时按 JSON 结果返回。
 LEGACY_FINAL_EXIT_GRACE_SECONDS = 30.0
+
+#: 听书：GUI 选的封面在运行期间复制到 ``<resource>/image/`` 下这个文件名；
+#: Maa 的 TemplateMatch 模板路径相对 image 目录，运行结束后删除。
+AUDIOBOOK_COVER_TEMPLATE = "gui_audiobook_cover.png"
+AUDIOBOOK_COVER_NODE = "AudiobookFindCover"
+AUDIOBOOK_COVER_THRESHOLD = 0.8
+AUDIOBOOK_FIRST_BOOK_NODE = "AudiobookOpenFirstShelfBook"
+
+
+@dataclass(frozen=True)
+class BookSelection:
+    """GUI 选择的书目：书名关键词、封面模板，以及找不到时是否打开书架第一本。"""
+
+    title: str = ""
+    cover_image: str = ""
+    first_book_fallback: bool = True
+
+    @classmethod
+    def from_args(cls, args: argparse.Namespace) -> "BookSelection":
+        return cls(
+            title=(getattr(args, "book_title", "") or "").strip(),
+            cover_image=(getattr(args, "cover_image", "") or "").strip(),
+            first_book_fallback=not getattr(args, "no_first_book_fallback", False),
+        )
 
 
 def _parse_final_result_line(line: str) -> Optional[Dict[str, Any]]:
@@ -405,9 +432,56 @@ def _apply_level_ad_retention_overrides(data: Dict[str, Any]) -> None:
                 nexts.insert(nexts.index("AdBrowseOfferModal"), "AdCountdown")
 
 
+def _apply_audiobook_book_overrides(
+    data: Dict[str, Any], selection: BookSelection, *, with_cover: bool
+) -> None:
+    """听书选书：书名替换 ``AudiobookFindBook``，封面插入 TemplateMatch 节点。
+
+    封面节点排在书名节点之后：书名 OCR 更可靠，封面用于书名被截断、
+    OCR 读不全的情况。关闭“找不到时打开第一本”后，书架上找不到指定书
+    就不会听错书，而是由 ``AudiobookBackUntilShelf`` 返回重试直到失败。
+    """
+    find = data.get("AudiobookFindBook")
+    if not isinstance(find, dict):
+        return
+    if selection.title:
+        find["expected"] = re.escape(selection.title)
+    if with_cover:
+        data[AUDIOBOOK_COVER_NODE] = {
+            "recognition": "TemplateMatch",
+            "template": AUDIOBOOK_COVER_TEMPLATE,
+            "threshold": AUDIOBOOK_COVER_THRESHOLD,
+            "action": "Click",
+            "post_delay": find.get("post_delay", 2500),
+            "focus": "GUI 选择的听书封面",
+            "next": list(find.get("next", [])),
+        }
+    for node in data.values():
+        if not isinstance(node, dict) or not isinstance(node.get("next"), list):
+            continue
+        nexts = node["next"]
+        if with_cover and "AudiobookFindBook" in nexts and AUDIOBOOK_COVER_NODE not in nexts:
+            nexts.insert(nexts.index("AudiobookFindBook") + 1, AUDIOBOOK_COVER_NODE)
+        if not selection.first_book_fallback and AUDIOBOOK_FIRST_BOOK_NODE in nexts:
+            nexts.remove(AUDIOBOOK_FIRST_BOOK_NODE)
+
+
+def _install_audiobook_cover(resource_dir: Path, cover_image: str) -> Optional[Path]:
+    """把封面复制成 Maa 模板；源文件不存在时返回 None。"""
+    source = Path(cover_image)
+    if not source.is_file():
+        return None
+    target = resource_dir / "image" / AUDIOBOOK_COVER_TEMPLATE
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, target)
+    return target
+
+
 def _patch_legacy_pipeline(
     resource_dir: Path, node: Optional[str], minutes: Optional[float],
     task: Optional[str] = None,
+    selection: Optional[BookSelection] = None,
+    with_cover: bool = False,
 ):
     pipeline_path = resource_dir / "pipeline" / "qq_reader_trial.json"
     if not pipeline_path.is_file():
@@ -417,6 +491,8 @@ def _patch_legacy_pipeline(
         data = json.loads(original.decode("utf-8"))
         if task == "DailyLevelAdFlow":
             _apply_level_ad_runtime_overrides(data)
+        if task == "DailyAudiobookFlow" and selection is not None:
+            _apply_audiobook_book_overrides(data, selection, with_cover=with_cover)
         if node and minutes and node in data:
             data[node]["post_delay"] = int(float(minutes) * 60000)
         pipeline_path.write_text(
@@ -429,7 +505,12 @@ def _patch_legacy_pipeline(
         return None
 
 
-def _run_legacy_task(task: str, config: Any, minutes: Optional[float]) -> int:
+def _run_legacy_task(
+    task: str,
+    config: Any,
+    minutes: Optional[float],
+    selection: Optional[BookSelection] = None,
+) -> int:
     repo_root = Path(__file__).resolve().parents[1]
     runner = _find_legacy_runner(repo_root)
     if runner is None:
@@ -454,7 +535,24 @@ def _run_legacy_task(task: str, config: Any, minutes: Optional[float]) -> int:
     if not ready:
         print("[legacy] 设备不可截图，旧流程可能仍会失败。", flush=True)
     patched_minutes = float(minutes) if minutes and float(minutes) > 0 else None
-    original = _patch_legacy_pipeline(resource_dir, node, patched_minutes, task)
+    cover_path: Optional[Path] = None
+    if task == "DailyAudiobookFlow" and selection is not None:
+        if selection.cover_image:
+            cover_path = _install_audiobook_cover(resource_dir, selection.cover_image)
+            if cover_path is None:
+                print(f"[配置错误] 听书封面文件不存在: {selection.cover_image}", flush=True)
+                return 2
+        print(
+            "[legacy] 听书书目：书名="
+            + (selection.title or "（pipeline 默认）")
+            + "，封面=" + (selection.cover_image or "未设置")
+            + "，找不到时换第一本=" + ("是" if selection.first_book_fallback else "否"),
+            flush=True,
+        )
+    original = _patch_legacy_pipeline(
+        resource_dir, node, patched_minutes, task,
+        selection=selection, with_cover=cover_path is not None,
+    )
     command = [
         sys.executable,
         str(runner),
@@ -533,6 +631,11 @@ def _run_legacy_task(task: str, config: Any, minutes: Optional[float]) -> int:
                 pipeline_path.write_bytes(original)
             except OSError:
                 pass
+        if cover_path is not None:
+            try:
+                cover_path.unlink()
+            except OSError:
+                pass
 
 
 class LoggingObserver:
@@ -581,6 +684,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--next-task", default="", help="HandoffCheck：下一项任务名，仅用于记录")
     parser.add_argument("--handoff-report", default="", help="HandoffCheck：结果 JSON 输出路径")
+    parser.add_argument(
+        "--book-title", default="",
+        help="阅读/听书：书架上的书名关键词（阅读可用 / 分隔多个）",
+    )
+    parser.add_argument("--cover-image", default="", help="听书：书架封面截图（PNG），用于模板匹配")
+    parser.add_argument(
+        "--no-first-book-fallback", action="store_true",
+        help="听书：找不到指定书时不打开书架第一本",
+    )
     return parser
 
 
@@ -672,7 +784,9 @@ def run_device_preflight(client, config, policy, *, adb_probe=run_adb, log=None)
     )
 
 
-def _run_reading_task(config_path: str, minutes: Optional[float]) -> int:
+def _run_reading_task(
+    config_path: str, minutes: Optional[float], book_title: str = ""
+) -> int:
     """正文页禁止截图，使用按 Activity 计时的自动阅读流程。"""
     duration = math.ceil(float(minutes)) if minutes is not None else 35
     if duration < 1:
@@ -685,6 +799,8 @@ def _run_reading_task(config_path: str, minutes: Optional[float]) -> int:
         "--minutes", str(duration),
         "--skip-claim",
     ]
+    if book_title:
+        command.extend(("--book", book_title))
     print(f"[reading] 正文保护页按 Activity 看护 {duration} 分钟", flush=True)
     return subprocess.run(command, cwd=str(_ROOT), check=False).returncode
 
@@ -760,8 +876,14 @@ def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
         return 0 if claim_audiobook_reward(args.config) else 2
     if args.task in LEGACY_NOT_IMPLEMENTED:
         minutes = args.minutes if args.minutes is not None else args.duration_minutes
+        selection = BookSelection.from_args(args)
         if args.task == "DailyReadingFlow":
-            code = _run_reading_task(args.config, minutes)
+            if selection.title:
+                code = _run_reading_task(args.config, minutes, selection.title)
+            else:
+                code = _run_reading_task(args.config, minutes)
+        elif args.task == "DailyAudiobookFlow":
+            code = _run_legacy_task(args.task, config, minutes, selection)
         else:
             code = _run_legacy_task(args.task, config, minutes)
         if code != 0:

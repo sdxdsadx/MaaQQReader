@@ -19,4 +19,4 @@
 | `captcha.solver` | 验证码处理方式（`manual` 等），另有 `max_attempts`、`verify_frames` 等 |
 | `tasks.<Task>` | 各任务的 `enabled`、`timeout_seconds`、`retry`、`feature_overrides` |
 
-GUI 自身的任务勾选、次数、时长与顺序保存在 `runtime/gui_tasks.json`，与本机配置分开。
+GUI 自身的任务勾选、次数、时长、顺序和书目选择（书名、听书封面）保存在 `runtime/gui_tasks.json`；GUI 选择的模拟器地址保存在 `runtime/gui_device.json`，运行时以环境变量 `QQREADER_ADB_ADDRESS` 覆盖 `machine.adb_address`。两者都与本机配置分开。

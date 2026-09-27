@@ -55,6 +55,11 @@ def describe_settings(spec: TaskSpec, settings: TaskSettings) -> str:
     timeout = settings.value(spec, "timeout_minutes", None)
     if timeout is not None:
         parts.append(f"超时 {float(timeout):g} 分钟")
+    title = str(settings.value(spec, "book_title", "") or "").strip()
+    if title:
+        parts.append(f"《{title}》")
+    if str(settings.value(spec, "cover_image", "") or "").strip():
+        parts.append("封面")
     return " · ".join(parts) or "无参数"
 
 

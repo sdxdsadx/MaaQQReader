@@ -433,6 +433,21 @@ class BookNotAllowed(RuntimeError):
 
 
 ALLOWED_BOOK_KEYWORDS = ("宇智波",)
+# 本次运行实际使用的书名关键词；GUI「小说书名」经 run_task.py 以 --book 传入。
+_allowed_keywords: tuple[str, ...] = ALLOWED_BOOK_KEYWORDS
+
+
+def parse_book_keywords(raw: str | None) -> tuple[str, ...]:
+    """把 ``--book`` 参数拆成关键词；为空时退回默认白名单。
+
+    多个关键词可用 ``/`` 或 ``|`` 分隔，任一命中即可；空白一律忽略，
+    与 ``find_text`` 的比较方式一致。
+    """
+    if not raw:
+        return ALLOWED_BOOK_KEYWORDS
+    parts = [part.replace(" ", "").strip() for part in re.split(r"[/|｜]", raw)]
+    keywords = tuple(part for part in parts if part)
+    return keywords or ALLOWED_BOOK_KEYWORDS
 
 
 def record_page_evidence(reason: str, boxes: list[tuple[str, tuple[int, int, int, int]]]) -> None:
@@ -496,12 +511,12 @@ def locate_allowed_book_ui(
         boxes = ocr_boxes()
     if not boxes:
         return None, "OCR 未读到任何文本"
-    hit = find_text(boxes, "宇智波")
+    hit = find_any(boxes, _allowed_keywords)
     if hit is not None:
         text, box = hit
         return box, f"书架书名 OCR {text!r}"
     sample = " | ".join(t for t, _ in boxes[:8]) or "未识别到书名"
-    return None, f"书架未识别到白名单书目（允许：{'/'.join(ALLOWED_BOOK_KEYWORDS)}）：{sample!r}"
+    return None, f"书架未识别到白名单书目（允许：{'/'.join(_allowed_keywords)}）：{sample!r}"
 
 
 def _verify_book_allowed(client=None) -> tuple[bool, str]:
@@ -594,7 +609,7 @@ def segments_for(minutes: int, segment_minutes: int) -> list[int]:
 
 
 def main() -> int:
-    global _client, _adb_path, _adb_address, _evidence_dir
+    global _client, _adb_path, _adb_address, _evidence_dir, _allowed_keywords
     parser = argparse.ArgumentParser(description="QQ 阅读自动阅读（dwell 计时）")
     parser.add_argument("--minutes", type=int, default=30, help="总阅读时长（分钟）")
     parser.add_argument("--config", type=Path, default=ROOT / "configs" / "qqreader.local.json",
@@ -603,7 +618,10 @@ def main() -> int:
                         help="单段停留上限，默认 15（老版本值）")
     parser.add_argument("--skip-claim", action="store_true",
                         help="完成阅读后不自动领取每日阅读奖励")
+    parser.add_argument("--book", default="",
+                        help="书架上要读的书名关键词，多个用 / 分隔；默认「宇智波」")
     args = parser.parse_args()
+    _allowed_keywords = parse_book_keywords(args.book)
     if args.minutes < 1:
         log("--minutes 必须 >= 1")
         return 2
@@ -623,6 +641,7 @@ def main() -> int:
 
     plan = segments_for(args.minutes, args.segment_minutes)
     log(f"=== 自动阅读 {args.minutes} 分钟开始（{len(plan)} 段：{plan}）===")
+    log(f"目标书名关键词：{'/'.join(_allowed_keywords)}")
 
     try:
         return_to_capturable()
@@ -671,7 +690,7 @@ def main() -> int:
                 sys.executable,
                 str(ROOT / "scripts" / "run_task.py"),
                 "--config",
-                str(ROOT / "configs" / "qqreader.local.json"),
+                str(args.config),
                 "--task",
                 "ClaimOneReward",
                 "--timeout-minutes",

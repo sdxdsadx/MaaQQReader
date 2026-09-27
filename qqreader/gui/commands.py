@@ -87,6 +87,13 @@ def build_run_task_command(
             else f"{float(value):g}"
         )
         command.extend((f"--{key.replace('_', '-')}", text))
+    # 书目选择：阅读/听书的书名、听书封面（空值表示沿用脚本默认）。
+    for key, flag in (("book_title", "--book-title"), ("cover_image", "--cover-image")):
+        text = str(values.get(key) or "").strip()
+        if text:
+            command.extend((flag, text))
+    if values.get("first_book_fallback") is False:
+        command.append("--no-first-book-fallback")
     if quiet:
         command.append("--quiet")
     return tuple(command)
