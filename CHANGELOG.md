@@ -21,6 +21,23 @@
 
 ---
 
+## 2026-09-27 · README 重构为项目首页，详细说明拆到 docs/
+
+**触发**：用户反馈 README 不是简介页（310 行，全是操作手册），要求参考优秀开源项目重构。
+
+| 模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| README.md | 打开后看不到项目是什么、能做什么、现在到什么程度，直接进入脚本菜单和 GUI 布局细节 | 使用手册、配置、架构、测试都堆在 README | 重写为约 110 行的首页：一句话介绍与徽章 → 功能表 → 项目状态（已验收/未验收）→ 3 步快速开始 → 文档导航 → 工作原理图 → 参与开发 → 免责声明 → 致谢 |
+| docs/ | — | — | 新增 `usage.md`（启动/调试脚本、GUI、命令行）、`configuration.md`、`tasks.md`（任务一览 + 运行机制）、`architecture.md`（项目结构 + 设计约束）、`development.md`（测试与构建 + 参与开发）；内容由旧 README 对应章节原样迁移，仅修正相对链接 |
+
+**改动文件**：`README.md`、`docs/usage.md`、`docs/configuration.md`、`docs/tasks.md`、`docs/architecture.md`、`docs/development.md`（均新增）、本日志。
+**验证**：未跑测试，原因：仅文档。检查了旧 README 除「目录」「已知限制」外的全部章节都已迁入 docs/，「已知限制」并入 README 的「项目状态」。
+**未覆盖 / 遗留**：仓库没有 LICENSE，README 未写许可证；没有 GUI 截图，首页暂无配图。
+**分支**：`claude/readme-restructure-20260927`（工作区其余未提交改动不属于本任务，未一并提交）
+**回滚**：`git log --oneline -S "README 重构为项目首页" -- CHANGELOG.md` 找到提交后 `git revert <hash>`。
+
+---
+
 ## 2026-09-27 · 补全 .gitignore，把 GUI 下的 Git 操作流程写入 AGENTS.md
 
 **触发**：同日把 `claude/agents-git-rules-20260927` 推到 GitHub 时遇到的问题。GitHub Desktop 未添加本仓库；授权页被全局 `.gitconfig` 的 `url.insteadOf` 转到第三方代理 `ghfast.top`，报 “Invalid input”；GitHub Desktop 因为远端叫 `github`，一度提示“Publish repository”（新建仓库）；工作区有 559 个未提交文件，其中大部分是本应忽略的 `.hermes/` 等目录。用户要求把流程写进 AGENTS.md，方便其他 agent 使用。
