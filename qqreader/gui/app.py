@@ -1852,7 +1852,8 @@ class CoverCaptureDialog:
             bg=theme.SURFACE,
             fg=theme.MUTED,
             font=theme.FONT_UI,
-            wraplength=400,
+            # 对话框宽度由 360px 的截图画布决定，说明文字要在画布宽度内换行。
+            wraplength=340,
             justify=tk.LEFT,
         ).pack(fill=tk.X, padx=12, pady=(10, 6))
         self._canvas = tk.Canvas(

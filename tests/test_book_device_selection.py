@@ -371,3 +371,31 @@ def test_capture_screen_png_reports_adb_failure() -> None:
         cover_tools.capture_screen_png(
             "adb", "x:1", runner=lambda c, **k: Result(1, b"", b"device offline")
         )
+
+
+def test_cover_dialog_hint_fits_canvas(tmp_path: Path) -> None:
+    """2026-09-27 GUI 实机：截取对话框顶部说明右侧被截断（wraplength 大于画布宽度）。"""
+    tk = pytest.importorskip("tkinter")
+    from qqreader.gui.app import CoverCaptureDialog
+
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:  # 本机 Tcl 偶发不可用时与 test_gui_user_click_flow 一样跳过
+        pytest.skip(f"Tk 不可用: {exc}")
+    root.withdraw()
+    try:
+        dialog = CoverCaptureDialog(
+            root,
+            adb_path=str(tmp_path / "missing-adb.exe"),
+            address="127.0.0.1:16384",
+            runtime_dir=tmp_path,
+            on_saved=lambda _path: None,
+        )
+        root.update_idletasks()
+        hint = next(
+            w for w in dialog._top.winfo_children()
+            if isinstance(w, tk.Label) and "书架" in str(w.cget("text"))
+        )
+        assert hint.winfo_reqwidth() <= int(dialog._canvas.cget("width")) + 24
+    finally:
+        root.destroy()
