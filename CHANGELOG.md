@@ -33,6 +33,7 @@
 
 **改动文件**：`.gitignore`、`AGENTS.md`、本日志。
 **验证**：远端分支经 `https://api.github.com/repos/sdxdsadx/MaaQQReader/branches` 核对；远端 `master` 文件清单经 git/trees API 核对，只有 `runtime/screenshots/ad_watch/captcha_now.png` 属于应忽略内容。仅改文档和忽略规则，未跑 pytest。
+**合并前 pytest**：用户 2026-09-27 14:00 运行（测试对象是工作区代码，含未提交改动），4 项失败：`test_qqr27_ad_flow::test_ad_play_waits_40_seconds_before_handling_buttons`、`test_ad_round_regressions::test_each_ad_round_has_its_own_initial_wait`（这两项是 40 秒与代码 35 秒不一致，见 2026-09-24 条目）、`test_issue15_reward_nav::test_detect_slide_accepts_real_captcha_fixture`（`captcha_now.png` 已被删除）、`test_ad_round_regressions::test_live_exit_attempt_does_not_restart_eight_swipe_cycle`（直播退出期望 PRESS_BACK、实际 WAIT，未单独确认是否为旧问题）。用户确认带着这 4 项已知失败合并到 `master`；合并前的 `master` 为 `4333246`，本地保护分支 `backup/20260927-before-merge`。
 **未覆盖 / 遗留**：`captcha_now.png` 仍被跟踪（停止跟踪需用户同意）；远端没有 `dev/`（Maa 资源目录）和 `_backup_old_project_20260909_200716/`，从 GitHub 克隆的仓库不能直接运行；工作区其余未提交改动未处理。
 **分支**：`claude/agents-git-rules-20260927`
 **回滚**：`git log --oneline -S "补全 .gitignore，把 GUI 下的 Git 操作流程" -- CHANGELOG.md` 找到提交后 `git revert <hash>`。
