@@ -24,6 +24,7 @@ from typing import Any, List
 import pytest
 
 from qqreader.contract.outcome import TaskOutcome
+from qqreader.captcha.guard import ManualCaptchaGuard
 from qqreader.maa.client import MaaClientError
 from qqreader.runner.gui_observability import (
     DeviceScreencapGuard,
@@ -38,6 +39,14 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 import run_task  # noqa: E402 - 需先注入 scripts 目录
+
+
+def test_run_task_honors_manual_captcha_config() -> None:
+    config = SimpleNamespace(captcha=SimpleNamespace(solver="manual"))
+
+    assert isinstance(
+        run_task._captcha_guard_from_config(config), ManualCaptchaGuard
+    )
 
 
 def test_task_log_file_written(tmp_path: Path) -> None:
