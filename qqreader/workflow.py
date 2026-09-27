@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence, Tuple
 from uuid import uuid4
 
+from .runner.exit_codes import EXIT_BLOCKED_BY_CAPTCHA, EXIT_SUCCESS, describe_exit_code
+
 
 CHINA_TIMEZONE = timezone(timedelta(hours=8), name="Asia/Shanghai")
 BUSINESS_DAY_BOUNDARY_HOUR = 4
@@ -34,6 +36,7 @@ class FlowStepState(str, Enum):
     RUNNING = "RUNNING"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
+    BLOCKED_BY_CAPTCHA = "BLOCKED_BY_CAPTCHA"
     CANCELLED = "CANCELLED"
     SKIPPED = "SKIPPED"
 
@@ -42,6 +45,8 @@ class FlowRunState(str, Enum):
     RUNNING = "RUNNING"
     SUCCEEDED = "SUCCEEDED"
     COMPLETED_WITH_ERRORS = "COMPLETED_WITH_ERRORS"
+    #: QQR-53：验证码未解决，后续任务全部跳过，等待人工。
+    BLOCKED_BY_CAPTCHA = "BLOCKED_BY_CAPTCHA"
     CANCELLED = "CANCELLED"
 
 
@@ -106,6 +111,10 @@ class FlowStepRecord:
     ended_at: Optional[datetime] = None
     exit_code: Optional[int] = None
     reason: str = ""
+    #: 由退出码解释出的任务结果（成功 / 验证码阻塞 / 超时 / 设备错误……）。
+    outcome: str = ""
+    #: QQR-53：启动本项之前的交接检查结果（结论、原因、动作、页面证据）。
+    handoff: Optional[dict[str, Any]] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -114,7 +123,9 @@ class FlowStepRecord:
             "started_at": _iso(self.started_at),
             "ended_at": _iso(self.ended_at),
             "exit_code": self.exit_code,
+            "outcome": self.outcome,
             "reason": self.reason,
+            "handoff": self.handoff,
         }
 
 
@@ -159,18 +170,29 @@ class DailyFlowRun:
             raise RuntimeError("流水线同一时间只能运行一个任务")
         return running[0] if running else None
 
-    def start_next(self, at: Optional[datetime] = None) -> FlowStepRecord:
-        self._ensure_running()
-        if self.current is not None:
-            raise RuntimeError("当前任务尚未结束")
-        next_step = next(
+    @property
+    def next_waiting(self) -> Optional[FlowStepRecord]:
+        return next(
             (step for step in self.steps if step.state is FlowStepState.WAITING),
             None,
         )
+
+    def start_next(
+        self,
+        at: Optional[datetime] = None,
+        *,
+        handoff: Optional[Mapping[str, Any]] = None,
+    ) -> FlowStepRecord:
+        self._ensure_running()
+        if self.current is not None:
+            raise RuntimeError("当前任务尚未结束")
+        next_step = self.next_waiting
         if next_step is None:
             raise RuntimeError("没有等待中的任务")
         next_step.state = FlowStepState.RUNNING
         next_step.started_at = at or datetime.now(timezone.utc)
+        if handoff is not None:
+            next_step.handoff = dict(handoff)
         return next_step
 
     def complete_current(
@@ -184,22 +206,86 @@ class DailyFlowRun:
         current = self.current
         if current is None:
             raise RuntimeError("没有正在运行的任务")
+        ended = at or datetime.now(timezone.utc)
         current.exit_code = int(exit_code)
+        current.outcome = describe_exit_code(int(exit_code))
         current.reason = reason or (
-            "任务证据确认成功" if exit_code == 0 else f"子进程退出码 {exit_code}"
+            "任务证据确认成功"
+            if exit_code == EXIT_SUCCESS
+            else f"子进程退出码 {exit_code}（{current.outcome}）"
         )
-        current.ended_at = at or datetime.now(timezone.utc)
-        current.state = (
-            FlowStepState.SUCCEEDED if exit_code == 0 else FlowStepState.FAILED
-        )
-        if not any(step.state is FlowStepState.WAITING for step in self.steps):
-            self.state = (
-                FlowRunState.SUCCEEDED
-                if all(step.state is FlowStepState.SUCCEEDED for step in self.steps)
-                else FlowRunState.COMPLETED_WITH_ERRORS
-            )
-            self.ended_at = current.ended_at
+        current.ended_at = ended
+        if exit_code == EXIT_SUCCESS:
+            current.state = FlowStepState.SUCCEEDED
+        elif exit_code == EXIT_BLOCKED_BY_CAPTCHA:
+            # 验证码没解决：后续任务一律不启动（QQR-53）。
+            current.state = FlowStepState.BLOCKED_BY_CAPTCHA
+            self._block_remaining(f"前项 {current.snapshot.display_name} 被验证码阻塞", ended)
+            return current
+        else:
+            current.state = FlowStepState.FAILED
+        self._finish_if_done(ended)
         return current
+
+    def skip_next(
+        self,
+        reason: str,
+        *,
+        handoff: Optional[Mapping[str, Any]] = None,
+        at: Optional[datetime] = None,
+    ) -> FlowStepRecord:
+        """交接检查无法确认安全起点：不启动下一项，记为 SKIPPED 并保留原因。"""
+        self._ensure_running()
+        if self.current is not None:
+            raise RuntimeError("当前任务尚未结束")
+        step = self.next_waiting
+        if step is None:
+            raise RuntimeError("没有等待中的任务")
+        skipped = at or datetime.now(timezone.utc)
+        step.state = FlowStepState.SKIPPED
+        step.ended_at = skipped
+        step.reason = reason
+        step.outcome = "跳过"
+        if handoff is not None:
+            step.handoff = dict(handoff)
+        self._finish_if_done(skipped)
+        return step
+
+    def block_by_captcha(
+        self,
+        reason: str,
+        *,
+        handoff: Optional[Mapping[str, Any]] = None,
+        at: Optional[datetime] = None,
+    ) -> None:
+        """交接检查发现验证码：剩余任务全部跳过，流水线停在验证码阻塞。"""
+        self._ensure_running()
+        if self.current is not None:
+            raise RuntimeError("当前任务尚未结束")
+        step = self.next_waiting
+        if step is not None and handoff is not None:
+            step.handoff = dict(handoff)
+        self._block_remaining(reason, at or datetime.now(timezone.utc))
+
+    def _block_remaining(self, reason: str, at: datetime) -> None:
+        for step in self.steps:
+            if step.state is FlowStepState.WAITING:
+                step.state = FlowStepState.SKIPPED
+                step.ended_at = at
+                step.outcome = "跳过"
+                step.reason = f"因验证码阻塞而跳过：{reason}；等待人工处理"
+        self.state = FlowRunState.BLOCKED_BY_CAPTCHA
+        self.ended_at = at
+
+    def _finish_if_done(self, at: datetime) -> None:
+        if self.next_waiting is not None:
+            return
+        self.state = (
+            FlowRunState.SUCCEEDED
+            if all(step.state is FlowStepState.SUCCEEDED for step in self.steps)
+            else FlowRunState.COMPLETED_WITH_ERRORS
+        )
+        self.ended_at = at
 
     def stop_by_user(
         self,
@@ -230,7 +316,7 @@ class DailyFlowRun:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "record_version": 1,
+            "record_version": 2,
             "run_id": self.run_id,
             "business_day": self.business_day.isoformat(),
             "captured_at": _iso(self.captured_at),
@@ -265,6 +351,58 @@ class DailyFlowRecorder:
         )
         os.replace(temporary, target)
         return target
+
+
+def handoff_report_path(record_dir: Path, run: DailyFlowRun) -> Path:
+    """下一项任务交接检查的报告文件（与流水线记录放在一起）。"""
+    step = run.next_waiting
+    suffix = step.snapshot.step_id if step is not None else "end"
+    return Path(record_dir) / "daily_flows" / f"{run.run_id}_handoff_{suffix}.json"
+
+
+def load_handoff_report(path: Path) -> dict[str, Any]:
+    """读取交接检查写出的 JSON；缺失或损坏时返回空字典（原因写进记录）。"""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return {"report_error": f"{type(exc).__name__}: {exc}"}
+    return data if isinstance(data, dict) else {"report_error": "报告不是 JSON 对象"}
+
+
+def apply_handoff(
+    run: DailyFlowRun,
+    exit_code: int,
+    report: Optional[Mapping[str, Any]] = None,
+) -> Optional[FlowStepRecord]:
+    """按交接检查结果决定下一项：启动 / 跳过 / 验证码阻塞（GUI 与 daily_all 共用）。
+
+    返回已启动的步骤；跳过或阻塞时返回 ``None``。前项的结果不参与放行判断——
+    前项失败但现场已确认安全可以继续，前项成功但现场不安全也不能继续。
+    """
+    detail = {"exit_code": int(exit_code), **dict(report or {})}
+    previous = next(
+        (
+            step
+            for step in reversed(run.steps)
+            if step.state not in (FlowStepState.WAITING, FlowStepState.RUNNING)
+        ),
+        None,
+    )
+    previous_text = (
+        f"前项 {previous.snapshot.display_name}："
+        f"{previous.outcome or previous.state.value}"
+        if previous is not None
+        else "前项：无"
+    )
+    detail["previous"] = previous_text
+    if exit_code == EXIT_SUCCESS:
+        return run.start_next(handoff=detail)
+    if exit_code == EXIT_BLOCKED_BY_CAPTCHA:
+        run.block_by_captcha(f"交接检查发现验证码（{previous_text}）", handoff=detail)
+        return None
+    why = detail.get("reason") or describe_exit_code(int(exit_code))
+    run.skip_next(f"交接失败，未启动：{why}（{previous_text}）", handoff=detail)
+    return None
 
 
 def snapshots_from_plans(plans: Iterable[Any]) -> tuple[FlowStepSnapshot, ...]:

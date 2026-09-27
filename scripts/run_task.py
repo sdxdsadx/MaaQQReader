@@ -36,6 +36,14 @@ from qqreader.page.profiles import build_default_state_definitions
 from qqreader.page.recognizer import PageStateRecognizer
 from qqreader.recovery.policy import EscalationPolicy
 from qqreader.runner.recording import FileRunRecorder, RecordingConfig
+from qqreader.runner.exit_codes import (
+    EXIT_BLOCKED_BY_CAPTCHA,
+    EXIT_DEVICE_ERROR,
+    EXIT_HANDOFF_UNSAFE,
+    EXIT_SUCCESS,
+    exit_code_for_outcome,
+)
+from qqreader.runner.handoff import HandoffVerdict, check_handoff
 from qqreader.runner.retry import BackoffPolicy, RetryExhaustedError, run_with_retry
 from qqreader.runner.runner import RunnerConfig, TaskRunner
 from qqreader.runtime.clock import RealClock
@@ -57,6 +65,8 @@ from qqreader.runner.gui_observability import (
 _LOG = logging.getLogger("qqreader.task")
 
 SYSTEM_TASKS = ("LaunchQQReader", "SmokeTest")
+#: QQR-53：串行调度在两项任务之间调用，确认现场可交接后才启动下一项。
+HANDOFF_TASK = "HandoffCheck"
 NEW_FLOW_TASKS = (GAME_TASK_NAME, AD_TASK_NAME)
 LEGACY_NOT_IMPLEMENTED = (
     "DailyReadingFlow",
@@ -64,7 +74,12 @@ LEGACY_NOT_IMPLEMENTED = (
     "DailyExternalAppFlow",
     "DailyLevelAdFlow",
 )
-TASK_NAMES = NEW_FLOW_TASKS + SYSTEM_TASKS + LEGACY_NOT_IMPLEMENTED + ("ClaimOneReward", "ClaimAudiobookReward")
+TASK_NAMES = (
+    NEW_FLOW_TASKS
+    + SYSTEM_TASKS
+    + LEGACY_NOT_IMPLEMENTED
+    + ("ClaimOneReward", "ClaimAudiobookReward", HANDOFF_TASK)
+)
 
 LEGACY_ENTRY = {
     "DailyReadingFlow": "DirectReadingFlow",
@@ -486,6 +501,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="可重试瞬断错误的最大重试次数",
     )
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--next-task", default="", help="HandoffCheck：下一项任务名，仅用于记录")
+    parser.add_argument("--handoff-report", default="", help="HandoffCheck：结果 JSON 输出路径")
     return parser
 
 
@@ -594,7 +611,72 @@ def _run_reading_task(config_path: str, minutes: Optional[float]) -> int:
     return subprocess.run(command, cwd=str(_ROOT), check=False).returncode
 
 
+_HANDOFF_EXIT_CODES = {
+    HandoffVerdict.READY: EXIT_SUCCESS,
+    HandoffVerdict.CAPTCHA: EXIT_BLOCKED_BY_CAPTCHA,
+    HandoffVerdict.UNSAFE: EXIT_HANDOFF_UNSAFE,
+}
+
+
+def _write_handoff_report(path: str, report: Dict[str, Any]) -> None:
+    if not path:
+        return
+    target = Path(path)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+    except OSError as exc:
+        print(f"[handoff] 报告写入失败: {exc}", flush=True)
+
+
+def _run_handoff_check(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
+    """QQR-53：两项任务之间确认现场。验证码 → 10；无法确认书架 → 20。"""
+    print(f"[handoff] 启动 {args.next_task or '下一项'} 前检查现场", flush=True)
+    client = build_maa_client(config)
+    try:
+        run_with_retry(client.connect, policy, log=_retry_log)
+        result = check_handoff(
+            client,
+            package=config.machine.package_name,
+            evidence_dir=Path(config.machine.screenshot_dir) / "handoff",
+        )
+    except Exception as exc:  # noqa: BLE001 - 设备异常时不放行下一项
+        reason = f"交接检查异常 {type(exc).__name__}: {exc}"
+        print(f"[handoff] verdict=UNSAFE reason={reason}", flush=True)
+        _write_handoff_report(
+            args.handoff_report,
+            {"verdict": "UNSAFE", "reason": reason, "next_task": args.next_task},
+        )
+        return EXIT_DEVICE_ERROR
+    finally:
+        client.close()
+    report = {
+        "verdict": result.verdict.value,
+        "reason": result.reason,
+        "frame": result.frame.value,
+        "actions": list(result.actions),
+        "last_ocr": list(result.last_ocr[:40]),
+        "evidence": str(result.evidence) if result.evidence else None,
+        "next_task": args.next_task,
+    }
+    print(
+        f"[handoff] verdict={result.verdict.value} frame={result.frame.value} "
+        f"reason={result.reason}",
+        flush=True,
+    )
+    print(f"[handoff] actions={list(result.actions)}", flush=True)
+    print(f"[handoff] ocr={list(result.last_ocr[:20])}", flush=True)
+    if result.evidence:
+        print(f"[evidence] {result.evidence}", flush=True)
+    _write_handoff_report(args.handoff_report, report)
+    return _HANDOFF_EXIT_CODES[result.verdict]
+
+
 def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
+    if args.task == HANDOFF_TASK:
+        return _run_handoff_check(args, policy, config)
     if args.task == "ClaimAudiobookReward":
         from scripts.daily_all import claim_audiobook_reward
         return 0 if claim_audiobook_reward(args.config) else 2
@@ -666,7 +748,7 @@ def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
             print("[reason] 设备冒烟预检失败，任务未启动: " + preflight_detail, flush=True)
             if path:
                 print("[record] " + str(path), flush=True)
-            return 3
+            return EXIT_DEVICE_ERROR
         if args.task == "ClaimOneReward":
             result = claim_reading_rewards(
                 client,
@@ -797,13 +879,15 @@ def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
             print("[record] " + result.record_path, flush=True)
         for event in result.diagnostics[-60:]:
             print("  " + event.render(), flush=True)
-        return 0 if result.succeeded else 2
+        # QQR-53：验证码阻塞 / 超时 / 设备错误各有独立退出码，串行调度据此停下或跳过。
+        return exit_code_for_outcome(result.outcome)
     finally:
         client.close()
 
 
-# 退出码语义：0=成功；2=瞬断重试耗尽；3=致命错误/未预期异常。
-# （2 同时保留 run_task 原有的「任务未成功 / 参数配置错误」失败路径。）
+# 退出码语义见 qqreader/runner/exit_codes.py：0=成功；2=任务未成功/参数错误；
+# 3=致命错误/未预期异常；10=验证码阻塞；11=超时；12=设备错误；13=取消；
+# 20=交接检查无法确认安全起点。
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
     setup_task_file_logging(_ROOT / "runtime" / "logs", args.task)
@@ -830,7 +914,7 @@ def _main_guarded(args: argparse.Namespace) -> int:
         )
         print(f"[error] {type(exc.last_error).__name__}: {exc.last_error}", flush=True)
         _LOG.error("retry exhausted: %s", exc)
-        return 2
+        return EXIT_DEVICE_ERROR
     except MaaClientError as exc:
         print("[outcome] DEVICE_ERROR", flush=True)
         print(
@@ -838,7 +922,7 @@ def _main_guarded(args: argparse.Namespace) -> int:
             flush=True,
         )
         _LOG.error("maa client error: %s", exc)
-        return 3
+        return EXIT_DEVICE_ERROR
     except ContractViolation as exc:
         print("[outcome] fatal_contract_violation", flush=True)
         print(f"[reason] 违反运行契约，任务终止: {exc}", flush=True)

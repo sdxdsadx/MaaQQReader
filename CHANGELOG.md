@@ -21,6 +21,26 @@
 
 ---
 
+## 2026-09-27 · 串行任务之间先做交接检查，验证码阻塞不再继续下一项（QQR-53）
+
+**触发**：GUI 批次 `daily_20260927_114947_a58b6564`：等级广告停在「继续观看 / 放弃奖励」挽留弹窗上失败（exit 2），听书随即从广告页启动，`AudiobookBackUntilShelf` 返回 8 次后也失败（`runtime/logs/maafw.log` 第 507 行是听书启动时的画面）。另外离线核对确认：新流程除 SUCCESS 外一律 exit 2，验证码阻塞后继续排下一项是可达的代码路径。
+
+| 模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| 退出码 | 验证码阻塞 / 超时 / 设备错误都是 2 | `scripts/run_task.py` 新流程 `return 0 if result.succeeded else 2` | 新增 `qqreader/runner/exit_codes.py`：10 验证码阻塞、11 超时、12 设备错误、13 取消、20 交接失败；0/2/3 原义不变。新流程用 `exit_code_for_outcome`；设备预检失败、重试耗尽、`MaaClientError` 改为 12 |
+| 交接检查 | 前一项结束后不看现场就启动下一项 | GUI `_on_task_finished` 只看退出码并按固定间隔 `_start_next_task` | 新增 `qqreader/runner/handoff.py::check_handoff`：每帧先查验证码（有则不做任何动作，返回 CAPTCHA）；确认书架才 READY；确认框点「取消」、挽留弹窗点「放弃奖励」、书城点书架 tab、开屏点「跳过」，其余返回最多 4 次，再重启一次 App；每个动作后重新截图确认；最后一帧存证据 `screenshots/handoff/`。`run_task.py` 新增 `--task HandoffCheck --next-task --handoff-report` |
+| 流水线记录 | 失败原因只剩“子进程退出码 N” | `DailyFlowRun` 只有成功/失败 | `qqreader/workflow.py`：新增步骤状态与流水线状态 `BLOCKED_BY_CAPTCHA`；步骤记录 `outcome`（退出码含义）和 `handoff`（结论、原因、动作、OCR、证据、前项结果）；`apply_handoff` 统一决定启动 / 跳过 / 验证码阻塞；`record_version` 升到 2 |
+| GUI 串行 | 同上 | 同上 | `qqreader/gui/app.py`：`_on_task_finished` → `_after_step_finished` → `_start_handoff_check` → `_on_handoff_finished`；退出码 10 或交接发现验证码时停止整轮；交接失败只跳过这一项，下一项再做自己的交接检查。`theme.STEP_STYLES` 增加「验证码阻塞」 |
+| `scripts/daily_all.py` | 与 GUI 语义不一致 | 自己写死 0/2 | 改用同一个 `apply_handoff`，每项（第 2 项起）启动前跑 `HandoffCheck`，记录真实退出码 |
+
+**改动文件**：`qqreader/runner/exit_codes.py`（新）、`qqreader/runner/handoff.py`（新）、`qqreader/workflow.py`、`qqreader/gui/app.py`、`qqreader/gui/commands.py`、`qqreader/gui/theme.py`、`scripts/run_task.py`、`scripts/daily_all.py`、`docs/usage.md`、`README.md`、`tests/test_qqr53_handoff.py`（新）、`tests/fixtures/handoff_ocr_frames.json`（新，5 帧真实 OCR，来源写在文件里）、本日志。
+**验证**：`tests/test_qqr53_handoff.py` 21 项通过：真实 OCR 帧分类（挽留弹窗、书架、书城+升级弹窗、书架+退出确认框、奖励页上的验证码）；挽留弹窗 → 点「放弃奖励」→ 书架 READY；验证码首帧 / 返回后出现都立即停手（无点击、无返回、无重启）；退不回去 → 返回 + 重启一次 → UNSAFE；GUI 故障注入：等级广告 exit 2 后先跑交接检查，UNSAFE 时听书记为跳过并保留原因，READY 后才启动听书；exit 10 或交接发现验证码时不再启动任何任务。全量 `py -3.10 -m pytest`：375 passed、4 failed、2 skipped，4 项失败与导入基线相同。**未实机验证**：交接检查会按返回键、重启 App，GUI 可能正在使用模拟器，未经用户同意没有在实机上跑。
+**未覆盖 / 遗留**：只由单元测试覆盖——实机上的挽留弹窗交接、重启 App 分支、验证码阻塞停整轮。第 1 项任务前不做交接检查（一键执行已先启动 QQ 阅读并清理弹窗；单项运行保留用户选择的起点）。任务间隔等待期间按「停止」仍不会立即生效（原有行为）。旧流程（等级广告、听书）自身识别不到验证码，只能靠下一次交接检查发现。
+**分支**：`claude/qqr-53-handoff-20260927`（基于 `claude/import-wip-20260927`）
+**回滚**：`git log --oneline -S "串行任务之间先做交接检查" -- CHANGELOG.md` 定位后 `git revert <hash>`。
+
+---
+
 ## 2026-09-27 · 入库主检出中已在使用但未提交的工作区改动（QQR-53 前置）
 
 **触发**：用户要求依次修复 QQR-53 / 54 / 55。主检出 `G:\project_X` 的 `master` 工作区有约 2,500 行未提交改动（GUI、广告/奖励/游戏任务、自动阅读、验证码求解器），GUI 每天实际运行的是这版代码，但 Git 里没有；基于 `master` 修复会与之冲突，也会改到过时代码。用户同意先入库再修复。

@@ -18,17 +18,22 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from ..config import AppConfig, ConfigError, load_config
+from ..runner.exit_codes import describe_exit_code
 from ..workflow import (
     DailyFlowRecorder,
     DailyFlowRun,
     FlowRunState,
     FlowStepState,
+    apply_handoff,
+    handoff_report_path,
+    load_handoff_report,
     snapshots_from_plans,
 )
 from . import theme
 from .commands import (
     build_adb_connect_command,
     build_emulator_launch_command,
+    build_handoff_command,
     build_run_task_command,
     command_preview,
 )
@@ -1202,8 +1207,7 @@ class QQReaderGui:
                 self._serial_run.complete_current(2, reason=f"参数错误: {exc}")
                 self._save_serial_run()
             self._serial_index += 1
-            self._start_next_record_step()
-            self.root.after(500, self._start_next_task)
+            self._after_step_finished()
             return
         index = self._serial_index + 1
         total = len(self._serial_plan)
@@ -1227,14 +1231,7 @@ class QQReaderGui:
 
     def _on_task_finished(self, code: int) -> None:
         if self._stopping:
-            if (
-                self._serial_run is not None
-                and self._serial_run.state is FlowRunState.RUNNING
-            ):
-                self._serial_run.stop_by_user()
-                self._save_serial_run()
-            self._log("[串行] 已停止；当前任务已取消，后续任务已跳过")
-            self._finish_serial()
+            self._stop_serial_run()
             return
         plan = self._serial_plan[self._serial_index]
         if self._serial_run is not None:
@@ -1248,23 +1245,91 @@ class QQReaderGui:
         else:
             self._log(
                 f"[{self._serial_index + 1}/{len(self._serial_plan)}] "
-                f"{plan.spec.display_name} 失败 exit={code}"
+                f"{plan.spec.display_name} 失败 exit={code}（{describe_exit_code(code)}）"
             )
         self._progress_var.set(
             (self._serial_index + 1) / len(self._serial_plan) * 100
         )
         self._serial_index += 1
-        self._start_next_record_step()
-        if self._serial_index < len(self._serial_plan):
-            self._set_current(f"等待 {self._interval_seconds()} 秒后执行下一项")
-        self.root.after(self._interval_seconds() * 1000, self._start_next_task)
+        self._after_step_finished()
 
-    def _start_next_record_step(self) -> None:
+    def _stop_serial_run(self) -> None:
+        if (
+            self._serial_run is not None
+            and self._serial_run.state is FlowRunState.RUNNING
+        ):
+            self._serial_run.stop_by_user()
+            self._save_serial_run()
+        self._log("[串行] 已停止；当前任务已取消，后续任务已跳过")
+        self._finish_serial()
+
+    def _after_step_finished(self) -> None:
+        """一项结束（完成或被跳过）后：验证码阻塞则停下，否则先做交接检查。"""
+        run = self._serial_run
+        if run is not None and run.state is FlowRunState.BLOCKED_BY_CAPTCHA:
+            self._log("[串行] 验证码阻塞：后续任务不再启动。请人工处理验证码后重新运行。")
+            self._finish_serial()
+            return
+        if self._serial_index >= len(self._serial_plan):
+            self._finish_serial()
+            return
+        self._set_current(f"等待 {self._interval_seconds()} 秒后检查现场")
+        self.root.after(self._interval_seconds() * 1000, self._start_handoff_check)
+
+    def _start_handoff_check(self) -> None:
+        """QQR-53：上一项留下的页面未经确认，不能直接交给下一项。"""
+        if self._stopping:
+            return
+        config = self._require_config()
+        run = self._serial_run
+        if config is None or run is None:
+            return
+        plan = self._serial_plan[self._serial_index]
+        report_path = handoff_report_path(Path(config.machine.record_dir), run)
+        python_executable, python_args = self._python_launcher(config)
+        command = build_handoff_command(
+            python_executable,
+            self.repo_root,
+            Path(self._config_var.get()),
+            plan.spec.key,
+            report_path,
+            python_args=python_args,
+        )
+        self._set_current(f"交接检查：准备启动 {plan.spec.display_name}")
+        self._log(
+            f"[交接] 启动 {plan.spec.display_name} 前确认现场\n"
+            f"      {command_preview(command)}"
+        )
+        self._start_process(
+            command,
+            status=f"交接检查：{plan.spec.display_name}",
+            on_finish=lambda code: self._on_handoff_finished(code, report_path),
+        )
+
+    def _on_handoff_finished(self, code: int, report_path: Path) -> None:
+        if self._stopping:
+            self._stop_serial_run()
+            return
         run = self._serial_run
         if run is None or run.state is not FlowRunState.RUNNING:
+            self._finish_serial()
             return
-        run.start_next()
+        plan = self._serial_plan[self._serial_index]
+        report = load_handoff_report(report_path)
+        started = apply_handoff(run, code, report)
         self._save_serial_run()
+        if started is not None:
+            self._log(f"[交接] 现场已确认（{report.get('reason', '书架')}），启动 {plan.spec.display_name}")
+            self._start_next_task()
+            return
+        if run.state is FlowRunState.BLOCKED_BY_CAPTCHA:
+            self._log("[交接] 发现验证码：不点击、不返回、不重启，后续任务全部停止，等待人工。")
+            self._finish_serial()
+            return
+        skipped = run.steps[self._serial_index]
+        self._log(f"[交接] 跳过 {plan.spec.display_name}：{skipped.reason}")
+        self._serial_index += 1
+        self._after_step_finished()
 
     def _save_serial_run(self) -> None:
         if self._serial_run is None or self._serial_recorder is None:
@@ -1294,8 +1359,10 @@ class QQReaderGui:
         skipped = counts[FlowStepState.SKIPPED.value]
         if run.state is FlowRunState.CANCELLED:
             summary = f"已停止：成功 {success}，失败 {failed}，跳过 {skipped}"
+        elif run.state is FlowRunState.BLOCKED_BY_CAPTCHA:
+            summary = f"验证码阻塞，等待人工：成功 {success}，失败 {failed}，跳过 {skipped}"
         elif run.state is FlowRunState.COMPLETED_WITH_ERRORS:
-            summary = f"完成但有错误：成功 {success}，失败 {failed}"
+            summary = f"完成但有错误：成功 {success}，失败 {failed}，跳过 {skipped}"
         else:
             summary = f"全部成功：{success} 项"
         self._progress_var.set(100)

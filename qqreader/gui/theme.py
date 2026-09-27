@@ -39,6 +39,7 @@ STEP_STYLES = {
     "RUNNING": ("▶", "运行中", ACCENT),
     "SUCCEEDED": ("✓", "成功", SUCCESS),
     "FAILED": ("✗", "失败", DANGER),
+    "BLOCKED_BY_CAPTCHA": ("⚠", "验证码阻塞", WARNING),
     "CANCELLED": ("■", "已取消", WARNING),
     "SKIPPED": ("–", "跳过", SUBTLE),
 }

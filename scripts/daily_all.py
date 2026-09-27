@@ -6,7 +6,8 @@
   2. DailyAudiobookFlow(legacy, 听书)
   3. DailyGameFlow     (新流程, 在线挂机)
   4. DailyAdFlow       (新流程, 12 层看广告领礼)
-任一任务失败不阻断后续（继续跑下一个），最后汇总退出码。
+任一任务失败不阻断后续；但每项启动前都先做交接检查（QQR-53，与 GUI 相同）：
+现场确认在书架才启动，无法确认则跳过该项，发现验证码则停止全部后续任务。
 """
 from __future__ import annotations
 
@@ -20,11 +21,15 @@ from pathlib import Path
 if str(Path(__file__).resolve().parents[1]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from qqreader.runner.exit_codes import describe_exit_code
 from qqreader.workflow import (
     DailyFlowRecorder,
     DailyFlowRun,
     FlowRunState,
     FlowStepSnapshot,
+    apply_handoff,
+    handoff_report_path,
+    load_handoff_report,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -83,7 +88,7 @@ def _find_shelf_reward_entry(boxes):
     return max(candidates, key=lambda item: item[1][0], default=None)
 
 
-def run(task: str, extra: list[str]) -> tuple[bool, float]:
+def run(task: str, extra: list[str]) -> tuple[int, float]:
     stamp = datetime.now().strftime("%Y%m%d")
     # 每任务独立日志，避免并发/缓冲交错混串
     log = LOGDIR / f"daily_all_{stamp}_{task}.log"
@@ -97,8 +102,23 @@ def run(task: str, extra: list[str]) -> tuple[bool, float]:
     dt = time.time() - t0
     ok = proc.returncode == 0
     print(f"[{datetime.now():%H:%M:%S}] {'✅' if ok else '❌'} {task} "
-          f"({dt:.0f}s) exit={proc.returncode}", flush=True)
-    return ok, dt
+          f"({dt:.0f}s) exit={proc.returncode}（{describe_exit_code(proc.returncode)}）",
+          flush=True)
+    return proc.returncode, dt
+
+
+def run_handoff(next_task: str, report_path: Path) -> int:
+    """QQR-53：启动 ``next_task`` 前确认现场；返回交接检查退出码。"""
+    stamp = datetime.now().strftime("%Y%m%d")
+    log = LOGDIR / f"daily_all_{stamp}_HandoffCheck.log"
+    cmd = [PY, str(RUN_TASK), "--config", str(CONFIG), "--task", "HandoffCheck",
+           "--next-task", next_task, "--handoff-report", str(report_path)]
+    with open(log, "a", encoding="utf-8") as fh:
+        fh.write(f"\n===== HandoffCheck → {next_task} {datetime.now():%H:%M:%S} =====\n")
+        proc = subprocess.run(cmd, stdout=fh, stderr=subprocess.STDOUT)
+    print(f"[{datetime.now():%H:%M:%S}] 交接检查 → {next_task} exit={proc.returncode}"
+          f"（{describe_exit_code(proc.returncode)}）", flush=True)
+    return proc.returncode
 
 
 def claim_audiobook_reward(config_path: str | Path = CONFIG) -> bool:
@@ -234,7 +254,8 @@ def main() -> int:
         for index, (task, extra) in enumerate(plan, start=1)
     )
     flow = DailyFlowRun.start(snapshots, config_path=str(CONFIG.resolve()))
-    recorder = DailyFlowRecorder(ROOT / "runtime" / "records")
+    record_dir = ROOT / "runtime" / "records"
+    recorder = DailyFlowRecorder(record_dir)
     record_path = recorder.save(flow)
     print(
         f"[流水线] run={flow.run_id} 业务日={flow.business_day} "
@@ -242,20 +263,28 @@ def main() -> int:
         flush=True,
     )
 
-    results: list[tuple[str, bool, float]] = []
+    results: list[tuple[str, int, float]] = []
     try:
-        for task, extra in plan:
-            ok, dt = run(task, extra)
-            results.append((task, ok, dt))
-            flow.complete_current(
-                0 if ok else 2,
-                reason="任务证据确认成功" if ok else "run_task.py 返回非零退出码",
-            )
-            recorder.save(flow)
-            if flow.state is FlowRunState.RUNNING:
-                flow.start_next()
-                recorder.save(flow)
+        for index, (task, extra) in enumerate(plan):
+            if index > 0:
                 time.sleep(5)  # 当前任务完整结束后才进入下一项
+                report_path = handoff_report_path(record_dir, flow)
+                handoff_code = run_handoff(task, report_path)
+                started = apply_handoff(flow, handoff_code, load_handoff_report(report_path))
+                recorder.save(flow)
+                if started is None:
+                    if flow.state is FlowRunState.BLOCKED_BY_CAPTCHA:
+                        print("[流水线] 交接检查发现验证码，后续任务全部停止，等待人工。", flush=True)
+                        break
+                    print(f"[流水线] 跳过 {task}：现场无法确认", flush=True)
+                    continue
+            code, dt = run(task, extra)
+            results.append((task, code, dt))
+            flow.complete_current(code)
+            recorder.save(flow)
+            if flow.state is FlowRunState.BLOCKED_BY_CAPTCHA:
+                print(f"[流水线] {task} 被验证码阻塞，后续任务全部停止，等待人工。", flush=True)
+                break
     except KeyboardInterrupt:
         if flow.state is FlowRunState.RUNNING:
             flow.stop_by_user(reason="命令行用户中断流水线")
@@ -264,7 +293,7 @@ def main() -> int:
         return 130
 
     print("\n===== 汇总 =====")
-    duration_by_task = {task: dt for task, _ok, dt in results}
+    duration_by_task = {task: dt for task, _code, dt in results}
     for step in flow.steps:
         duration = duration_by_task.get(step.snapshot.task_key, 0.0)
         print(f"{step.state.value:<10} {step.snapshot.task_key} ({duration:.0f}s)")
