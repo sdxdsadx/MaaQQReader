@@ -3,6 +3,7 @@
 QQ 阅读每日任务自动化（MaaFramework 重构）的新仓库。
 
 > 当前运行与维护目录为 `G:\project_X`。重构前旧工程保存在 `_backup_old_project_20260909_200716`；当前状态与 Linear 对照见 `AGENTS.md` 顶部工作记忆。
+Codex 早期独立脚本的源码和模板见 [`docs/legacy/codex-2026-07-22/`](docs/legacy/codex-2026-07-22/)；后续 QQ 阅读自动化统一在本目录维护和记录。
 
 ## 当前状态（2026-09-09）
 

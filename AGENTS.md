@@ -4,6 +4,7 @@
 
 ## 当前工作记忆（2026-09-10，优先于下方 9 月 9 日审计快照）
 
+- 2026-09-27 起，QQ 阅读自动化只在 `G:\project_X` 继续维护；`Documents\Codex` 下的 2026-07-22 独立脚本已原样归档到 [`docs/legacy/codex-2026-07-22/`](docs/legacy/codex-2026-07-22/)，历史日志和截图在 `runtime/legacy/codex-2026-07-22/`。今后的代码、配置、文档和运行记录均以本目录为准，不运行旧入口。
 - 当前用户授权维护/运行的项目是 `G:\project_X`（并非 `G:\project\_X`）。新版 Python 模块化工程已经部署到此，主线基线 `f4b7387`。旧工程已归档到 `_backup_old_project_20260909_200716`；下文“G 盘旧仓库只读/87KB 单文件/未接入 Maa”的描述仅适用于重构前审计，不能再作为当前事实或阻止本次修改。
 - 当前入口：`qqreader/gui/`、`scripts/run_task.py`、`qqreader/tasks/ad.py`、`qqreader/maa/`；GUI 产物 `dist/QQReaderGUI.exe`。GUI 调用外部 Python 加载当前源码；配置在 `configs/qqreader.local.json`，任务次序/次数在 `runtime/gui_tasks.json`，记录/截图在 `runtime/`。
 - 本机 MuMu 实例 0；2026-09-10 实测管理接口和 ADB 均为 `127.0.0.1:16384`。端点按运行时和本机配置核对，不能沿用 9 月 7 日的 16385 假设。
