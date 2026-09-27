@@ -21,6 +21,22 @@
 
 ---
 
+## 2026-09-27 · README 补充自动阅读白名单说明
+
+**触发**：用户要求在 README 告知自动阅读白名单。README 此前完全没有提到这一限制，新用户书架上没有目标书时，自动阅读会以退出码 3 失败，却看不出原因。
+
+| 模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| README.md | 看不到自动阅读只读指定书目 | 白名单只写在 `scripts/auto_read_30min.py` 的注释和常量里 | 「快速开始」新增第 2 步“把目标书加入书架”；新增「自动阅读白名单」小节：当前关键词「宇智波」、必须在书架上、失败时退出码 3 与日志文案、改书需修改 `ALLOWED_BOOK_KEYWORDS` / `TARGET_TITLE_PATTERN` 并同步测试 |
+
+**改动文件**：`README.md`、本日志。
+**验证**：未跑测试，原因：仅文档。说明内容对照 `scripts/auto_read_30min.py`（`ALLOWED_BOOK_KEYWORDS`、`BookNotAllowed` → `return 3`）和 `scripts/run_task.py::_run_reading_task`（`DailyReadingFlow` 调用该脚本）核对。
+**未覆盖 / 遗留**：白名单仍是源码常量，不能从配置或 GUI 修改；`scripts/auto_read_30min.py` 工作区有未提交改动，本次未触碰。
+**分支**：`claude/readme-autoread-whitelist-20260927`
+**回滚**：`git log --oneline -S "README 补充自动阅读白名单说明" -- CHANGELOG.md` 找到提交后 `git revert <hash>`。
+
+---
+
 ## 2026-09-27 · README 重构为项目首页，详细说明拆到 docs/
 
 **触发**：用户反馈 README 不是简介页（310 行，全是操作手册），要求参考优秀开源项目重构。
