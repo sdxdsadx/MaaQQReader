@@ -37,7 +37,7 @@ _OUTCOME_EXIT_CODES = {
 _DESCRIPTIONS = {
     EXIT_SUCCESS: "成功",
     EXIT_FAILED: "任务未成功",
-    EXIT_FATAL: "致命错误",
+    EXIT_FATAL: "致命错误或书源白名单拒绝",
     EXIT_BLOCKED_BY_CAPTCHA: "验证码阻塞，等待人工",
     EXIT_TIMEOUT: "独立超时",
     EXIT_DEVICE_ERROR: "设备错误",

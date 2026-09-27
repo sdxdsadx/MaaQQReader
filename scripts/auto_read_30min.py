@@ -45,6 +45,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 import time
@@ -89,13 +90,19 @@ SHELF_ONLY_MARKERS = (
     "再读",          # 「再读 8 分钟领 20 赠币」
     "时长兑赠币",     # 「时长兑赠币，立即领取」
     "我的笔记",
-    "章/",           # 书籍进度行，如「84章/372章」
 )
+# 书籍进度行，如「84章/372章」「25章/543章·更新至…」。QQR-55：旧判据是子串
+# 「章/」，2026-09-27 误中书城活动横幅「勋章/装扮限时返场」，把排行榜页当成书架。
+SHELF_PROGRESS_PATTERN = re.compile(r"\d+章/\d+章")
 # 明显不属于书架的页面特征（出现即判定不在书架）
 NON_SHELF_MARKERS = (
     "关注", "广场", "一键三连",
     "分享", "热门话题", "回复",
 )
+# 书城首页/排行榜的频道与榜单文案；命中 2 个以上即判定为书城，不是书架。
+BOOKSTORE_MARKERS = ("男生", "女生", "排行榜", "本周强推", "今日必读", "高分必读")
+# 回书架时确认不了页面的受控重试次数（每次都重新截图确认）。
+SHELF_CONFIRM_ATTEMPTS = 3
 
 # 进正文后盲点「自动阅读」三连（老版本 _run_direct_reading 原值，best-effort）
 AUTO_READ_TAPS = ((360, 640), (450, 1214), (360, 1125))
@@ -118,6 +125,8 @@ DISMISS_TEXTS = {"取消", "×", "X", "x", "关闭", "暂不", "以后再说", "
 _client = None
 _adb_path = ""
 _adb_address = ""
+# 失败现场截图目录（来自配置 machine.screenshot_dir）。
+_evidence_dir: Path | None = None
 
 
 def log(msg: str) -> None:
@@ -337,14 +346,24 @@ def is_on_shelf() -> bool:
     单看它会把书城/广场等页面误判成书架（2026-09-21 实测踩过）。
     同时，命中任何 `NON_SHELF_MARKERS` 的社区/发现类页面特征即直接否定。
     """
-    boxes = ocr_boxes()
+    return classify_page(ocr_boxes()) == "书架"
+
+
+def classify_page(boxes: list[tuple[str, tuple[int, int, int, int]]]) -> str:
+    """把一帧 OCR 归为「书架 / 书城 / 其他 / 无文本」，供判定和失败记录共用。"""
     if not boxes:
-        return False
+        return "无文本"
     texts = [t.replace(" ", "") for t, _ in boxes]
     joined = " ".join(texts)
     if any(marker in joined for marker in NON_SHELF_MARKERS):
-        return False
-    return any(marker in joined for marker in SHELF_ONLY_MARKERS)
+        return "其他"
+    if sum(marker in joined for marker in BOOKSTORE_MARKERS) >= 2:
+        return "书城"
+    if any(marker in joined for marker in SHELF_ONLY_MARKERS):
+        return "书架"
+    if any(SHELF_PROGRESS_PATTERN.search(text) for text in texts):
+        return "书架"
+    return "其他"
 
 
 def go_to_shelf_tab() -> bool:
@@ -360,10 +379,16 @@ def return_to_shelf(max_backs: int = 4) -> None:
     return_to_capturable(max_backs=max_backs + 2)
     dismiss_blocking_dialogs()
     for attempt in range(0, max_backs + 1):
-        if is_on_shelf():
+        page = classify_page(ocr_boxes())
+        if page == "书架":
             if attempt:
                 log(f"已返回书架（额外返回 {attempt} 次）")
             return
+        if page == "书城":
+            # 书城是主页 tab，返回键只会弹「确定退出」；直接点书架 tab 并重新确认。
+            if go_to_shelf_tab():
+                log("书城页 → 已点底部「书架」tab 并确认书架")
+                return
         if attempt >= max_backs:
             break
         press_back()
@@ -386,7 +411,54 @@ class BookNotAllowed(RuntimeError):
 ALLOWED_BOOK_KEYWORDS = ("宇智波",)
 
 
-def locate_allowed_book_ui() -> tuple[tuple[int, int, int, int] | None, str]:
+def record_page_evidence(reason: str, boxes: list[tuple[str, tuple[int, int, int, int]]]) -> None:
+    """失败现场：页面类型、完整 OCR 与截图（QQR-55：不能只留下 exit 3）。"""
+    page = classify_page(boxes)
+    full = " | ".join(t for t, _ in boxes) or "（无文本）"
+    log(f"现场记录：{reason}；页面类型={page}；完整 OCR：{full}")
+    if _client is None or _evidence_dir is None:
+        return
+    try:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        target = _evidence_dir / "auto_read" / f"{stamp}_{page}.png"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _client.screencap().save(target)
+        log(f"现场截图：{target}")
+    except Exception as exc:  # noqa: BLE001 - 证据失败不改变结论
+        log(f"现场截图保存失败：{exc}")
+
+
+def confirm_allowed_book_on_shelf(attempts: int = SHELF_CONFIRM_ATTEMPTS) -> str:
+    """先确认真的在书架，再做白名单校验（QQR-55）。
+
+    * 确认在书架但没有白名单书目 → ``BookNotAllowed``（exit 3，白名单保护不放宽）；
+    * 受控次数内始终确认不了书架 → ``RuntimeError``（exit 2），不当成白名单拒绝；
+    * 每次都重新截图确认，不盲点其他书。
+    """
+    boxes: list[tuple[str, tuple[int, int, int, int]]] = []
+    page = "无文本"
+    for attempt in range(1, attempts + 1):
+        boxes = ocr_boxes()
+        page = classify_page(boxes)
+        if page == "书架":
+            box, why = locate_allowed_book_ui(boxes)
+            if box is not None:
+                return why
+            record_page_evidence("书架上没有白名单书目", boxes)
+            raise BookNotAllowed(why)
+        log(f"第 {attempt}/{attempts} 次确认：当前页面是「{page}」不是书架，回书架后重新确认")
+        dismiss_blocking_dialogs()
+        try:
+            return_to_shelf()
+        except RuntimeError as exc:
+            log(f"回书架未成功：{exc}")
+    record_page_evidence("多次回书架后仍无法确认书架", boxes)
+    raise RuntimeError(f"{attempts} 次回书架后仍无法确认书架（最后页面：{page}）")
+
+
+def locate_allowed_book_ui(
+    boxes: list[tuple[str, tuple[int, int, int, int]]] | None = None,
+) -> tuple[tuple[int, int, int, int] | None, str]:
     """在书架上用 OCR 定位白名单书目，返回 (box 或 None, 说明)。
 
     判定依据是 **书架上 OCR 到的书名**，不是正文页顶部 OCR —— 正文页顶部只显示
@@ -396,7 +468,8 @@ def locate_allowed_book_ui() -> tuple[tuple[int, int, int, int] | None, str]:
     实测（2026-09-21）：书架页 OCR 稳定返回
         '宇智波：从扉间人柱力开始' box=(138, 590, 310, 27)
     """
-    boxes = ocr_boxes()
+    if boxes is None:
+        boxes = ocr_boxes()
     if not boxes:
         return None, "OCR 未读到任何文本"
     hit = find_text(boxes, "宇智波")
@@ -497,7 +570,7 @@ def segments_for(minutes: int, segment_minutes: int) -> list[int]:
 
 
 def main() -> int:
-    global _client, _adb_path, _adb_address
+    global _client, _adb_path, _adb_address, _evidence_dir
     parser = argparse.ArgumentParser(description="QQ 阅读自动阅读（dwell 计时）")
     parser.add_argument("--minutes", type=int, default=30, help="总阅读时长（分钟）")
     parser.add_argument("--config", type=Path, default=ROOT / "configs" / "qqreader.local.json",
@@ -514,6 +587,7 @@ def main() -> int:
     config = load_config(args.config)
     _adb_path = config.machine.adb_path
     _adb_address = config.machine.adb_address
+    _evidence_dir = Path(config.machine.screenshot_dir)
     # 界面判据与选书改走 Maa 截图 + OCR：QQ 阅读主界面是 Flutter，
     # uiautomator 拿不到 text 节点（实测返回空）；Maa 截图通道正常且
     # 不依赖会随命令结束消失的 adb server。
@@ -534,11 +608,7 @@ def main() -> int:
             time.sleep(3.0)
             dismiss_blocking_dialogs()
             return_to_shelf()
-            hit_box, why = locate_allowed_book_ui()
-            if hit_box is None:
-                log(f"当前书不在自动阅读白名单: {why}")
-                log("书源校验未通过 → 不进入自动阅读（exit 3）")
-                return 3
+            why = confirm_allowed_book_on_shelf()
             log(f"书源校验通过：{why}")
             click_target_book()
             best_effort_auto_read()
@@ -553,7 +623,7 @@ def main() -> int:
             log(f"中断清理失败：{exc}")
         return 130
     except BookNotAllowed as exc:
-        log(f"❌ 书源校验/选书失败：{exc}")
+        log(f"❌ 书源校验/选书失败（exit 3）：{exc}")
         try:
             return_to_capturable()
         except RuntimeError:

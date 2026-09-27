@@ -20,6 +20,7 @@ App 启停能力，便于用真实 OCR 帧离线回归。
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -37,7 +38,8 @@ KEYCODE_BACK = 4
 CAPTCHA_MARKERS = ("安全验证", "拖动下方滑块", "拖动滑块", "滑动验证", "完成拼图")
 #: 书架页独有的文本；底部「书架」tab 在所有主页 tab 上都有，不能单独作依据。
 SHELF_MARKERS = ("本周未开始阅读", "时长兑赠币", "我的笔记", "签到领赠币")
-SHELF_MARKER_PATTERNS = ("再读", "章/")
+#: 书籍进度行「84章/372章」；不能用子串「章/」，它会误中书城横幅「勋章/装扮限时返场」（QQR-55）。
+SHELF_PROGRESS_PATTERN = re.compile(r"\d+章/\d+章")
 BOOKSTORE_MARKERS = ("男生", "女生", "排行榜", "本周强推", "今日必读", "高分必读")
 EXIT_DIALOG_MARKERS = ("确定退出QQ阅读", "退出QQ阅读？")
 UPGRADE_DIALOG_MARKERS = ("已下载新版本", "是否安装", "安装新版本")
@@ -108,7 +110,7 @@ def is_shelf_text(text: str) -> bool:
         return False
     if any(marker in text for marker in SHELF_MARKERS):
         return True
-    return all(pattern in text for pattern in SHELF_MARKER_PATTERNS)
+    return "再读" in text and SHELF_PROGRESS_PATTERN.search(text) is not None
 
 
 def has_shelf_label(boxes: Sequence[OcrBox]) -> bool:

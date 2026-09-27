@@ -21,6 +21,25 @@
 
 ---
 
+## 2026-09-27 · 自动阅读不再把书城排行榜页当成书架（QQR-55）
+
+**触发**：每日批次 `daily_20260927_114947_a58b6564` 第一轮 35 分钟阅读启动约 25 秒后 exit 3。`runtime/logs/auto_read.log` 05:50:12 记“已返回书架”，05:50:13 的 OCR 却是书城排行榜。用 `maafw.bak.2026.09.27-07.03.17.990.log` 第 15300～16261 行逐帧还原：05:50:02 画面是书架 + 活动弹窗，点 X 后变成书城 + 升级弹窗，点「取消」和 X 后一直停在书城；05:50:12 那帧书城页被 `is_on_shelf()` 判成书架。
+
+| 模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| 书架判定 | 书城排行榜页被确认成书架 | `SHELF_ONLY_MARKERS` 里的子串 `"章/"`（本意是进度行「84章/372章」）误中书城活动横幅 **「勋章/装扮限时返场」** | `scripts/auto_read_30min.py`：进度行改为正则 `\d+章/\d+章`；新增 `classify_page()`，命中 ≥2 个书城标记（男生 / 排行榜 / 本周强推 / 今日必读 / 高分必读）即判为书城；`is_on_shelf()` 改用它 |
+| 回书架 | 书城页上按返回只会弹「确定退出」 | — | `return_to_shelf()`：确认是书城页时直接点底部「书架」tab 并重新确认 |
+| 入口校验 | 白名单预检失败立即 exit 3，不区分“不在书架”和“书架上没有这本书” | `main()` 只做一次 `locate_allowed_book_ui()` | 新增 `confirm_allowed_book_on_shelf()`：先确认书架（最多 3 次，每次回书架后重新截图）；确认在书架但没有白名单书 → 仍 exit 3，白名单不放宽；始终确认不了书架 → `RuntimeError`，exit 2。两种失败都用 `record_page_evidence()` 记录页面类型、完整 OCR，并截图到 `screenshots/auto_read/` |
+| 交接检查 / 退出码说明 | 同一子串判据 | — | `qqreader/runner/handoff.py` 的书架判定改用同一正则；`exit_codes` 中 3 的说明改为“致命错误或书源白名单拒绝” |
+
+**改动文件**：`scripts/auto_read_30min.py`、`qqreader/runner/handoff.py`、`qqreader/runner/exit_codes.py`、`tests/test_qqr55_reading_shelf.py`（新）、`tests/fixtures/autoread_shelf_frames.json`（新，2 帧真实 OCR：05:50:12 被误判的书城页、05:50:27 真实书架）、本日志。
+**验证**：`tests/test_qqr55_reading_shelf.py` 7 项通过：真实书城帧判为书城、真实书架帧判为书架；「勋章/装扮限时返场」不算进度行；书城 → 只点书架 tab → 确认后才找到白名单书，不点任何书；确认在书架但没有目标书时抛 `BookNotAllowed`，并记录完整 OCR；一直是书城时抛普通 `RuntimeError`，页面类型、OCR、截图都有记录。原有 `test_autoread_book_guard.py` 10 项仍通过。全量 391 passed、4 failed（与基线相同）、2 skipped。**未实机验证**（需要 GUI 从相同起点单跑「每日自动阅读」）。
+**未覆盖 / 遗留**：05:50:04 点活动弹窗 X 后页面为什么从书架跳到书城，日志不足以确定（可能点到了弹窗下的元素，也可能是 App 自己切的 tab），本次没有修改 `dismiss_blocking_dialogs`。Issue 里“每轮记录实际累计阅读时长”没有做：串行记录已按轮次分别记录状态和耗时，第一轮失败不会被第二轮覆盖，但还没有“正文页累计分钟”字段。
+**分支**：`claude/qqr-55-reading-shelf-20260927`（基于 `claude/qqr-54-level-ad-retention-20260927`）
+**回滚**：`git log --oneline -S "自动阅读不再把书城排行榜页当成书架" -- CHANGELOG.md` 定位后 `git revert <hash>`。
+
+---
+
 ## 2026-09-27 · 等级页广告：识别截断的倒计时，挽留弹窗点「继续观看」（QQR-54）
 
 **触发**：GUI 批次 `daily_20260927_114947_a58b6564`，`DailyLevelAdFlow` 07:03:13 失败，留下的广告弹窗又拖垮了听书。逐帧核对 `runtime/logs/maafw.bak.2026.09.27-07.03.17.990.log` 第 26519～28318 行的 OCR 结果。
