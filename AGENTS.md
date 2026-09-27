@@ -1,477 +1,106 @@
-# QQReader 项目协作与架构规划
-
-本文件是 QQReader（QQ 阅读 MAA 重构）的入口文档，记录已确认的目标、边界、架构决策与验收方式。
-
-## 当前工作记忆（2026-09-10，优先于下方 9 月 9 日审计快照）
-
-- 2026-09-27 起，QQ 阅读自动化只在 `G:\project_X` 继续维护；`Documents\Codex` 下的 2026-07-22 独立脚本已原样归档到 [`docs/legacy/codex-2026-07-22/`](docs/legacy/codex-2026-07-22/)，历史日志和截图在 `runtime/legacy/codex-2026-07-22/`。今后的代码、配置、文档和运行记录均以本目录为准，不运行旧入口。
-- 当前用户授权维护/运行的项目是 `G:\project_X`（并非 `G:\project\_X`）。新版 Python 模块化工程已经部署到此，主线基线 `f4b7387`。旧工程已归档到 `_backup_old_project_20260909_200716`；下文“G 盘旧仓库只读/87KB 单文件/未接入 Maa”的描述仅适用于重构前审计，不能再作为当前事实或阻止本次修改。
-- 当前入口：`qqreader/gui/`、`scripts/run_task.py`、`qqreader/tasks/ad.py`、`qqreader/maa/`；GUI 产物 `dist/QQReaderGUI.exe`。GUI 调用外部 Python 加载当前源码；配置在 `configs/qqreader.local.json`，任务次序/次数在 `runtime/gui_tasks.json`，记录/截图在 `runtime/`。
-- 本机 MuMu 实例 0；2026-09-10 实测管理接口和 ADB 均为 `127.0.0.1:16384`。端点按运行时和本机配置核对，不能沿用 9 月 7 日的 16385 假设。
-- Linear 项目 MAAQQReader / QQR：QQR-23～26 为 GUI/迁移/ADB；QQR-27～28 为广告入口/返回误开书；QQR-30 为加速按钮与完成弹窗；QQR-31 为直播滑动；QQR-32 **覆盖 QQR-31 的提前退出规则**，每 5 秒滑动，默认 8 次后退出，禁止剩余 2 秒即退出。以上 Done 是对应 Issue 的修复状态，不等于整轮广告实机通过。
-- QQR-14 仍为 Backlog：正常完成须由广告卡 `12/12` 或该卡“明日再来”确认；不能使用听书等其他任务的“明日再来”或仅返回奖励页作为成功证据。连续 3 天无人值守仍待验收。
-- 当前缺陷跟踪 [QQR-33](https://linear.app/sdxdsadx/issue/QQR-33)：无“广告”标签的直播页被误判 UNKNOWN；直播背景遮蔽继续观看/领奖弹窗；按钮坐标和识别失败跨帧缓存；40 秒等待未按广告轮次重置；广告卡受抽奖悬浮窗遮挡时“立”误匹配“立即分享”；游戏任务行可令同一奖励页被分类为 GAME_ENTRY。
-- 本次广告修复：按新截图失效定位缓存；返回奖励页重置每轮计时；直播弹窗优先；保留 8 次滑动后退出且不重新盲滑；直播 OCR 纳入状态识别；广告任务识别 GAME_ENTRY 为奖励页中间态；按钮不完整先移动卡片再观察，取消固定坐标补点。
-- 单元回归采用无伪造图标的实际 OCR，防止只在带虚构模板/结构特征的假对象上通过。最新实跑结果与提交见 `docs/QQR-33-ad-fix.md`；中断、超时、验证码阻塞须据实记录。不要修改备份或 Gameflow 调度核心来修复本脚本业务。
-- QQR-33 最新实测：从书架自行进入奖励页、直播滑动至“奖励已发放～”、单次 X 退出并等待页面稳定，未再连退到书架；206 项测试通过，GUI 已重建。计数仍受滑动验证码阻塞，用户明确要求验证器另行处理，已创建 [QQR-34](https://linear.app/sdxdsadx/issue/QQR-34)（Backlog），本轮不修改求解器。
-
-## 1. 文档用途与事实边界
-
-- 本文只把**用户明确确认**的内容写成事实；旧工程中读到的是**实测审计结果**，会标注来源；我的推断、建议与默认值统一放在「待确认」章节，不写成已实现或已确认。
-- 事实来源：2026-09-09 用户对《QQ阅读 MAA 重构 · 需求问卷》的答复（下称「问卷答复」），以及对旧工程 `G:\project_X` 的只读审计。
-- 旧工程审计只做了静态读取（文件、pipeline、脚本引用），**没有运行任何真实任务**；因此「旧方案在真机上到底怎么表现」仍以用户实际观察为准。
-
-### 已核对的仓库现状（2026-09-09）
-
-| 项 | 现状 |
-| --- | --- |
-| 新仓库 | `D:\游戏文件\ChatGPT\QQReader`，分支 `master`，**本地提交、无远端**；QQR-3 核心骨架见下方「实现状态」 |
-| 旧仓库 | `G:\project_X`，分支 `main`，**139 项未提交改动**；`origin` 仍指向模板仓库 `MaaXYZ/MaaPracticeBoilerplate` |
-| 框架 | MaaFramework（`assets/resource/pipeline/*.json` + `agent/` 自定义 action/recognition + `deps/tools/*.schema.json`） |
-| 单体文件 | `gui/maa_qq_reader_gui.py` 87,594 字节单文件；PyInstaller 产物 `MaaQQReaderGUI.exe` |
-| 工具脚本 | `tools/` 下 20 个 `.py`（验证码、广告定位、模拟器截图/点击、schema 校验等） |
-| 第三方 | `third_party/QQReadScript`（TNanko/Scripts，自带 `.git`）、`third_party/TencentSliderSolver` |
-| 旧文档 | `docs/TRIAL_PLAN.md`、`docs/CAPTCHA.md`、`docs/GUI.md` |
-| 运行环境 | MuMu 模拟器 12，ADB `127.0.0.1:16384`，分辨率 `720×1280`，包名 `com.qq.reader` |
-| 旧任务入口 | `LaunchQQReader`、`SmokeTest`、`DailyReadingFlow`、`DailyAudiobookFlow`、`DailyGameFlow`、`DailyAdFlow`、`DailyExternalAppFlow`、`DailyLevelAdFlow`、`ClaimOneReward` |
-
-### 实现状态（2026-09-09，本仓库）
-
-QQR-3「页面状态机与任务契约」与 QQR-5「识别失败改为页面确认与恢复」的核心已落地；`py -3.10 -m pytest` 当前 **77 个单元测试全部通过**（11 个测试文件）。事实边界如下，未验证项不得当成已完成：
-
-| 已实现（有单元测试覆盖） | 未实现 / 未验证 |
-| --- | --- |
-| `PageState`（`HOME` + 规范要求的 8 个状态）、多特征识别、`UNKNOWN` 只走确认/恢复（绝不判失败、绝不盲点） | 未接入 MaaFramework；`PageObserver` / `DeviceController` / `TaskAdapter` 仅有协议与测试假对象 |
-| `TaskContract` 8 字段、条件原语、`TaskOutcome` / `TaskResult` | 未在模拟器/真机运行任何真实任务；模板、ROI、阈值、OCR 文案未重新标定（QQR-6 / QQR-14 / QQR-15） |
-| 恢复阶梯 `EscalationPolicy`；验证码守卫（默认等待人工；求解后必须重新观测确认消失） | 验证码自动求解未实现 |
-| `TaskRunner`（超时 / 取消 / 验证码优先阻塞）、`TaskRegistry`、`PageConfirmer`（QQR-5：识别失败先确认，`UNKNOWN` 上不点击也不判失败，`page.features` 记录每个候选特征结果） | GUI、配置存储、运行记录、MaaFramework 适配未实现 |
-| 广告 `DailyAdFlow`、游戏 `DailyGameFlow` 的契约与声明式动作计划 | 广告 45 分钟、游戏挂机 25 分钟、游戏超时 30 分钟等为初始默认值，待用户确认 |
-
-核心包 `qqreader/` 无第三方依赖；测试需要 `pytest`。
-
-## 2. 项目目标与范围
-
-QQReader 是 Windows 本地运行的 QQ 阅读每日任务自动化工具，基于 MaaFramework，通过模拟器（ADB）完成阅读、听书、游戏挂机、奖励页广告、等级页广告、外部应用任务与领币等每日流程。
-
-核心目标（问卷答复原话）：
-
-> 让每个任务具有完整入口、稳定识别、状态判断和异常恢复能力，而不是识别失败几次以后直接结束。
-
-V1 成功定义（问卷答复原话）：
-
-> 我能不能每天点一次启动以后不再需要帮它进入奖励页，也不会因为广告、游戏识别偶尔失败或者验证码突然出现就把整条流程跑死。
-
-### 2.1 三类核心痛点（问卷答复）
-
-1. **任务入口不完整。** 最典型的是看广告：脚本不能可靠完成「QQ 阅读主页 → 自动进入奖励页 → 找到广告任务 → 开始广告流程」，实际运行经常需要用户先手动进入奖励页。现有 Task 实际只覆盖任务后半段，隐含假设「用户已经帮它进入正确页面」。新版要求 Task 默认从可预测的公共起点开始，自己完成「进入任务入口 → 确认页面正确 → 执行 → 判断完成 → 返回稳定状态」。
-2. **广告与游戏识别稳定性差。** 页面实际存在但多次识别不到，旧行为是「识别 → 失败 → 再识别几次 → 仍然失败 → 直接退出当前任务」。**「没有识别到目标」不等于「任务失败」**，必须先判断：是否未加载完成、是否进入其他页面、是否被弹窗遮挡、是否验证码、是否屏幕方向变化、是否模板匹配失败、是否 OCR 结果变化、是否真的进入异常状态。
-3. **未知页面没有纳入状态机。** 最严重的例子是滑动验证码：每天完成一轮广告后会出现滑动验证框；ADB 无法正常读取该页面，脚本也没有正确识别「验证码已经出现」，于是跳过验证码处理继续执行，最终整条流程卡死。**这是 V1 的核心 Bug，不是后续优化。**
-
-### 2.2 用户流程
-
-> 启动 QQ 阅读 → 自动寻找并进入任务入口 → 确认页面状态 → 按顺序执行每日任务 → 每个任务自行判断完成并返回稳定状态 → 出现验证码时进入验证码专用流程 → 全部结束后记录结果。
-
-### 2.3 确认事项
-
-| 事项 | 状态 | 内容 |
-| --- | --- | --- |
-| 重构范围 | 已确认 | 允许改变流程，不机械复刻旧程序；广告与游戏可重新设计状态机、识别步骤与恢复逻辑，只要求最终业务结果一致 |
-| 代码位置 | 已确认 | 新仓库 `D:\游戏文件\ChatGPT\QQReader`；旧仓库 `G:\project_X` **只读**，用于分析实现与提取已验证有效的识别资源 |
-| 使用者 | 已确认 | 第一阶段只有用户本人 |
-| 框架 | 已确认 | 继续使用 MaaFramework，但必须把业务流程、页面状态、识别、恢复、验证码处理拆开 |
-| 运行平台 | 已确认 | Windows 本地；固定分辨率环境优先实现 |
-| 验收标准 | 已确认 | 连续 3 天无人值守完成每日流程，且通过场景 A/B/C/D（见 5.2） |
-
-### 2.4 V1 必须包含
-
-旧任务（问卷答复勾选）：
-
-- 自动阅读、听书、游戏挂机
-- 奖励页视频广告、等级页广告
-- 外部应用任务
-- 领币 / 领奖励
-- QQ 阅读启动及弹窗清理
-
-V1 新增能力（问卷答复勾选）：
-
-- 自动寻找并进入任务入口
-- 页面状态确认
-- 广告流程异常恢复
-- 游戏流程异常恢复
-- 滑动验证码检测
-- 验证码状态阻塞
-- 卡死检测
-- 关键节点截图
-- 任务失败原因记录
-
-### 2.5 V1 明确不做
-
-多账号并行、多模拟器并行、云端部署、Docker、插件市场、自动注册、充值、购买、邀请、分享。
-
-### 2.6 优先级
-
-| 级别 | 内容 |
-| --- | --- |
-| P0 | 滑动验证码出现后脚本仍继续运行并卡死 |
-| P0 | 广告任务无法自主从主页进入奖励页 |
-| P0 | 广告 / 游戏识别失败几次后直接退出 |
-| P1 | 广告和游戏页面识别稳定性 |
-| P1 | 每日结尾验证图片和完成状态判断 |
-| P2 | 87KB 单文件拆分、代码整洁、目录优化等纯工程问题 |
-
-**先保证流程正确和可恢复，再把代码拆得漂亮。**
-
-## 3. 架构规划
-
-### 3.1 分层原则（已确认）
-
-必须拆开以下职责，不允许再形成「一个大脚本按顺序识别几个图片、失败几次就退出」的模式：
-
-| 层 | 职责 |
-| --- | --- |
-| 业务流程 | 每日任务顺序、任务契约、结果汇总 |
-| 页面状态 | 当前处于哪个页面/状态，状态如何转移 |
-| 识别 | 模板、OCR、方向、当前 App、结构特征的组合判断 |
-| 恢复 | 卡住与异常的升级式兜底 |
-| 验证码 | 检测、阻塞、求解、求解后确认、人工兜底 |
-
-### 3.2 页面状态机（已确认方向）
-
-页面不能只用「找到图片 / 没找到图片」表达，需要明确状态。至少包含：
-
-```
-REWARD_HOME   AD_PLAYING   AD_RESULT   CAPTCHA
-GAME_LOADING  GAME_RUNNING GAME_RESULT UNKNOWN
-```
-
-要求：
-
-- 每个状态由**多特征**共同确认（页面标题、固定图标、OCR 文本、局部模板、屏幕方向、当前 App、页面结构特征）。
-- 状态确认失败时，结果只能是 `UNKNOWN` 或「重新判断」，**不得**直接推导为「目标不存在」或「任务失败」。
-
-### 3.3 任务契约（已确认）
-
-广告与游戏都不能只依赖一个图片连续识别几次。每个任务必须显式定义：
-
-- `start_condition`：从哪个可预测的公共起点开始
-- `ready_condition`：目标页面/进程确实就绪
-- `progress_condition`：仍在正常推进
-- `captcha_condition`：何时判定进入验证码状态
-- `success_condition`：以什么为唯一正常完成标志
-- `recoverable_error`：哪些异常可恢复，如何恢复
-- `fatal_error`：哪些异常直接失败
-- `timeout`：独立超时
-
-### 3.4 广告流程（已确认重定义）
-
-```
-QQ 阅读主页
-→ 自动寻找奖励入口
-→ 进入奖励页
-→ 确认奖励页加载完成
-→ 找到广告任务
-→ 开始观看广告
-→ 广告结束
-→ 返回奖励页
-→ 判断广告次数
-→ 检查是否出现验证码
-→ 无验证码：继续下一次
-→ 有验证码：进入验证码处理
-→ 最终完成广告任务
-```
-
-**不得**再把「已经位于奖励页」当作广告任务的隐含前置条件。
-
-### 3.5 游戏流程（已确认重定义）
-
-```
-进入游戏任务
-→ 确认游戏真正启动
-→ 确认横竖屏状态
-→ 执行挂机
-→ 周期性检查游戏状态
-→ 检查异常页面
-→ 判断游戏完成
-→ 返回 QQ 阅读
-```
-
-### 3.6 识别与点击（已确认）
-
-- 图像识别仍是主要方式，但广告与游戏必须重做识别策略：模板 A 找不到 → 尝试模板 B / OCR / 页面特征 → 确认当前页面 → 检查弹窗 → 检查验证码 → 必要时刷新当前状态 → 再决定是否恢复。
-- **不得**通过连续几次 `Match False` 判断任务失败。
-- 关键按钮必须「识别 → 点击 → 点击后验证页面变化」，不允许「识别一次 → 点击 → 默认成功」。例如从主页进入奖励页后，必须确认当前真的已经进入奖励页。
-
-### 3.7 恢复与兜底（已确认）
-
-卡住时的推荐升级顺序：
-
-```
-重新截图 → 重新判断当前状态 → 关闭普通弹窗 → 返回一次
-→ 重新进入当前任务入口 → 重启 QQ 阅读 → 必要时重启模拟器 → 任务失败
-```
-
-**例外：验证码状态禁止进入普通 Recovery。** 一旦检测到 CAPTCHA，不能疯狂返回、不能继续点广告、不能靠自动重启 App 规避验证，必须进入验证码专用流程。
-
-### 3.8 CaptchaGuard（V1 必须新增）
-
-- 任何关键操作之前都允许进行验证码检测。
-- 检测到以后，正常任务状态暂停，进入 `CAPTCHA_DETECTED`。
-- 自动 Solver 能处理：尝试求解 → **确认验证码确实消失** → 回到原任务。
-- 无法自动处理：停止当前自动点击 → 保存截图 → 写入日志 → 等待人工处理（`WAITING_FOR_HUMAN` / `CAPTCHA` 状态）。
-- **绝对不能**「验证码识别失败 → 当作没有验证码 → 继续任务」。
-
-已知两种验证码与旧工程实测审计（2026-09-09 静态审计，未实机验证）：
-
-| 类型 | 旧工程现状 | 问题 |
-| --- | --- | --- |
-| 图片顺序点选 | pipeline 有节点 `AdCaptchaDetected`（模板 `qq_reader_captcha_prompt.png`）→ `AdCaptchaAwaitManualSolve`（等人工）或关闭按钮路径 → `AdCaptchaAbort`；求解器为外部进程 `tools/captcha_solver.py`（ddddocr 1.5.6 + OpenCV/SIFT），由 `tools/run_ad_with_captcha.py` 与 GUI 在检测到该节点时拉起 | 求解器不在 MaaFramework 流程内，依赖外部监督进程；「已返回奖励页」不等于成功 |
-| 滑动验证码 | `tools/slide_captcha_solver.py` 存在（OpenCV 定位轨道+滑块+边缘投影，经 `maa_click.py --swipe` 滑动；找不到轨道与手柄就 `found=false` 不滑动）；GUI 内有 `_solve_slide_captcha` 线程，按「8 秒节流 / 最多 6 次」启发式触发 | **pipeline 里完全没有滑块检测节点**，纯 pipeline / CLI 运行时求解器不在链路上；触发条件是启发式，没有「已进入验证码状态」的显式状态，也没有求解后确认 |
-
-因此 V1 要求：
-
-- 滑块验证码必须进入 pipeline / 状态机，而不是只存在于 GUI 线程。
-- 求解成功后必须验证「验证码确实消失」再恢复原任务。
-- 验证码是当前业务流程的**正常分支**（每天一轮广告后实际会遇到），不是极低概率异常。
-
-### 3.9 运行结果状态（已确认）
-
-日志与记录必须能区分：
-
-```
-SUCCESS   FAILED   TIMEOUT   BLOCKED_BY_CAPTCHA   SKIPPED
-```
-
-判定规则（问卷答复）：
-
-- 识别不到一次或几次 **不是** Task Failed。
-- 只有经过「状态重新判断 → Recovery → 独立超时」仍然无法恢复，才能标记失败。
-- 验证码 **不是** 失败，是 `BLOCKED_BY_CAPTCHA`。
-- 失败后是否继续下一项见 5.3。
-
-### 3.10 旧工程审计结论（QQR-1，静态审计）
-
-> 完整报告：`docs/audits/QQR-1-old-project-audit.md`（含 pipeline 全量写死值表、逐条 `文件:行号`、证据索引）。
-> 审计日期：2026-09-09；`G:\project_X` 只读；未运行真实任务、未修改旧仓库。
-> 行号约定：`P(dev):行` = `dev/resource/pipeline/qq_reader_trial.json`（GUI 实际加载，SHA256 `2A469453C18BCE2BEE35CD49EB77E8A45B6C2E072A9DFE6F34FF4F659525B193`，2520 行/223 节点）。`assets` 副本审计期间被其他 issue 修改并分叉（2636 行/232 节点），仅在报告里另列。
-> 本次 QQR-1 完成原清单第 1、2 项；第 3、4 项（每日结尾验证资源、旧资源整体有效性）需要另立审计/实机截图，本文只记录与验证码和写死值直接相关的部分。
-
-#### A. 验证码调用链审计（结论）
-
-**A1. `TencentSliderSolver` 是死代码；真正被调用的是 `tools/slide_captcha_solver.py`。**
-- `third_party/TencentSliderSolver/process_current_captcha.py` 在旧仓库没有任何 import / subprocess / 配置引用；它只是独立 URL/CSS 分析脚本。
-- `slide_captcha_solver.py` 的调用者只有：GUI watcher（`GUI:1678-1694, 1791-1824`）、独立 supervisor `run_ad_with_captcha.py`（`SUP:197-228, 704, 729`）、`captcha_guard` 默认工厂（`GUARD:276-300, 575-597`）。
-- **纯 pipeline / MaaPiCli / `run_maa_ad.py` 链路上没有任何 solver 调用**：`run_maa_ad.py` 只做 `MaaTaskerPostTask`（`RUNNER:117-119`）；pipeline 里唯一的验证码节点是图片模板 `AdCaptchaDetected`（`P(dev):1770-1781`），没有滑块节点。
-
-**A2. 入口条件、模板、ROI、截图、渲染方式。**
-- 模板 `qq_reader_captcha_prompt.png`（65x240，OCR `请在下图依次点击：`）是图片点选提示，不是滑块模板；滑块页面渲染为 `安全验证` / `拖动下方滑块完成拼图`。
-- `AdCaptchaDetected` 使用 `threshold: 0.8`、`roi: [40,260,640,160]`（`P(dev):1773-1779`）。真实日志中滑块页模板分数只有 `0.742927`（`maafw.bak.2026.09.07-14.28.25.187.log:4747`）和 `0.742636`（同日志 `5096`），`best_result_=null`，识别失败。ROI 覆盖了提示框/标题，**不是本次漏检主因**；主因是模板类型不对。
-- ADB 截图本身正常：同日志 `4676` 中 Maa OCR 读到 `安全验证`（score 0.999907）和 `拖动下方滑块完成拼图`（score 0.999692）；另有连接/重连期的 `No available screencap method`（同日志 26494-26498），属于另一类问题。
-- 旧工程没有“验证码类型”概念，只有图片模板入口；QQ 阅读换成/新增滑块渲染后，入口条件结构性失效。
-
-**A3. Solver 成功后没有结果验证（滑块路径）。**
-- `slide_captcha_solver.main()` 只设置 `swiped = swipe(...)`（`SLIDE:481-486`）；`swipe()` 返回的是 emu_mouse/Maa/adb 命令是否被接受（`SLIDE:416-430`），没有再次截图确认验证码消失。
-- GUI `_solve_slide_captcha` 只看 `found && swiped`（`GUI:1811-1815`）；supervisor 主滑块分支也只看 `solve_slide_captcha()` 的返回值（`SUP:225-228, 704-705`）。
-- 对比：图片点选 solver 有 `captcha_still_visible` 复核（`CLICK:647-653, 672-674`），GUI 也检查它（`GUI:1742`）。
-- QQR-9 的 `CaptchaGuard.verify_cleared/handle` 有“连续 N 帧 NONE 才算消失”的验证（`GUARD:233-269, 479-538`），但当前只接在 supervisor 的 post-ad 路径（`SUP:290-316`）。
-
-**A4. 为什么验证码出现后没有进入 Solver，而是继续执行？**
-以 `maafw.bak.2026.09.07-14.28.25.187.log` 的真实事件为准：
-1. 日志 `4676`：Maa OCR 已读到 `安全验证` / `拖动下方滑块完成拼图`，页面确实是滑块验证码。
-2. 日志 `4747-4749`：`AdCaptchaDetected` 模板匹配 `score=0.742927 < 0.8`，`best_result_=null`，`Node.Recognition.Failed`。
-3. 日志 `4751-4758`：`AdCaptchaDetected` 只是 `AdPostReturnWatch` 的 `next` 候选之一；它失败后，`AdReturnStable`（OCR）命中奖励页文案并 `Node.NextList.Succeeded`，流程继续。
-4. 日志 `4786-4800`：`AdDailyRepeat` 无 `recognition`，是 `DirectHit`（`P(dev):1877-1880`），必然成功，Action 为 `DoNothing`，继续下一轮。
-5. 日志 `4883-4906`：`AdDailyComplete`、`AdVideoCounterVisible`、`AdClickWatch` 识别失败后，`AdScrollToVideoCard` 也是 `DirectHit`（`P(dev):1414-1434`），必然成功并继续滑动。
-6. 日志 `5094-5098`：同一页面第二次 `AdCaptchaDetected` 仍失败（`0.742636`）。
-- 结论：**没有滑块节点 + 图片模板阈值不匹配 + `AdCaptchaDetected` 不是阻塞状态 + 存在无条件 DirectHit fallback**，四个条件叠加，导致 pipeline 忽略验证码继续执行。即使 `AdCaptchaDetected` 成功，下一步也是 `AdCaptchaAwaitManualSolve`（等待人工/返回奖励页，`P(dev):1783-1799`），不是自动 solver；`AdCaptchaWaitForSafeClose` 是孤儿节点，`AdCaptchaAbort` 是唯一 `StopTask`（`P(dev):1850-1852`）。
-- GUI 侧同样不满足“进入 solver”的条件：图片 watcher 依赖 `AdCaptchaDetected` 成功（`GUI:1650-1651`），滑块 watcher 只监听 `screencap failed` 或 `AdClickWatch`/`AdVideoCounterVisible` 失败（`GUI:1678-1684`），是 8s 节流 / 最多 6 次的事后启发式，不是显式验证码状态。
-
-**A5. QQR-9 现状。** `tools/captcha_guard.py` 已实现 fail-closed 检测、求解后验证、`WAITING_FOR_HUMAN`；但 GUI 没有 import 它，纯 pipeline 也没有 captcha 状态，所以它是 supervisor post-ad 路径的部分缓解，不是完整接入。
-
-#### B. 写死值 / 失败条件审计（结论 + 关键清单）
-
-完整逐条表见 `docs/audits/QQR-1-old-project-audit.md` §3；这里给出关键数字：
-
-| 类别 | 旧工程关键值 | 主要位置 | 是否可配置 | 新方案建议 |
-| --- | --- | --- | --- | --- |
-| 广告识别重试 | `AdScrollToVideoCard:24`、`AdScrollDownRepeat:240`、`AdCountdown:120`、`AdWaitAfterSkip:60`、`AdDailyRepeat:24`、`AdBrowseOfferModal:20`、`AdCloseByBackKey:6`、`AdThirdPartyLoginPage:6`、`AdBackUntilRewardOrShelf:8`、`AdShelfScrollTop:4`、`AdScrollToTop:12` | `P(dev):1272,1338,1395,1414,1440,1467,1657,1673,1757,1877,2500` | 只能改 pipeline JSON | 按页面/动作配置 `retry.max_attempts`，不要统一 `retry N → false` |
-| 游戏识别重试 | `GameBackUntilRewardOrShelf:8`、`GameScrollToPlay:4`、`GameHallRetry:4`、`GameExitBackFallback:6`、`GameBackAfterExit:4` | `P(dev):486,544,589,752,766` | 只能改 pipeline JSON | 同上；识别失败先确认页面状态 |
-| 图片模板阈值 | `ReadingFindBookTerminal:0.82`、`ReadingFindBook:0.82`、`GameEnterByTemplate:0.82`、`AdCaptchaDetected/AdCaptchaAwaitManualSolve:0.8` | `P(dev):120,231,641,1770-1786` | 只能改 pipeline JSON | 每模板独立阈值；重新截图校准，记录实际 score |
-| OCR 阈值 | 133 个 OCR 节点**全部没有显式 threshold**，使用 Maa 默认值；旧工程未记录默认值 | 全部 OCR 节点，如 `P(dev):15,1867,1889` | 只能改 Maa/JSON，未暴露 | 配置 `recognition.ocr_threshold`，并在日志记录实际 score |
-| retry interval / count | pipeline 没有独立 interval，`post_delay` 充当间隔；GUI 广告定位 8s/8 次、滑块 8s/6 次；supervisor 图片 30 次、滑块 8s/6 次、ad locator 6s/3 次；`CaptchaGuard` 3 次/验证 4 次×1.2s/连续 2 帧 | `GUI:1662-1685`；`SUP:59-65,111,147,613-628,685-710`；`GUARD:78-83` | 否（源码常量） | 全部外置：`recovery.*.throttle/attempts`、`captcha.verify_*` |
-| 页面加载等待 | `post_delay` 共 157 个节点；≥3000ms 的 27 个，例如 `LaunchQQReader:4000`、`DailyAdFlow:6000`、`GameEnterByTemplate:5000`、`ReadingWaitOneMinute:2100000`、`GameWaitOneMinute:1500000`、`AdCountdown:5000` | `P(dev):2,295,443,641,691,1197,1673` 等 | 只能改 pipeline JSON | `waits.state_settle_ms` / `waits.after_action_ms` 按状态配置 |
-| 节点超时 | 仅 6 个：`GameExternalActive:60000`、`GameWaitOneMinute:1620000`、`LevelAfterCoinAd:12000`、`LevelAfterPointsAd:12000`、`AdCountdown:45000`、`ClaimDismissAddShelf:3000` | `P(dev):627,691,1132,1188,1673,2037` | 只能改 pipeline JSON | `timeouts.step` + `timeouts.task`，区分 TIMEOUT/FAILED |
-| 验证码识别条件 | `AdCaptchaDetected` 模板 `qq_reader_captcha_prompt.png` / `threshold 0.8` / `roi [40,260,640,160]`；`AdCaptchaAwaitManualSolve` 同模板；`AdCaptchaWaitForSafeClose` OCR `请在下图依次点击`；关闭按钮 OCR `^[Xx×]$` + ROI `[80,850,170,190]`/`[560,380,140,150]`；固定关闭坐标 `[139,965]` | `P(dev):1770-1852` | 只能改 pipeline JSON | 显式 `captcha_condition`，按类型（click/slide/unknown）分流；求解后必须 `verify_cleared` |
-| 滑块 ROI/检测 | 无 pipeline ROI；`slide_captcha_solver` 用整帧扫描 + 硬编码颜色/灰度/尺寸：蓝 `(180,50,0)..(255,220,180)`、面积≥500、宽 60..180、高 35..100；灰 180..220、长条 >40% 宽；puzzle 区域 `track_y-300..track_y-35`；缺口面积 500..25000、宽高 20..150；Canny 50/150；右边缘忽略 60px | `SLIDE:147-159,165-190,258-320` | 否 | 配置 `captcha.slide.*`；优先模板/特征模型，不要写死颜色 |
-| 硬编码路径/坐标/超时 | GUI `MUMU_PATH/ADB_PATH/ADB_ADDRESS`、`G:\project_I\logs\qq_reader_final.png`；`run_maa_ad.py` `G:\project_X\dev...`；supervisor `D:\...\adb.exe`、`127.0.0.1:16384`、`REFRESH_POINT=(180,908)`；slide solver `D:\python\python.exe`；pipeline 32 个 `target`、18 个滑动 `begin/end` | `GUI:39-67`；`RUNNER:147-155`；`SUP:32-46`；`SLIDE:30-31`；`P(dev)` 3.1.6/3.1.7 | 否 | 机器配置 + 可配置坐标 fallback；不在源码写盘符/用户名/绝对路径 |
-| 任务失败条件 | 旧工程没有统一 outcome；只有 `AdCaptchaAbort` 一个 `StopTask`（`P(dev):1850-1852`）；GUI 只对 `Tasker.Task.Failed`、连接失败、screencap 失败置 `run_failed`（`GUI:1628-1646`）；`AdVideoSearchExhausted`、`ClaimGameScanExhausted` 用 `DoNothing` 静默结束；33 个终端节点无 `next`/`on_error` | `P(dev):1436,1850,1889,2021`；`GUI:1628-1646`；`assets/interface.json:25-62` | 否 | 每任务显式 `success_condition` / `failure_condition` / `captcha_condition`；统一 outcome 枚举 |
-
-**关键结构性发现**：`AdDailyRepeat`（`P(dev):1877-1880`）和 `AdScrollToVideoCard`（`P(dev):1414-1434`）没有 `recognition`，是 `DirectHit`，永远成功；`AdReturnStable` 的 OCR 在滑块弹窗上方仍能看到奖励页文案时也会成功。这就是“验证码出现后程序继续执行”的直接机制，也是新设计必须避免的：**验证码状态必须先于普通页面识别，且不能被普通 DirectHit fallback 绕过。**
-
-#### C. 对 V1 设计的直接输入
-
-- 每个任务必须有独立 `success_condition`、`failure_condition`、`captcha_condition`；识别不到一次或几次不等于 FAILED。
-- 验证码必须是阻塞状态：`CAPTCHA_DETECTED` 优先于所有普通页面识别和 DirectHit fallback；禁止“验证码识别失败 → 当作没有验证码 → 继续”。
-- 滑块验证码要进入 pipeline/状态机，不能只靠 GUI watcher；求解后必须连续多帧确认验证码消失再恢复任务。
-- `max_hit`、`post_delay`、`threshold`、OCR `expected`/threshold、ROI、target/begin/end、timeout、retry interval/count 全部外置到配置模型，不写死在代码或 pipeline JSON 里。
-- 固定路径、模拟器地址、ADB 端口、解释器路径放机器配置；固定坐标只作为 fallback 且必须可配置。
-- 旧图片点选模板和滑块检测参数必须在当前设备重新截图/标定后才能进入 V1；不能假定旧模板仍有效。
-
-#### D. 仍待实机确认
-
-1. 重新制作 `qq_reader_captcha_prompt.png` 与滑块验证码模板/特征，测量实际匹配分数，标定 threshold/ROI。
-2. 确认当前滑块页面的颜色、轨道、缺口布局，验证 `slide_captcha_solver.detect` 是否仍 `found=true`。
-3. 确认图片点选验证码是否仍出现；旧日志 `AdCaptchaDetected` 0 次成功，不能作为模板有效的证据。
-4. 确认 Maa/ADB screencap 在验证码页、广告页、FLAG_SECURE 正文页的实际行为，校准黑屏阈值。
-5. 确认求解后验证的截图时机/连续帧数/刷新行为；滑块主路径当前没有验证。
-6. 确认 `CaptchaGuard` 如何接入 pipeline/GUI；V1 目标是“关键操作前检测 → CAPTCHA_DETECTED 阻塞 → solver → verify_cleared → 恢复”。
-
-## 4. 可移植性与可复现性
-
-- 不在源码或默认配置中写死盘符、用户名、项目绝对路径；机器差异（脚本路径、解释器路径、模拟器地址）保存在本机配置并可在界面重新定位。
-- 源码与文本配置统一 UTF-8；PowerShell 读取 UTF-8 文件时显式指定编码；乱码先检查读写链路，不批量替换内容。
-- 路径拼接使用语言自带路径 API；支持中文与空格路径。
-- 真实密钥、账号信息不写入仓库；示例配置只含占位值。
-- 运行记录、日志、截图与源码分离存放；升级或重建不覆盖用户数据。
-- V1 只要求 Windows 10/11；不为未要求的平台提前建兼容层。
-
-## 5. 开发流程与验收
-
-### 5.1 阶段规划
-
-| 阶段 | 交付目标 | 完成条件 |
-| --- | --- | --- |
-| 0：审计与骨架 | 完成 3.10 的审计；新仓库建立可运行骨架与配置模型 | 写死值与验证码链路有明确结论；新工程能启动并读取配置 |
-| 1：状态机与入口 | 页面状态机 + 任务契约 + 广告任务从主页自主进入奖励页 | 通过验收场景 A；不再需要人工预先进奖励页 |
-| 2：识别与恢复 | 广告、游戏多特征识别与异常恢复；取消「识别几次就退出」 | 通过验收场景 B；识别失败能确认页面并恢复 |
-| 3：验证码 | CaptchaGuard 接入 pipeline；滑块检测、阻塞、求解与求解后确认 | 通过验收场景 C、D；验证码不再导致卡死 |
-| 4：完整每日流程 | 全部 V1 任务串联、失败原因记录、关键节点截图、卡死检测 | 连续 3 天无人值守完成每日流程 |
-| P2：工程整理 | 拆分 87KB 单文件、目录优化 | 在流程正确之后进行，不阻塞 V1 |
-
-### 5.2 验收场景（已确认，必须单独通过）
-
-| 场景 | 要求 |
-| --- | --- |
-| A | 程序从 QQ 阅读主页启动广告任务，自己进入奖励页；**不能要求人工预先打开奖励页** |
-| B | 广告或游戏页面第一次识别失败时，不能因短时间连续几次识别不到就宣布失败；必须进行页面确认、重新识别或恢复 |
-| C | 出现滑动验证码时，程序必须识别「当前已经进入验证码状态」；即使暂时无法自动完成，也不能继续假装任务仍在正常运行 |
-| D | 验证码无法自动解决时，必须进入明确的 `WAITING_FOR_HUMAN` / `CAPTCHA` 状态，而不是继续点击并最终卡死 |
-
-最终标准：连续 3 天无人值守完成每日流程。
-
-### 5.3 失败与继续（已确认修订）
-
-先区分「识别失败 / 可恢复故障 / 验证码 / 真正任务失败」，再决定后续：
-
-- 识别失败：不是 Task Failed，走状态重新判断与 Recovery。
-- 可恢复故障：按 3.7 升级恢复。
-- 验证码：标记 `BLOCKED_BY_CAPTCHA`，不当作失败。
-- 真正任务失败：记录失败原因，按任务策略决定是否继续下一项。
-
-（旧版「任务失败就直接进入下一个」的规则已被本修订取代。）
-
-### 5.4 每次任务的执行习惯
-
-1. 阅读相关代码与约定，检查已有修改，明确本次范围与验收条件。
-2. 简单任务直接推进；复杂任务给简短方案并分阶段执行。
-3. 完成必要改动，避免顺手重构无关模块、增加无用依赖。
-4. 执行与改动匹配的检查。功能与缺陷修复在有价值时补回归测试；文档与低影响修改采用直接检查。
-5. 交付实际变更、检查结果及未验证项；有可用版本时按授权保存 Git 提交，不自动推送或发布。
-6. **不得填写未经执行却声称有效的命令。**
-
-### 5.5 运行环境（旧工程实测，重构后需重新确认）
-
-- 模拟器：MuMu 模拟器 12，ADB `127.0.0.1:16384`
-- 分辨率：`720×1280`
-- 包名：`com.qq.reader`
-- 旧计时默认：自动阅读 2×35 分钟、听书 35 分钟、游戏 25 分钟（重构后以新配置为准）
-- 设备状态要求：运行期间保持登录、不锁屏、不休眠，允许占用桌面
-
-## 6. 已知失败方案与排障记录
-
-### F-001：任务入口不完整（P0）
-
-- **来源：**用户 2026-09-09 问卷答复。
-- **现象：**广告任务不能可靠完成「主页 → 奖励页 → 找到广告任务」；实际运行经常需要人工先进入奖励页。
-- **根因（用户判断）：**现有 Task 只覆盖任务后半段，把「已位于奖励页」当作隐含前置条件。
-- **约束：**V1 每个 Task 默认从可预测的公共起点开始，自己完成入口与返回。
-
-### F-002：识别失败即退出（P0）
-
-- **来源：**用户 2026-09-09 问卷答复。
-- **现象：**广告、游戏页面实际存在但识别不到，连续几次失败后直接退出当前任务。
-- **约束：**「没有识别到目标」不等于「任务失败」；必须先排除未加载、串页、弹窗遮挡、验证码、方向变化、模板/OCR 失效等可能。
-
-### F-003：滑动验证码未纳入状态机导致卡死（P0）
-
-- **来源：**用户 2026-09-09 问卷答复 + 旧工程静态审计。
-- **现象：**每天完成一轮广告后出现滑动验证框；ADB 无法正常读取该页面；脚本未识别「验证码已出现」，跳过验证码处理继续执行，最终整条流程卡死。
-- **审计证据：**pipeline 中只有图片验证码节点（`AdCaptchaDetected` / `AdCaptchaAwaitManualSolve` / `AdCaptchaAbort`），**没有滑块验证码节点**；滑块求解器 `tools/slide_captcha_solver.py` 只由 GUI 线程与 `run_ad_with_captcha.py` 触发，纯 pipeline / CLI 运行不在链路上。
-- **约束：**V1 必须实现 CaptchaGuard（3.8）；验证码识别失败不得被当作「没有验证码」。
-
-### F-004：旧工程版本状态缺失（工程风险）
-
-- **来源：**旧工程只读审计。
-- **现象：**`G:\project_X` 有 139 项未提交改动，全部 QQ 阅读工作都在模板仓库的历史之上，`origin` 仍指向 `MaaXYZ/MaaPracticeBoilerplate`。
-- **影响：**没有可回退的可用版本；无法判断某次改动到底恢复了什么。
-- **约束：**新仓库从第一天起按阶段提交；旧仓库保持只读，不清理、不硬重置。
-
-### 失败记录模板
-
-以后出现值得保留的失败时按以下字段新增：
-
-| 字段 | 应记录内容 |
-| --- | --- |
-| 日期与环境 | 日期、相关版本、平台及适用前提 |
-| 当时目标 | 试图解决的问题 |
-| 尝试方案 | 实际做过什么 |
-| 失败证据 | 报错、复现步骤、测试结果或相关提交 |
-| 原因状态 | 已证实的原因，或明确标注的假设 |
-| 后续处理 | 恢复、替代方案及其验证结果 |
-| 避免重复的边界 | 哪种条件下不再尝试，什么新证据可支持重试 |
-
-同一故障连续两次修改无效时，暂停无依据的补丁叠加，整理证据、缩小复现范围并更新假设。
-
-## 7. 禁止事项与操作边界
-
-- 不编造用户需求、历史故障、测试结果或已完成状态。
-- 不把「建议架构」写成已经实现或用户已经确认的事实。
-- 不执行下载、安装、充值、购买、邀请、分享、提交个人信息、第三方授权登录。
-- 不把「点击过」「等待固定时间」「没有报错」「已返回奖励页」直接当成任务成功；结束结论必须符合该任务的 `success_condition`。
-- 不在页面状态为 `UNKNOWN` 或已检测到验证码时继续盲目点击。
-- 不把验证码识别失败当作「没有验证码」继续执行。
-- 不用自动重启 App 或返回键规避验证码。
-- 不通过按名称批量结束进程来停止单次运行。
-- 不覆盖用户已有改动；不以硬重置、强制清理或整仓覆盖代替修复。
-- 不为让检查通过而删除需求、禁用关键校验或伪造数据。
-- 不写入真实密钥，不默认上传用户数据、项目文件或日志到外部服务。
-- 不未经授权执行真实支付、外部发消息、生产部署、数据销毁或强制推送。
-- 不为绕过一次失败而关闭全部权限保护、修改全局环境或大范围更换工具。
-- 不因本文件提及测试或架构就自动开展全面审计、重复备份或全量测试。
-
-## 8. 文档维护与交接
-
-业务目标、实际架构、运行命令或已证实的失败经验发生变化时更新相应章节；删除过时结论或标注适用版本，不无限叠加冲突规则。
-
-保持本文件作为入口；只有某一主题确实变长时才拆到专项文档并在此链接。
-
-### 待确认（用户尚未回答，以下为默认假设，**不是已确认事实**）
-
-| 编号 | 待确认项 | 我的默认假设 |
-| --- | --- | --- |
-| Q40-43 | 界面形态与日常使用 | 沿用桌面 GUI（Python），但拆分为模块；首屏显示当前任务/进度/上次结果/一键启动；提供暂停、跳过当前、强制停止、人工过验证码入口；定时启动后置 |
-| Q44 | 技术栈 | 继续 Python + MaaFramework 官方 Python 绑定 |
-| Q45 | 交付形式 | 先 BAT/脚本可运行，后续 PyInstaller 打包 EXE |
-| Q46 | 配置存储 | YAML/JSON 配置 + SQLite 运行记录；导入导出后置 |
-| Q47 | 换机迁移 | 只要求改路径即可跑，不建迁移框架 |
-| Q48 | 必须沿用/禁止使用 | 待用户说明；已知沿用 ddddocr 1.5.6（1.6.0 Windows wheel 有模块冲突） |
-| Q15-20 | QQ 阅读版本号、账号数量、每日重置时间、每日任务实际顺序 | 待用户提供；旧文档顺序为自动阅读→听书→游戏→奖励页广告→等级页广告→外部应用 |
-| Q21-25 | 模拟器实例数、ADB 端口是否固定、是否支持真机、是否多实例 | 单实例 MuMu 12、固定 720×1280、暂不支持真机 |
-| Q31-34 | 验证码成功率、限速与风控经历 | 待用户提供；默认加入随机延迟与每日上限 |
-| Q37-39 | 超时策略、运行记录保留、通知渠道 | 每任务独立超时 + 整条总超时；日志+关键节点截图+结果摘要保留 30 天；通知后置（飞书通道可用） |
-| Q49-51 | 旧仓库读写权限、提交与远端、三个验收场景 | 旧仓库只读；每阶段一次 commit、不推送、新仓库暂不建远端；验收场景见 5.2 |
-
-### 当前下一步
-
-1. QQR-1 静态审计已完成（结论见 §3.10，完整报告 `docs/audits/QQR-1-old-project-audit.md`）；剩余实机确认：在当前设备重新截图/标定验证码模板与滑块特征（并入 QQR-6 / QQR-14 / QQR-15 的截图与阈值校准）。
-2. QQR-3 的页面状态机 / 任务契约 / 调度核心、QQR-5 的「识别失败先确认与恢复」已在本仓库落地并有单元测试覆盖（含验收场景 B）；下一步接入 MaaFramework 的真实 `PageObserver` / `DeviceController` / `TaskAdapter`。
-3. 在模拟器上按 5.2 的场景 A/B/C/D 跑通广告与游戏任务；在此之前先完成 QQR-6 / QQR-14 / QQR-15 的真实截图与阈值校准。
+# AGENTS.md
+
+QQReader：Windows 本地运行的 QQ 阅读每日任务自动化（MaaFramework + MuMu 模拟器 + ADB）。
+需求、架构、验收标准和排障记录在 [`docs/PROJECT_PLAN.md`](docs/PROJECT_PLAN.md)；最近改动在 [`CHANGELOG.md`](CHANGELOG.md)。
+**开工前先读 CHANGELOG 最上方 3 条。**
+
+## Project overview
+
+- 唯一维护目录：`G:\project_X`。`Documents\Codex` 下的旧脚本已归档到 `docs/legacy/`，不要运行旧入口。
+- 旧工程 `_backup_old_project_20260909_200716/` 只作参考，不在其中修改；但它**仍是运行依赖**：听书任务 `DailyAudiobookFlow` 目前通过其中的 `tools\run_maa_ad.py` 调用旧流程（2026-09-27 试跑日志确认），不要移动、重命名或删除它。
+- 代码入口：
+  - `qqreader/`：核心包（页面状态机、任务契约、恢复、验证码守卫）
+  - `qqreader/maa/`：MaaFramework 适配
+  - `qqreader/tasks/ad.py`：广告任务
+  - `qqreader/gui/`：GUI
+  - `scripts/run_task.py`：命令行单任务入口，含 pipeline 运行时覆盖
+  - `tests/`：单元测试
+- 本机数据：配置在 `configs/qqreader.local.json`；任务次序和次数在 `runtime/gui_tasks.json`；日志和截图在 `runtime/`。
+- Linear 项目 MAAQQReader，Issue 编号 `QQR-xx`。
+
+## Dev environment
+
+- Python 3.10：用 `py -3.10`。不要改全局环境，不要随意加依赖；需要新依赖时先问用户。
+- 模拟器：MuMu 12 实例 0，ADB `127.0.0.1:16384`，分辨率 720×1280，包名 `com.qq.reader`。端口以本机配置和运行时为准，不写死。
+- 根目录只保留两个启动脚本，不要新增 bat/cmd：
+  - `启动QQReaderGUI.cmd`：日常使用
+  - `调试QQReader.cmd`：冷启动、体检、识别检查、单任务、测试、冷停止
+- `调试QQReader.cmd` 必须保持 **GBK** 编码，调用外部程序后要重新执行 `chcp 936`。其余源码和配置一律 UTF-8。
+- 启动 GUI 必须用 `启动QQReaderGUI.cmd`（它会定位 Python、查询 MuMu 的 ADB 端口、写入本机配置、设置 PYTHONPATH）。直接双击 `dist\QQReaderGUI.exe` 不会加载本机配置，运行时会提示“请先加载本机配置文件”。
+- 打包 GUI：`scripts\build-gui-exe.cmd`，产物为 `dist/QQReaderGUI.exe`。GUI 会加载当前源码，改了源码不一定要重新打包；改了 GUI 本身才需要重建。
+
+## Testing instructions
+
+- 全部测试：`py -3.10 -m pytest`。改动哪块就先跑对应测试文件，提交前再跑全量。
+- 冒烟试跑（实机，约 7 分钟）：GUI 侧栏「选择1分钟试跑」（每日自动阅读 → 每日游戏 → 每日听书，各 1 分钟）→「直接运行已选」。三项都应显示“成功”，汇总记录在 `runtime/records/daily_flows/`。改动任务流程后、推送前跑一次。
+- 只改文档（`*.md`）时可以不跑测试，但要在交付里说明“未跑测试，原因：仅文档”。
+- 缺陷修复要补回归测试。识别相关的测试用真实截图和真实 OCR，不要只在伪造模板或假对象上通过。
+- 实机验证用 GUI：点「全不选」，只勾选要验证的任务，再点「直接运行已选」或「单独运行此任务」。已经验证成功的任务不要重复跑。
+- 如实报告结果：中断、超时、被验证码阻塞都要写出来。实机没有触发到的分支，标成"只由单元测试覆盖"。
+- 不要为了让测试通过而删除断言、跳过测试或伪造数据。
+
+## Domain rules (do not break)
+
+- 识别不到目标 ≠ 任务失败：先重新截图，确认页面、弹窗和验证码，再按恢复阶梯处理；不要连续几次 `Match False` 就退出。
+- 页面状态是 `UNKNOWN` 时，不点击，也不判失败。
+- 关键点击必须按"识别 → 点击 → 验证页面变化"来做，不能点完就默认成功。
+- 检测到验证码时，不走普通恢复：不返回、不重启 App、不继续点击。状态记为 `BLOCKED_BY_CAPTCHA` / `WAITING_FOR_HUMAN`；求解后必须确认验证码已经消失。求解器改动归 QQR-34。
+- 任务从公共起点自己进入入口，例如广告任务从主页进入奖励页。
+- 成功只认该任务的 `success_condition`。例如广告必须看到广告卡 `12/12` 或该卡的"明日再来"；"已返回奖励页""没报错"都不算。
+- 不要为修复单个任务而改 Gameflow 调度核心或备份目录。
+
+## CHANGELOG
+
+每次改动（代码、pipeline 覆盖、启动脚本、GUI 行为、配置默认值、Git 规则）都要在 `CHANGELOG.md` **最上方**加一条，按文件开头的模板写：
+
+触发来源 → 现象 → 根因 → 修改（写到文件、函数或节点名）→ 验证（测试数、实机运行 ID）→ 未覆盖 / 遗留 → 分支 → 回滚方式。
+
+CHANGELOG 条目和对应代码放在同一个提交里。
+
+## Git & GitHub
+
+- 远端：**`github`** → `https://github.com/sdxdsadx/MaaQQReader.git`（没有 `origin`）。主分支是 `master`。
+- 不要直接在 `master` 上提交。每个任务或 Issue 开一个分支，命名为 `<agent>/<主题>-<YYYYMMDD>`，例如 `codex/qqr-33-ad-fix-20260927`。分支的上游必须是**同名**远端分支，不能是 `github/master`。
+- 开工前先看 `git status --short`。如果有不属于本任务的改动，不要提交、不要 stash、不要还原，先告诉用户。
+- 暂存时逐个 `git add <文件>`，然后用 `git diff --cached --stat` 检查。禁止 `git add -A` 或 `git add .`。
+- 提交信息格式：`<type>(QQR-xx): <中文摘要>`。type 取 `feat` `fix` `test` `docs` `refactor` `build` `chore` 之一。正文写原因和验证结果。一个提交只做一件事。
+- 测试通过后，可以在任务分支上直接做本地提交。
+- 以下操作都要先得到用户在对话里的明确同意：推送（`git push -u github <分支>`）、合并到 `master`（`--no-ff`，合并后重跑测试）、推送 `master`、打标签或发 Release。
+- 推送前的自查：
+  - 查看将上传的提交：`git log --oneline github/master..HEAD`
+  - diff 中没有 token、password、cookie、api key
+  - 没有超过 5 MB 的文件
+  - 测试已通过，CHANGELOG 已更新
+- 回滚用 `git revert <hash>`；合并提交用 `git revert -m 1 <hash>`。定位提交：`git log --oneline -S "<CHANGELOG 条目标题>" -- CHANGELOG.md`。
+- 高风险操作前先建保护点：`git branch backup/<YYYYMMDD>-<原因>`。实机验收通过的版本打标签：`git tag -a verified/<YYYYMMDD>-<任务>`。
+- 用 Git 做备份，不再创建 `*.bak` 文件，也不再复制整个项目目录。
+- 禁止以下操作：`push --force`；改写已推送的历史；`--no-verify`；未经用户同意执行 `reset --hard`、`clean`、`stash drop`，或删除分支和标签；修改全局 git config 或凭据。
+- 遇到合并冲突或推送失败时停下，把情况报告给用户，不要自行绕过。
+
+## Security & data
+
+- 以下内容不进仓库，也不上传 GitHub：
+  - `runtime/`（截图可能包含账号信息）
+  - `configs/*.local.json`
+  - `build/`、`dist/`、`*.exe`
+  - `_backup_*/`、`*.bak*`（注意：因此从 GitHub 克隆的仓库缺少听书任务依赖的旧流程脚本，换机时需要单独拷贝该目录）
+  - `.hermes/`、`.serena/`
+  - 任何密钥、token、cookie
+  - 如果发现这些内容已经被跟踪或已经推送，停下报告，不要自己改写历史。
+- 示例配置里只放占位值。不在源码中写死盘符、用户名或绝对路径。
+- 禁止在 App 里执行以下操作：充值、购买、邀请、分享、提交个人信息、第三方授权登录。
+- 停止单次运行时，不要按进程名批量结束进程。
+
+## Done checklist
+
+交付时逐项报告：
+
+1. 改了哪些文件
+2. 测试结果（测试数、失败项）
+3. 实机结果或"未实机验证"
+4. CHANGELOG 条目标题
+5. 分支名和提交 hash
+6. 是否已推送、是否已合并
+7. 遗留问题
+
+没有执行过的命令，不能写成"已验证"。
