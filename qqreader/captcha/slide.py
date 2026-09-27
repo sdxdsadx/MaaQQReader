@@ -344,7 +344,22 @@ def _find_gap_x(
             min_distance=fallback_min_distance,
             max_distance_ratio=fallback_max_distance_ratio,
         )
-    return int(x1 + search_start + idx)
+    left_edge = search_start + idx
+    # Canny 的最强列常是缺口左边缘。2026-09-25 截图中它落在 x=492，
+    # 缺口右侧有多条边缘，中心约 x=532；直接滑到左边缘会短约四十像素。
+    # 只在滑块宽度允许的距离内找到足够强的右边缘时取两边中点。
+    min_width = max(20, int(slider[2] * 0.45))
+    max_width = min(int(slider[2] * 0.9), len(col_density) - left_edge - 1)
+    if min_width <= max_width:
+        right_slice = col_density[left_edge + min_width:left_edge + max_width + 1]
+        if right_slice.size:
+            strong = np.flatnonzero(right_slice >= max(
+                float(right_slice.max()) * 0.75, float(smoothed[idx]) * 0.6
+            ))
+            if strong.size:
+                right_idx = int(np.median(strong)) + left_edge + min_width
+                return int(x1 + (left_edge + right_idx) // 2)
+    return int(x1 + left_edge)
 
 
 def _gap_fallback_x(
@@ -430,7 +445,8 @@ class SlideCaptchaSolver:
         swipe_duration_ms: int = 600,
         puzzle_scale: float = 2.14,
         head_bias: int = 29,
-        max_rounds: int = 6,
+        max_rounds: int = 16,
+        refresh_point: Tuple[int, int] = (125, 897),
         settle_seconds: float = 0.8,
         clock: Optional["Clock"] = None,
     ) -> None:
@@ -447,6 +463,7 @@ class SlideCaptchaSolver:
         if max_rounds < 1:
             raise ValueError("max_rounds 必须 >= 1")
         self._max_rounds = max_rounds
+        self._refresh_point = refresh_point
         self._settle_seconds = settle_seconds  # 截图前及滑动后等待页面稳定
         self._clock: "Clock" = clock if clock is not None else RealClock()
 
@@ -581,7 +598,7 @@ class SlideCaptchaSolver:
 
         1. 等待页面稳定后取新鲜截图 → ``detect_slide``；检测不到时再等待
            ``settle_seconds / 2`` 后重拍并复检一次（可能是弹窗过渡态），
-           仍检测不到才放弃（绝不盲滑）；
+           仍检测不到则记为本轮失败，下一轮重新取图（绝不盲滑）；
         2. 用新鲜帧的 raw 距离发 sendevent 拟人轨迹（ease-out 变速 + y 抖动 +
            过冲回调；单段 swipe 的匀速直线会被行为指纹识别拒绝→回弹）；
         3. 等待 ``settle_seconds`` 让校验动画走完，再取新鲜帧判定；
@@ -593,84 +610,91 @@ class SlideCaptchaSolver:
            已消失，直接返回 solved=True。
 
         注意：OCR 判「仍在」时进入下一轮重检测再滑（受 ``max_rounds`` 限制），
-        轮次耗尽后返回 ``solved=False`` → guard 进入人工等待。
+        连续 4 轮失败时仅在复查仍有验证码后点左下角刷新，再用新帧重检测；
+        总计最多 16 轮，耗尽后返回 ``solved=False`` → guard 进入人工等待。
         """
         details = []
+        failed_in_row = 0
+        swipe_count = 0
         for round_no in range(1, self._max_rounds + 1):
             self._clock.sleep(self._settle_seconds, context.token)
             data = self._capture(context)
-            if not data:
-                return SolveResult(False, "无法获取验证码截图", data={"rounds": details})
-            detection = detect_slide(data)
-            if not detection.found:
+            detection = detect_slide(data) if data else None
+            if detection is not None and not detection.found:
                 first_error = detection.error or "未检测到可滑动的验证码"
                 self._clock.sleep(self._settle_seconds / 2, context.token)
                 retry_data = self._capture(context)
-                if not retry_data:
-                    return SolveResult(
-                        False,
-                        f"首次检测失败: {first_error}; 复检失败: 无法获取验证码截图",
-                        data={"track": detection.track, "slider": detection.slider,
-                              "rounds": details},
+                retry_detection = detect_slide(retry_data) if retry_data else None
+                if retry_detection is not None and retry_detection.found:
+                    details.append(
+                        f"第 {round_no} 轮首次检测失败（{first_error}），重拍后检测成功"
                     )
-                retry_detection = detect_slide(retry_data)
-                if not retry_detection.found:
-                    retry_error = retry_detection.error or "未检测到可滑动的验证码"
+                    detection = retry_detection
+                else:
+                    retry_error = (
+                        retry_detection.error if retry_detection is not None
+                        else "无法获取验证码截图"
+                    )
+                    details.append(
+                        f"第 {round_no} 轮检测失败：{first_error}；复检失败：{retry_error}"
+                    )
+            elif detection is None:
+                details.append(f"第 {round_no} 轮无法获取验证码截图")
+
+            if detection is not None and detection.found:
+                sx, sy = detection.slider_center
+                gap_x = sx + detection.distance
+                # 每轮用新帧的距离，失败后不得沿旧坐标盲滑。
+                self._humanize_swipe(
+                    sx, sy, sx + detection.distance, sy, detection.distance
+                )
+                swipe_count += 1
+                self._clock.sleep(self._settle_seconds, context.token)
+                details.append(
+                    f"第 {round_no} 轮已滑动 {detection.distance}px"
+                    f"（起点({sx},{sy})→缺口x={gap_x}）"
+                )
+                verify_texts = self._observe_texts(context)
+                still_on = any(
+                    key in text for text in verify_texts
+                    for key in self.CAPTCHA_TEXT_KEYS
+                )
+                if not still_on:
+                    note = (
+                        "OCR 复查确认验证码文案已消失" if verify_texts
+                        else "OCR 无文本（OCR 不可用），交由 guard 复核"
+                    )
+                    details.append(note)
                     return SolveResult(
-                        False,
-                        f"首次检测失败: {first_error}; 复检失败: {retry_error}",
+                        True,
+                        "; ".join(details),
                         data={
-                            "track": retry_detection.track,
-                            "slider": retry_detection.slider,
+                            "slider_center": detection.slider_center,
+                            "gap_x": gap_x,
+                            "distance": detection.distance,
                             "rounds": details,
                         },
                     )
-                details.append(
-                    f"第 {round_no} 轮首次检测失败（{first_error}），重拍后检测成功"
-                )
-                detection = retry_detection
-
-            sx, sy = detection.slider_center
-            gap_x = detection.slider_center[0] + detection.distance
-
-            # issue #16 终修（活体实验定案 2026-09-11）+ 迭代循环（2026-09-12）：
-            #   1. 拼图头与按钮 1:1 同步移动（sendevent 连拍实证）
-            #   2. 单段 swipe 的匀速直线轨迹被行为指纹识别 → 校验拒绝 → 回弹
-            #   3. sendevent 注入「ease-out 变速 + y 抖动 + 过冲回调」原始
-            #      触摸事件流一次通过（live_sendevent.py 实证 ✅）
-            #   4. 被拒后拼图重新随机化 → 必须每轮在新鲜帧上重检测再滑
-            self._humanize_swipe(
-                sx, sy, sx + detection.distance, sy, detection.distance
-            )
-            self._clock.sleep(self._settle_seconds, context.token)
-            details.append(
-                f"第 {round_no} 轮已滑动 {detection.distance}px"
-                f"（起点({sx},{sy})→缺口x={gap_x}）"
-            )
-
-            # 复查: 重新观测, 看 OCR 文案里验证码是否仍在。
-            verify_texts = self._observe_texts(context)
-            still_on = any(key in text for text in verify_texts for key in self.CAPTCHA_TEXT_KEYS)
-            if still_on:
                 details.append("OCR 复查验证码文案仍在 → 重新检测缺口再滑")
-                continue
-            # OCR 复查不到验证码文案。帧上完全无文本时（合成图/OCR 不可用）
-            # 无法自行确认，按契约返回提交成功、由 guard 重新观测复核；
-            # 有文本但无验证码文案 = 确认消失。
-            note = "OCR 复查确认验证码文案已消失" if verify_texts else "OCR 无文本（OCR 不可用），交由 guard 复核"
-            details.append(note)
-            return SolveResult(
-                True,
-                "; ".join(details),
-                data={
-                    "slider_center": detection.slider_center,
-                    "gap_x": gap_x,
-                    "distance": detection.distance,
-                    "rounds": details,
-                },
-            )
+
+            failed_in_row += 1
+            if failed_in_row == 4 and round_no < self._max_rounds:
+                # 刷新前确认遮罩仍在，不能在已通过的奖励页点击固定坐标。
+                texts = self._observe_texts(context)
+                if not any(
+                    key in text for text in texts
+                    for key in self.CAPTCHA_TEXT_KEYS
+                ):
+                    details.append("刷新前无法确认验证码仍在，停止自动点击等待人工")
+                    return SolveResult(False, "; ".join(details), data={"rounds": details})
+                self._device.tap_point(*self._refresh_point)
+                details.append(
+                    f"连续 4 轮失败，点击左下角刷新 {self._refresh_point} 后重试"
+                )
+                self._clock.sleep(self._settle_seconds, context.token)
+                failed_in_row = 0
         return SolveResult(
             False,
-            f"滑动 {self._max_rounds} 轮后验证码仍然存在",
-            data={"rounds": details},
+            f"滑动验证 {self._max_rounds} 轮后验证码仍然存在（实际滑动 {swipe_count} 次）",
+            data={"rounds": details, "swipes": swipe_count},
         )
