@@ -46,8 +46,9 @@ UPGRADE_DIALOG_MARKERS = ("已下载新版本", "是否安装", "安装新版本
 #: 广告挽留弹窗（2026-09-27 实测文案：「观看视频30秒，才能获得奖励」「继续观看」「放弃奖励」）。
 RETENTION_MARKERS = ("放弃奖励", "坚持退出")
 BOTTOM_NAV_MIN_Y = 1150
-#: 书架 tab 在 720×1280 下的中心（2026-09-27 书架页 OCR「书架」box=(70,1250,38,26)）。
-SHELF_TAB_FALLBACK = (89, 1262)
+#: 同一页面类型上的定向动作（点取消 / 放弃奖励 / 书架 tab / 跳过）连续无效的上限；
+#: 超过后改走返回 / 重启，避免在同一处反复点击。
+MAX_SAME_TARGETED_ACTIONS = 2
 
 
 class HandoffVerdict(str, Enum):
@@ -137,7 +138,9 @@ def classify_frame(boxes: Sequence[OcrBox]) -> FrameKind:
         return FrameKind.AD_RETENTION
     if is_shelf_text(text) and has_shelf_label(boxes):
         return FrameKind.SHELF
-    if bookstore_hits(text) >= 2:
+    # 只有底部导航里真的看得到「书架」tab 才算可切换的书城主页；排行榜等二级页
+    # 也有「男生 / 女生」，但没有底部 tab，按其他页面返回（2026-09-27 实机 S4a）。
+    if bookstore_hits(text) >= 2 and _shelf_tab(boxes) is not None:
         return FrameKind.BOOKSTORE
     if _find_containing(boxes, ("跳过",)) is not None:
         return FrameKind.SPLASH
@@ -149,11 +152,30 @@ def _center(box: Box) -> Tuple[int, int]:
     return x + width // 2, y + height // 2
 
 
-def _shelf_tab(boxes: Sequence[OcrBox]) -> Tuple[int, int]:
+def _shelf_tab(boxes: Sequence[OcrBox]) -> Optional[Tuple[int, int]]:
+    """底部导航里 OCR 实际看到的「书架」tab；看不到就不点（不用固定坐标兜底）。"""
     for text, box in boxes:
         if text.strip() == "书架" and box[1] >= BOTTOM_NAV_MIN_Y:
             return _center(box)
-    return SHELF_TAB_FALLBACK
+    return None
+
+
+def _targeted_action(kind: FrameKind, boxes: Sequence[OcrBox]) -> Optional[Tuple[str, Tuple[int, int]]]:
+    """按页面类型给出要点的 OCR 框中心；只点 OCR 实际看到的文字，不用固定坐标。"""
+    if kind in (FrameKind.EXIT_DIALOG, FrameKind.UPGRADE_DIALOG):
+        item = _find_exact(boxes, ("取消",))
+    elif kind is FrameKind.AD_RETENTION:
+        item = _find_exact(boxes, RETENTION_MARKERS)
+    elif kind is FrameKind.BOOKSTORE:
+        point = _shelf_tab(boxes)
+        return ("书架tab", point) if point is not None else None
+    elif kind is FrameKind.SPLASH:
+        item = _find_containing(boxes, ("跳过",))
+    else:
+        return None
+    if item is None:
+        return None
+    return item[0].strip(), _center(item[1])
 
 
 class _Screen:
@@ -187,6 +209,8 @@ def check_handoff(
     restarted = False
     boxes: List[OcrBox] = []
     kind = FrameKind.NO_TEXT
+    last_targeted: Optional[FrameKind] = None
+    same_kind_repeats = 0
 
     def finish(verdict: HandoffVerdict, reason: str) -> HandoffResult:
         evidence = _save_evidence(screen.last_shot, evidence_dir, verdict)
@@ -211,26 +235,18 @@ def check_handoff(
             return finish(HandoffVerdict.CAPTCHA, "交接检查发现验证码，停止后续任务，等待人工")
         if kind is FrameKind.SHELF:
             return finish(HandoffVerdict.READY, "已确认在书架")
-        if kind in (FrameKind.EXIT_DIALOG, FrameKind.UPGRADE_DIALOG):
-            _text, box = _find_exact(boxes, ("取消",))  # type: ignore[misc]
-            client.click(*_center(box))
-            act(f"TAP 取消{_center(box)}")
-            continue
-        if kind is FrameKind.AD_RETENTION:
-            _text, box = _find_exact(boxes, RETENTION_MARKERS)  # type: ignore[misc]
-            client.click(*_center(box))
-            act(f"TAP {_text.strip()}{_center(box)}")
-            continue
-        if kind is FrameKind.BOOKSTORE:
-            point = _shelf_tab(boxes)
-            client.click(*point)
-            act(f"TAP 书架tab{point}")
-            continue
-        if kind is FrameKind.SPLASH:
-            _text, box = _find_containing(boxes, ("跳过",))  # type: ignore[misc]
-            client.click(*_center(box))
-            act(f"TAP 跳过{_center(box)}")
-            continue
+        target = _targeted_action(kind, boxes)
+        if target is not None:
+            same_kind_repeats = same_kind_repeats + 1 if kind is last_targeted else 1
+            last_targeted = kind
+            if same_kind_repeats <= MAX_SAME_TARGETED_ACTIONS:
+                label, point = target
+                client.click(*point)
+                act(f"TAP {label}{point}")
+                continue
+            # 同一处连续点了仍在原页面：不再重复点击，改走返回 / 重启。
+        else:
+            last_targeted = None
         # 广告页、正文页（禁止截图时 OCR 为空）、奖励页等：逐次返回并重新确认。
         if backs < max_backs:
             backs += 1
@@ -240,6 +256,7 @@ def check_handoff(
         if allow_restart and not restarted:
             restarted = True
             backs = 0
+            last_targeted = None
             client.stop_app(package)
             client.start_app(package)
             act("RESTART_APP", restart_wait_seconds)

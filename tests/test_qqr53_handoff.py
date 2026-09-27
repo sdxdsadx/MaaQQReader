@@ -130,7 +130,8 @@ def test_real_frames_are_classified(name: str, expected: FrameKind) -> None:
 
 def test_bookstore_ranking_page_is_not_shelf() -> None:
     """书城排行榜页不能被确认成书架（QQR-55 同一现场）。"""
-    assert classify_frame(bookstore_without_dialog()) is FrameKind.BOOKSTORE
+    assert classify_frame(bookstore_without_dialog()) is not FrameKind.SHELF
+    assert classify_frame(frame("bookstore_main")) is FrameKind.BOOKSTORE
 
 
 def test_reward_page_is_not_shelf_even_with_reread_text() -> None:
@@ -167,12 +168,31 @@ def test_captcha_after_back_stops_immediately() -> None:
 
 
 def test_upgrade_dialog_then_bookstore_goes_to_shelf_tab() -> None:
-    client = FakeClient([frame("bookstore_upgrade_dialog"), bookstore_without_dialog(), frame("shelf")])
+    client = FakeClient([frame("bookstore_upgrade_dialog"), frame("bookstore_main"), frame("shelf")])
     result = run_check(client)
     assert result.verdict is HandoffVerdict.READY
-    # 先点「取消」(510,1226,56,32)，绝不点「安装」；再点底部书架 tab。
-    assert client.clicks[0] == (538, 1242)
-    assert len(client.clicks) == 2
+    # 先点「取消」(510,1226,56,32)，绝不点「安装」；再点 OCR 看到的底部书架 tab (70,1250,38,26)。
+    assert client.clicks == [(538, 1242), (89, 1263)]
+
+
+def test_rank_subpage_without_bottom_tab_is_never_blind_tapped() -> None:
+    """2026-09-27 实机 S4a：排行榜二级页没有底部 tab，旧实现按固定坐标连点 16 次。"""
+    assert classify_frame(frame("rank_subpage")) is FrameKind.OTHER
+    client = FakeClient([frame("rank_subpage"), frame("bookstore_main"), frame("shelf")])
+    result = run_check(client)
+    assert result.verdict is HandoffVerdict.READY
+    assert client.keys == [4]  # 二级页按返回
+    assert client.clicks == [(89, 1263)]  # 只点 OCR 看到的书架 tab
+
+
+def test_same_targeted_tap_is_not_repeated_forever() -> None:
+    """点了书架 tab 仍停在书城：最多点 2 次，之后改走返回 / 重启，不无限重复。"""
+    client = FakeClient([frame("bookstore_main")])
+    result = run_check(client, max_backs=1)
+    assert result.verdict is HandoffVerdict.UNSAFE
+    assert client.clicks.count((89, 1263)) == 4  # 重启前 2 次 + 重启后 2 次
+    assert client.keys == [4, 4]
+    assert client.stopped == ["com.qq.reader"]
 
 
 def test_unrecoverable_page_backs_restarts_once_then_unsafe() -> None:

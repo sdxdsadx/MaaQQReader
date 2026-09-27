@@ -109,7 +109,7 @@ def test_bookstore_goes_to_shelf_tab_then_confirms_target(device) -> None:
     install([BOOKSTORE, BOOKSTORE, SHELF, SHELF])
     why = arm.confirm_allowed_book_on_shelf()
     assert "宇智波：从扉间人柱力开始" in why
-    assert taps == [(89, 1242)]  # 只点了书架 tab，没有点任何书
+    assert taps == [(89, 1263)]  # 只点了书架 tab，没有点任何书
     assert backs == []
 
 
@@ -130,6 +130,49 @@ def test_unconfirmable_shelf_is_not_reported_as_whitelist_rejection(device, tmp_
         arm.confirm_allowed_book_on_shelf(attempts=2)
     assert not isinstance(excinfo.value, arm.BookNotAllowed)
     assert "最后页面：书城" in str(excinfo.value)
-    assert all(tap == (89, 1242) for tap in taps)  # 从不点书
+    assert all(tap == (89, 1263) for tap in taps)  # 从不点书
     assert any("页面类型=书城" in line and "排行榜" in line for line in logs)
     assert list((tmp_path / "auto_read").glob("*_书城.png"))
+
+
+def test_rank_subpage_without_bottom_tab_is_not_blind_tapped(device) -> None:
+    """2026-09-27 实机：排行榜二级页没有底部导航，不能按固定坐标点「书架」。"""
+    handoff_frames = json.loads(
+        (Path(__file__).parent / "fixtures" / "handoff_ocr_frames.json").read_text(encoding="utf-8")
+    )
+    rank = [(text, tuple(box)) for text, box in handoff_frames["rank_subpage"]["boxes"]]
+    install, taps, _backs, logs = device
+    install([rank])
+    assert arm.go_to_shelf_tab() is False
+    assert taps == []
+    assert any("未看到底部「书架」tab" in line for line in logs)
+
+
+def _handoff_frame(name: str) -> List[Tuple[str, Box]]:
+    data = json.loads(
+        (Path(__file__).parent / "fixtures" / "handoff_ocr_frames.json").read_text(encoding="utf-8")
+    )
+    return [(text, tuple(box)) for text, box in data[name]["boxes"]]
+
+
+def test_bookstore_banner_is_not_an_activity_dialog(monkeypatch) -> None:
+    """2026-09-27 实机：书城横幅「勋章/装扮限时返场」「免费读一年」不是弹窗，不能盲点。"""
+    taps: List[Tuple[int, int]] = []
+    monkeypatch.setattr(arm, "tap", lambda x, y: taps.append((x, y)))
+    monkeypatch.setattr(arm, "log", lambda message: None)
+    monkeypatch.setattr(arm.time, "sleep", lambda seconds: None)
+    assert any("限时返场" in text for text, _ in BOOKSTORE)
+    monkeypatch.setattr(arm, "_client", _Client([BOOKSTORE]))
+    assert arm.dismiss_blocking_dialogs() == 0
+    assert taps == []
+
+
+def test_upgrade_dialog_over_bookstore_taps_cancel_first(monkeypatch) -> None:
+    taps: List[Tuple[int, int]] = []
+    monkeypatch.setattr(arm, "tap", lambda x, y: taps.append((x, y)))
+    monkeypatch.setattr(arm, "log", lambda message: None)
+    monkeypatch.setattr(arm.time, "sleep", lambda seconds: None)
+    dialog = _handoff_frame("bookstore_upgrade_dialog") + [("X", (650, 60, 30, 30))]
+    monkeypatch.setattr(arm, "_client", _Client([dialog, BOOKSTORE]))
+    assert arm.dismiss_blocking_dialogs() == 1
+    assert taps == [(538, 1242)]  # 「取消」(510,1226,56,32)，不是页面上的 X

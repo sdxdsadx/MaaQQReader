@@ -103,6 +103,8 @@ NON_SHELF_MARKERS = (
 BOOKSTORE_MARKERS = ("男生", "女生", "排行榜", "本周强推", "今日必读", "高分必读")
 # 回书架时确认不了页面的受控重试次数（每次都重新截图确认）。
 SHELF_CONFIRM_ATTEMPTS = 3
+# 底部导航栏的最小 y（720×1280；书架 tab OCR box=(70,1250,38,26)）。
+BOTTOM_NAV_MIN_Y = 1150
 
 # 进正文后盲点「自动阅读」三连（老版本 _run_direct_reading 原值，best-effort）
 AUTO_READ_TAPS = ((360, 640), (450, 1214), (360, 1125))
@@ -119,8 +121,9 @@ EXIT_DIALOG_MARKERS = ("退出QQ阅读", "退出 QQ 阅读", "退出软件", "�
 EXIT_DIALOG_CANCELS = {"取消", "暂不退出", "继续使用"}
 # 3) 活动弹窗（中秋等运营活动），点右上角 X 关闭
 ACTIVITY_DIALOG_MARKERS = ("限时返场", "免费读一年", "活动书单", "找兔子")
-# 关闭类按钮文本统一集合（点这些不会改变被测环境）
-DISMISS_TEXTS = {"取消", "×", "X", "x", "关闭", "暂不", "以后再说", "跳过"}
+# 关闭类按钮文本（点这些不会改变被测环境），按优先级排列：弹窗自带的「取消 / 暂不」优先于页面上可能存在的「X」。
+# 以前是 set，tuple(set) 的顺序随进程哈希随机，升级弹窗叠在书城页上时可能先点到 X。
+DISMISS_TEXTS = ("取消", "暂不", "以后再说", "关闭", "×", "X", "x", "跳过")
 
 _client = None
 _adb_path = ""
@@ -268,18 +271,24 @@ def dismiss_blocking_dialogs() -> int:
             return closed
         all_text = " ".join(t for t, _ in boxes)
 
+        # 书城页的横幅本身就写着「勋章/装扮限时返场」「免费读一年」，不是弹窗。
+        # 2026-09-27 实机：把它当活动弹窗后，在书城页盲点 (307,764) / 点任意「X」。
+        activity = (
+            any(m in all_text for m in ACTIVITY_DIALOG_MARKERS)
+            and classify_page(boxes) != "书城"
+        )
         is_dialog = (
             any(m in all_text for m in UPGRADE_DIALOG_MARKERS)
             or any(m in all_text for m in EXIT_DIALOG_MARKERS)
-            or any(m in all_text for m in ACTIVITY_DIALOG_MARKERS)
+            or activity
         )
         if not is_dialog:
             return closed
 
-        hit = find_any(boxes, tuple(DISMISS_TEXTS))
+        hit = find_any(boxes, DISMISS_TEXTS)
         if hit is None:
             # 活动弹窗有时只有图形 X，没有文本：退到右上角固定点
-            if any(m in all_text for m in ACTIVITY_DIALOG_MARKERS):
+            if activity:
                 tap(307, 764)
                 log("活动弹窗未见关闭文本，已点右上角关闭位")
                 closed += 1
@@ -366,9 +375,23 @@ def classify_page(boxes: list[tuple[str, tuple[int, int, int, int]]]) -> str:
     return "其他"
 
 
-def go_to_shelf_tab() -> bool:
-    """点底部导航栏第 1 个 tab「书架」，返回是否判定为书架。"""
-    tap(89, 1242)
+def go_to_shelf_tab(boxes: list[tuple[str, tuple[int, int, int, int]]] | None = None) -> bool:
+    """点底部导航栏里 OCR 实际看到的「书架」tab，返回是否判定为书架。
+
+    看不到底部 tab（排行榜等二级页）就不点：旧实现按固定坐标 (89,1242) 盲点，
+    2026-09-27 实机在排行榜二级页上点到的是空白处。
+    """
+    if boxes is None:
+        boxes = ocr_boxes()
+    tab = next(
+        (box for text, box in boxes if text.strip() == "书架" and box[1] >= BOTTOM_NAV_MIN_Y),
+        None,
+    )
+    if tab is None:
+        log("未看到底部「书架」tab，不点击")
+        return False
+    x, y, w, h = tab
+    tap(x + w // 2, y + h // 2)
     time.sleep(2.5)
     dismiss_blocking_dialogs()
     return is_on_shelf()
@@ -379,14 +402,15 @@ def return_to_shelf(max_backs: int = 4) -> None:
     return_to_capturable(max_backs=max_backs + 2)
     dismiss_blocking_dialogs()
     for attempt in range(0, max_backs + 1):
-        page = classify_page(ocr_boxes())
+        boxes = ocr_boxes()
+        page = classify_page(boxes)
         if page == "书架":
             if attempt:
                 log(f"已返回书架（额外返回 {attempt} 次）")
             return
         if page == "书城":
             # 书城是主页 tab，返回键只会弹「确定退出」；直接点书架 tab 并重新确认。
-            if go_to_shelf_tab():
+            if go_to_shelf_tab(boxes):
                 log("书城页 → 已点底部「书架」tab 并确认书架")
                 return
         if attempt >= max_backs:
