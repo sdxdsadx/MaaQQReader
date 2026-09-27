@@ -1,3 +1,4 @@
+# Python / 工具缓存
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -6,6 +7,23 @@ __pycache__/
 .ruff_cache/
 .venv/
 venv/
+
+# 打包产物（scripts\build-gui-exe.cmd 用命令行参数调用 PyInstaller，不依赖 .spec）
 build/
 dist/
 *.spec
+*.exe
+
+# 运行数据与本机配置
+runtime/
+configs/*.local.json
+
+# 手工备份（备份改用 Git 提交/分支）
+_backup_*/
+*.bak
+*.bak-*
+*.orig
+
+# 本机 agent / 工具目录
+.hermes/
+.serena/

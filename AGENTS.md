@@ -59,7 +59,7 @@ CHANGELOG 条目和对应代码放在同一个提交里。
 
 ## Git & GitHub
 
-- 远端：**`github`** → `https://github.com/sdxdsadx/MaaQQReader.git`（没有 `origin`）。主分支是 `master`。
+- 远端：**`github`** → `https://github.com/sdxdsadx/MaaQQReader.git`（公开仓库；没有 `origin`）。主分支是 `master`，PR 都以它为目标；远端另有一个旧的 `main`，不要往里推，也不要以它为基线。
 - 不要直接在 `master` 上提交。每个任务或 Issue 开一个分支，命名为 `<agent>/<主题>-<YYYYMMDD>`，例如 `codex/qqr-33-ad-fix-20260927`。分支的上游必须是**同名**远端分支，不能是 `github/master`。
 - 开工前先看 `git status --short`。如果有不属于本任务的改动，不要提交、不要 stash、不要还原，先告诉用户。
 - 暂存时逐个 `git add <文件>`，然后用 `git diff --cached --stat` 检查。禁止 `git add -A` 或 `git add .`。
@@ -77,6 +77,24 @@ CHANGELOG 条目和对应代码放在同一个提交里。
 - 禁止以下操作：`push --force`；改写已推送的历史；`--no-verify`；未经用户同意执行 `reset --hard`、`clean`、`stash drop`，或删除分支和标签；修改全局 git config 或凭据。
 - 遇到合并冲突或推送失败时停下，把情况报告给用户，不要自行绕过。
 
+### 本机操作方式（只能操作 GUI、没有终端的 agent 看这里）
+
+终端和 PowerShell 窗口不能输入时，按下面的方式完成 Git 操作，不要另找绕过办法。
+
+- 客户端：GitHub Desktop（仓库已添加，显示名 `MaaQQReader`，路径 `G:\project_X`）。它直接使用 `github` 远端，不需要也不要添加 `origin`。
+- 建分支：`Ctrl+Shift+N` → 输入分支名 → 弹出“Switch branch”时选 **Bring my changes to …**。不要选 “Leave my changes on master”，那会 stash 掉别人的改动。
+- 只提交本次文件：Changes 列表先点顶部复选框全部取消 → 在 Filter 里逐个搜本次文件名并勾选 → 确认按钮显示 “Commit N files”，N 与本次文件数一致 → 填摘要和描述 → Commit。
+- 推送：`Ctrl+P`，或点顶部 “Publish branch / Push github”。按钮变成 “Fetch github · Last fetched just now” 即表示已无待推送提交。
+- 合并：先切到 `master`（同样选 Bring my changes）→ Branch → Merge into current branch → 选任务分支 → 选 **Create a merge commit** → 推送。
+- 核对远端（网页被 robots 拦截，用 API）：
+  - 分支列表：`https://api.github.com/repos/sdxdsadx/MaaQQReader/branches`
+  - 单个分支：`https://api.github.com/repos/sdxdsadx/MaaQQReader/branches/<分支名>`
+  - 最近推送记录：`https://api.github.com/repos/sdxdsadx/MaaQQReader/events`
+  - 远端文件清单：`https://api.github.com/repos/sdxdsadx/MaaQQReader/git/trees/master?recursive=1`
+- 登录：GitHub Desktop 的授权页必须是 `github.com/login/...`。如果跳到 `ghfast.top` 等第三方域名，立即停下、不要授权，并告诉用户。2026-09-27 已删除全局 `.gitconfig` 里把 github.com 转到 ghfast.top 的 `url.insteadOf` 和 `credential` 配置；全局配置只能由用户修改。
+- pytest 需要终端。GUI-only agent 跑不了时，请用户运行 `调试QQReader.cmd test` 并反馈结果；未跑就在交付里写“未跑 pytest”，不能合并含代码改动的分支。
+- 用完 Notepad++ 等工具查看文件后关闭标签，不要保存未经用户要求的改动。
+
 ## Security & data
 
 - 以下内容不进仓库，也不上传 GitHub：
@@ -86,6 +104,7 @@ CHANGELOG 条目和对应代码放在同一个提交里。
   - `_backup_*/`、`*.bak*`（注意：因此从 GitHub 克隆的仓库缺少听书任务依赖的旧流程脚本，换机时需要单独拷贝该目录）
   - `.hermes/`、`.serena/`
   - 任何密钥、token、cookie
+  - 以上规则已写入 `.gitignore`（2026-09-27）。远端 `master` 仍跟踪着 `runtime/screenshots/ad_watch/captcha_now.png`，停止跟踪需用户同意后执行 `git rm --cached`。
   - 如果发现这些内容已经被跟踪或已经推送，停下报告，不要自己改写历史。
 - 示例配置里只放占位值。不在源码中写死盘符、用户名或绝对路径。
 - 禁止在 App 里执行以下操作：充值、购买、邀请、分享、提交个人信息、第三方授权登录。

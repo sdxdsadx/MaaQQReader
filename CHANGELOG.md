@@ -21,6 +21,24 @@
 
 ---
 
+## 2026-09-27 · 补全 .gitignore，把 GUI 下的 Git 操作流程写入 AGENTS.md
+
+**触发**：同日把 `claude/agents-git-rules-20260927` 推到 GitHub 时遇到的问题。GitHub Desktop 未添加本仓库；授权页被全局 `.gitconfig` 的 `url.insteadOf` 转到第三方代理 `ghfast.top`，报 “Invalid input”；GitHub Desktop 因为远端叫 `github`，一度提示“Publish repository”（新建仓库）；工作区有 559 个未提交文件，其中大部分是本应忽略的 `.hermes/` 等目录。用户要求把流程写进 AGENTS.md，方便其他 agent 使用。
+
+| 模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| `.gitignore` | `runtime/`、`configs/*.local.json`、`.hermes/`、`.serena/`、`_backup_*/`、`*.bak*`、`*.exe` 未被忽略 | 旧文件只忽略缓存和打包产物 | 补齐上述规则；`*.spec` 保留忽略，已确认 `scripts\build-gui-exe.cmd` 用命令行参数调用 PyInstaller，不读取 `QQReaderGUI.spec` |
+| AGENTS.md | 只能操作 GUI 的 agent 不知道怎么建分支、只提交部分文件、推送和核对远端 | 此前只写了 git 命令 | 新增「本机操作方式」小节：GitHub Desktop 步骤、远端核对 API、ghfast 授权页警示、pytest 限制；写明远端 `master` 是主线、`main` 是旧分支 |
+| 全局 git 配置 | GitHub 请求走 `ghfast.top` | 用户全局 `.gitconfig` 中的 `url "https://ghfast.top/https://github.com/"` 与对应 `credential` 段 | 由用户本人删除（非本仓库文件，未提交）；删除后直连 github.com 推送成功 |
+
+**改动文件**：`.gitignore`、`AGENTS.md`、本日志。
+**验证**：远端分支经 `https://api.github.com/repos/sdxdsadx/MaaQQReader/branches` 核对；远端 `master` 文件清单经 git/trees API 核对，只有 `runtime/screenshots/ad_watch/captcha_now.png` 属于应忽略内容。仅改文档和忽略规则，未跑 pytest。
+**未覆盖 / 遗留**：`captcha_now.png` 仍被跟踪（停止跟踪需用户同意）；远端没有 `dev/`（Maa 资源目录）和 `_backup_old_project_20260909_200716/`，从 GitHub 克隆的仓库不能直接运行；工作区其余未提交改动未处理。
+**分支**：`claude/agents-git-rules-20260927`
+**回滚**：`git log --oneline -S "补全 .gitignore，把 GUI 下的 Git 操作流程" -- CHANGELOG.md` 找到提交后 `git revert <hash>`。
+
+---
+
 ## 2026-09-27 · 按 AGENTS.md 规范精简入口文档并补齐 Git / GitHub 规范
 
 **触发**：用户要求按项目实际运行方式重写 AGENTS.md，重点是 Git 备份与 GitHub 上传规范，并参照 agents.md 官方格式和 Codex 文档。旧 AGENTS.md 约 30 KB，接近 Codex 默认读取上限 32 KiB（`project_doc_max_bytes`），而且仓库现状描述已经过期（写着“无远端”“G 盘只读”）。
