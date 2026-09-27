@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import dataclasses
 import os
 import queue
 import shutil
@@ -29,9 +31,11 @@ from ..workflow import (
     load_handoff_report,
     snapshots_from_plans,
 )
+from . import cover as cover_tools
 from . import theme
 from .commands import (
     build_adb_connect_command,
+    build_adb_devices_command,
     build_emulator_launch_command,
     build_handoff_command,
     build_run_task_command,
@@ -49,6 +53,16 @@ from .task_catalog import (
     load_task_order,
     load_task_settings,
     save_task_settings,
+)
+from .device import (
+    candidate_addresses,
+    child_env,
+    describe_devices,
+    load_device_address,
+    mumu_default_addresses,
+    parse_adb_devices,
+    save_device_address,
+    validate_address,
 )
 from .widgets import TaskRow, describe_settings, make_card
 
@@ -107,6 +121,10 @@ class QQReaderGui:
         self._serial_record_path: Optional[Path] = None
         self._run_started_at: Optional[float] = None
         self._current_text = ""
+        # 模拟器地址：GUI 选择优先于配置文件，经 QQREADER_ADB_ADDRESS 传给子进程。
+        self._adb_override = load_device_address(self._device_path())
+        self._configured_adb_address = ""
+        self._scanned_devices: List[tuple] = []
 
         self._build_ui()
         self._load_task_settings_file()
@@ -257,6 +275,7 @@ class QQReaderGui:
             highlightthickness=1,
         )
         pill.pack(side=tk.RIGHT, anchor="n")
+        self._build_device_selector(header)
         self._status_var = tk.StringVar(value="准备就绪")
         self._status_dot = tk.Label(
             pill, text="●", bg=theme.SURFACE, fg=theme.MUTED, font=("Segoe UI", 11)
@@ -270,6 +289,41 @@ class QQReaderGui:
             font=theme.FONT_BOLD,
         ).pack(side=tk.LEFT, padx=(6, 14), pady=6)
         self._header = header
+
+    def _build_device_selector(self, header: tk.Frame) -> None:
+        """标题栏右侧：选择模拟器 ADB 地址（下拉候选 + 手动输入）。"""
+        box = tk.Frame(header, bg=theme.BG)
+        box.pack(side=tk.RIGHT, anchor="n", padx=(0, 12))
+        row = tk.Frame(box, bg=theme.BG)
+        row.pack(anchor="e")
+        tk.Label(
+            row, text="模拟器", bg=theme.BG, fg=theme.TEXT, font=theme.FONT_BOLD
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        self._device_var = tk.StringVar(value=self._adb_override)
+        self._device_combo = ttk.Combobox(
+            row, textvariable=self._device_var, width=22
+        )
+        self._device_combo.pack(side=tk.LEFT)
+        self._device_combo.bind("<<ComboboxSelected>>", lambda _e: self._apply_device())
+        self._device_combo.bind("<Return>", lambda _e: self._apply_device())
+        for text, command in (
+            ("应用", self._apply_device),
+            ("扫描", self._scan_devices),
+            ("跟随配置", self._reset_device),
+        ):
+            button = ttk.Button(row, text=text, command=command, style="Toolbar.TButton")
+            button.pack(side=tk.LEFT, padx=(4, 0))
+            self._action_buttons.append(button)
+        self._device_hint_var = tk.StringVar(value="")
+        tk.Label(
+            box,
+            textvariable=self._device_hint_var,
+            bg=theme.BG,
+            fg=theme.MUTED,
+            font=theme.FONT_SMALL,
+            anchor="e",
+        ).pack(anchor="e", pady=(3, 0))
+        self._refresh_device_selector()
 
     def _build_settings_panel(self) -> None:
         self._config_var = tk.StringVar()
@@ -626,6 +680,8 @@ class QQReaderGui:
             row.set_meta(describe_settings(spec, self._settings[spec.key]))
         self._save_settings(silent=True)
         self._refresh_selection_summary()
+        if key == "cover_image":
+            self._check_cover_field(spec)
 
     # ------------------------------------------------------------- 任务详情
 
@@ -705,39 +761,50 @@ class QQReaderGui:
                 selectcolor=theme.SURFACE,
             ).grid(row=0, column=1, sticky=tk.W, pady=3)
         self._card_field_vars[spec.key] = {}
-        for row_index, item in enumerate(spec.fields, start=1):
+        row_index = 0
+        for item in spec.fields:
+            row_index += 1
             tk.Label(
                 form, text=item.label, bg=theme.SURFACE, fg=theme.TEXT
             ).grid(row=row_index, column=0, sticky=tk.W, padx=(0, 12), pady=3)
             current = settings.value(spec, item.key)
-            if item.kind == "bool":
-                var: tk.Variable = tk.BooleanVar(value=bool(current))
-                widget = tk.Checkbutton(
+            if item.kind in ("text", "file"):
+                var: tk.Variable = tk.StringVar(value=str(current or ""))
+                ttk.Entry(form, textvariable=var, width=20).grid(
+                    row=row_index, column=1, columnspan=2, sticky=tk.W, pady=3
+                )
+                if item.kind == "file":
+                    row_index += 1
+                    self._cover_buttons(form, var).grid(
+                        row=row_index, column=1, columnspan=2, sticky=tk.W
+                    )
+            elif item.kind == "bool":
+                var = tk.BooleanVar(value=bool(current))
+                tk.Checkbutton(
                     form,
                     variable=var,
                     bg=theme.SURFACE,
                     activebackground=theme.SURFACE,
                     selectcolor=theme.SURFACE,
-                )
+                ).grid(row=row_index, column=1, sticky=tk.W, pady=3)
             else:
                 var = tk.StringVar(
                     value=f"{current:g}" if isinstance(current, float) else str(current)
                 )
-                widget = ttk.Spinbox(
+                ttk.Spinbox(
                     form,
                     from_=item.minimum if item.minimum is not None else 0,
                     to=item.maximum if item.maximum is not None else 999999,
                     increment=item.step,
                     width=10,
                     textvariable=var,
-                )
+                ).grid(row=row_index, column=1, sticky=tk.W, pady=3)
             var.trace_add(
                 "write",
                 lambda *_args, s=spec, key=item.key: self._on_card_field_changed(
                     s, key
                 ),
             )
-            widget.grid(row=row_index, column=1, sticky=tk.W, pady=3)
             hint = item.unit
             if item.minimum is not None and item.maximum is not None:
                 hint = f"{hint}（{item.minimum:g}–{item.maximum:g}）".strip()
@@ -745,6 +812,19 @@ class QQReaderGui:
                 tk.Label(
                     form, text=hint, bg=theme.SURFACE, fg=theme.SUBTLE, font=theme.FONT_SMALL
                 ).grid(row=row_index, column=2, sticky=tk.W, padx=(8, 0))
+            elif item.help:
+                # 书名/封面等说明较长，单独占一行放在输入框下面。
+                row_index += 1
+                tk.Label(
+                    form,
+                    text=item.help,
+                    bg=theme.SURFACE,
+                    fg=theme.SUBTLE,
+                    font=theme.FONT_SMALL,
+                    justify=tk.LEFT,
+                    anchor="w",
+                    wraplength=190,
+                ).grid(row=row_index, column=1, columnspan=2, sticky=tk.W, pady=(0, 3))
             self._card_field_vars[spec.key][item.key] = var
         if not spec.fields:
             tk.Label(
@@ -767,6 +847,56 @@ class QQReaderGui:
             state=tk.DISABLED if self._busy else tk.NORMAL,
         )
         self._detail_run_button.pack(anchor="w", pady=(6, 0))
+        self._check_cover_field(spec)
+
+    def _cover_buttons(self, parent: tk.Misc, var: tk.Variable) -> tk.Frame:
+        frame = tk.Frame(parent, bg=theme.SURFACE)
+        for text, command in (
+            ("选择…", lambda: self._choose_cover_file(var)),
+            ("截取…", lambda: self._open_cover_capture(var)),
+            ("清除", lambda: var.set("")),
+        ):
+            ttk.Button(
+                frame, text=text, command=command, style="Toolbar.TButton", width=6
+            ).pack(side=tk.LEFT, padx=(0, 3))
+        return frame
+
+    def _check_cover_field(self, spec: TaskSpec) -> None:
+        """封面参数不对不拦截保存，只在详情里提示。"""
+        var = self._card_field_vars.get(spec.key, {}).get("cover_image")
+        if var is None or not str(var.get()).strip():
+            return
+        problem = cover_tools.check_cover_file(Path(str(var.get()).strip()))
+        if problem:
+            self._detail_error_var.set(problem)
+
+    def _choose_cover_file(self, var: tk.StringVar) -> None:
+        path = filedialog.askopenfilename(
+            title="选择听书封面（书架截图中裁出的封面）",
+            initialdir=str(self.repo_root / "runtime" / cover_tools.COVER_DIR_NAME),
+            filetypes=[("图片", "*.png *.jpg *.jpeg"), ("所有文件", "*.*")],
+        )
+        if path:
+            var.set(path)
+
+    def _open_cover_capture(self, var: tk.StringVar) -> None:
+        """从模拟器当前画面框选封面：请先在模拟器里打开书架。"""
+        config = self._require_config()
+        if config is None:
+            return
+        if self._busy:
+            messagebox.showwarning("截取封面", "任务运行中不能截图，请稍后再试")
+            return
+        CoverCaptureDialog(
+            self.root,
+            adb_path=config.machine.adb_path,
+            address=config.machine.adb_address,
+            runtime_dir=self.repo_root / "runtime",
+            on_saved=lambda path: (
+                var.set(str(path)),
+                self._log(f"[封面] 已保存 {path}"),
+            ),
+        )
 
     # ------------------------------------------------------------- 执行计划视图
 
@@ -864,12 +994,155 @@ class QQReaderGui:
             self._log(f"[配置错误] {exc}")
             messagebox.showerror("配置错误", str(exc))
             return
-        self._config = config
+        self._configured_adb_address = config.machine.adb_address
+        self._config = self._with_device_override(config)
         self._config_var.set(str(path))
         self._set_config_state(path.name, ok=True)
         self._log(f"[配置] 已加载 {path}")
         for line in config.describe().splitlines():
             self._log("  " + line)
+        if self._adb_override:
+            self._log(f"[模拟器] 使用界面选择的地址 {self._adb_override}（覆盖配置里的 {config.machine.adb_address}）")
+        self._refresh_device_selector()
+
+    # ------------------------------------------------------------- 模拟器地址
+
+    def _device_path(self) -> Path:
+        return self.repo_root / "runtime" / "gui_device.json"
+
+    def _with_device_override(self, config: AppConfig) -> AppConfig:
+        if not self._adb_override or self._adb_override == config.machine.adb_address:
+            return config
+        machine = dataclasses.replace(config.machine, adb_address=self._adb_override)
+        return dataclasses.replace(config, machine=machine)
+
+    def _refresh_device_selector(self) -> None:
+        if not hasattr(self, "_device_combo"):
+            return
+        values = candidate_addresses(
+            self._configured_adb_address,
+            self._scanned_devices,
+            saved=self._adb_override,
+            extra=mumu_default_addresses(),
+        )
+        self._device_combo.configure(values=values)
+        current = self._adb_override or self._configured_adb_address
+        self._device_var.set(current)
+        if self._adb_override:
+            hint = "界面选择（覆盖配置）"
+        elif self._configured_adb_address:
+            hint = "跟随配置文件"
+        else:
+            hint = "加载配置后可选择"
+        if self._scanned_devices:
+            hint += " · 已连接：" + describe_devices(self._scanned_devices)
+        self._device_hint_var.set(hint)
+
+    def _set_device_override(self, address: str) -> None:
+        if self._busy:
+            messagebox.showwarning("模拟器", "任务运行中不能切换模拟器，请先停止")
+            self._refresh_device_selector()
+            return
+        try:
+            save_device_address(self._device_path(), address)
+        except (OSError, ValueError) as exc:
+            self._log(f"[模拟器] 保存失败: {exc}")
+            messagebox.showerror("模拟器", str(exc))
+            self._refresh_device_selector()
+            return
+        self._adb_override = address
+        if self._config is not None:
+            base = self._config
+            if base.machine.adb_address != self._configured_adb_address:
+                base = dataclasses.replace(
+                    base,
+                    machine=dataclasses.replace(
+                        base.machine, adb_address=self._configured_adb_address
+                    ),
+                )
+            self._config = self._with_device_override(base)
+        self._refresh_device_selector()
+
+    def _apply_device(self) -> None:
+        raw = self._device_var.get().strip()
+        if raw == (self._adb_override or self._configured_adb_address):
+            return
+        if raw == self._configured_adb_address:
+            self._reset_device()
+            return
+        try:
+            address = validate_address(raw)
+        except ValueError as exc:
+            messagebox.showwarning("模拟器", str(exc))
+            self._refresh_device_selector()
+            return
+        self._set_device_override(address)
+        if self._adb_override == address:
+            self._log(f"[模拟器] 已切换到 {address}；之后启动的任务都连接这个地址")
+
+    def _reset_device(self) -> None:
+        if not self._adb_override:
+            self._refresh_device_selector()
+            return
+        self._set_device_override("")
+        if not self._adb_override:
+            self._log(
+                "[模拟器] 已恢复跟随配置文件："
+                + (self._configured_adb_address or "（配置未加载）")
+            )
+
+    def _scan_devices(self) -> None:
+        """后台执行 adb connect（MuMu 默认端口）+ adb devices，刷新候选。"""
+        config = self._require_config()
+        if config is None or self._busy:
+            return
+        adb_path = config.machine.adb_path
+        targets = candidate_addresses(
+            self._configured_adb_address,
+            saved=self._adb_override,
+            extra=mumu_default_addresses(),
+        )
+        self._log("[模拟器] 正在扫描：" + "、".join(targets))
+        self._device_hint_var.set("扫描中…")
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+        def worker() -> None:
+            for address in targets:
+                if ":" not in address:
+                    continue
+                try:
+                    subprocess.run(
+                        list(build_adb_connect_command(adb_path, address)),
+                        capture_output=True,
+                        timeout=5,
+                        check=False,
+                        creationflags=creationflags,
+                    )
+                except (OSError, subprocess.SubprocessError):
+                    pass
+            try:
+                result = subprocess.run(
+                    list(build_adb_devices_command(adb_path)),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=10,
+                    check=False,
+                    creationflags=creationflags,
+                )
+                devices = parse_adb_devices(result.stdout)
+            except (OSError, subprocess.SubprocessError) as exc:
+                self._log_queue.put(f"[模拟器] adb devices 失败: {exc}")
+                devices = []
+            self.root.after(0, lambda: self._on_devices_scanned(devices))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_devices_scanned(self, devices: List[tuple]) -> None:
+        self._scanned_devices = devices
+        self._log("[模拟器] 扫描结果：" + describe_devices(devices))
+        self._refresh_device_selector()
 
     def _set_config_state(self, text: str, *, ok: bool) -> None:
         self._config_state_var.set(("✓ " if ok else "✗ ") + text)
@@ -1414,6 +1687,7 @@ class QQReaderGui:
                 errors="replace",
                 bufsize=1,
                 creationflags=creationflags,
+                env=child_env(os.environ, self._adb_override),
             )
         except OSError as exc:
             self._log(f"[启动失败] {exc}")
@@ -1539,6 +1813,145 @@ class QQReaderGui:
     def _set_status(self, text: str) -> None:
         self._status_var.set(text)
         self._status_dot.configure(fg=theme.status_color(text))
+
+
+class CoverCaptureDialog:
+    """截取模拟器当前画面，按住鼠标框选一本书的封面，保存为听书封面模板。"""
+
+    _MAX_DISPLAY = (420, 760)
+
+    def __init__(
+        self,
+        master: tk.Misc,
+        *,
+        adb_path: str,
+        address: str,
+        runtime_dir: Path,
+        on_saved: Callable[[Path], object],
+    ) -> None:
+        self._adb_path = adb_path
+        self._address = address
+        self._runtime_dir = runtime_dir
+        self._on_saved = on_saved
+        self._png: Optional[bytes] = None
+        self._size = (0, 0)
+        self._scale = 1
+        self._photo: Optional[tk.PhotoImage] = None
+        self._start: Optional[tuple] = None
+        self._end: Optional[tuple] = None
+        self._rect: Optional[int] = None
+
+        top = tk.Toplevel(master)
+        top.title("截取听书封面")
+        top.configure(bg=theme.SURFACE)
+        top.transient(master)
+        self._top = top
+        tk.Label(
+            top,
+            text="先在模拟器里打开书架，点「重新截图」，再按住鼠标框住要听的书的封面。",
+            bg=theme.SURFACE,
+            fg=theme.MUTED,
+            font=theme.FONT_UI,
+            wraplength=400,
+            justify=tk.LEFT,
+        ).pack(fill=tk.X, padx=12, pady=(10, 6))
+        self._canvas = tk.Canvas(
+            top, width=360, height=640, bg="#111827", highlightthickness=0, cursor="crosshair"
+        )
+        self._canvas.pack(padx=12)
+        self._canvas.bind("<ButtonPress-1>", self._on_press)
+        self._canvas.bind("<B1-Motion>", self._on_drag)
+        self._canvas.bind("<ButtonRelease-1>", self._on_drag)
+        self._status_var = tk.StringVar(value=f"正在截图 {address} …")
+        tk.Label(
+            top, textvariable=self._status_var, bg=theme.SURFACE, fg=theme.TEXT, font=theme.FONT_UI
+        ).pack(fill=tk.X, padx=12, pady=6)
+        buttons = tk.Frame(top, bg=theme.SURFACE)
+        buttons.pack(fill=tk.X, padx=12, pady=(0, 12))
+        ttk.Button(buttons, text="取消", command=top.destroy, style="Toolbar.TButton").pack(
+            side=tk.RIGHT
+        )
+        ttk.Button(buttons, text="保存封面", command=self._save, style="Primary.TButton").pack(
+            side=tk.RIGHT, padx=(0, 6)
+        )
+        ttk.Button(buttons, text="重新截图", command=self._capture, style="Toolbar.TButton").pack(
+            side=tk.LEFT
+        )
+        self._capture()
+
+    def _capture(self) -> None:
+        self._status_var.set(f"正在截图 {self._address} …")
+
+        def worker() -> None:
+            try:
+                png = cover_tools.capture_screen_png(self._adb_path, self._address)
+                error = ""
+            except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+                png, error = None, str(exc)
+            try:
+                self._top.after(0, lambda: self._show(png, error))
+            except tk.TclError:
+                pass  # 对话框已关闭
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show(self, png: Optional[bytes], error: str) -> None:
+        if png is None:
+            self._status_var.set(f"截图失败：{error}")
+            return
+        try:
+            size = cover_tools.image_size(png)
+            photo = tk.PhotoImage(data=base64.b64encode(png).decode("ascii"))
+        except (ValueError, ImportError, tk.TclError) as exc:
+            self._status_var.set(f"截图无法显示：{exc}")
+            return
+        self._png, self._size = png, size
+        self._scale = cover_tools.display_scale(size[0], size[1], *self._MAX_DISPLAY)
+        self._photo = photo.subsample(self._scale) if self._scale > 1 else photo
+        self._canvas.configure(
+            width=self._photo.width(), height=self._photo.height()
+        )
+        self._canvas.delete("all")
+        self._canvas.create_image(0, 0, image=self._photo, anchor=tk.NW)
+        self._rect = None
+        self._start = self._end = None
+        self._status_var.set(f"截图 {size[0]}×{size[1]}，请框选封面")
+
+    def _on_press(self, event: tk.Event) -> None:
+        if self._png is None:
+            return
+        self._start = self._end = (event.x, event.y)
+        if self._rect is not None:
+            self._canvas.delete(self._rect)
+        self._rect = self._canvas.create_rectangle(
+            event.x, event.y, event.x, event.y, outline="#f97316", width=2
+        )
+
+    def _on_drag(self, event: tk.Event) -> None:
+        if self._start is None or self._rect is None:
+            return
+        self._end = (event.x, event.y)
+        self._canvas.coords(self._rect, *self._start, *self._end)
+        try:
+            box = cover_tools.crop_box(self._start, self._end, self._scale, self._size)
+            self._status_var.set(f"选区 x={box[0]} y={box[1]} {box[2]}×{box[3]}")
+        except ValueError as exc:
+            self._status_var.set(str(exc))
+
+    def _save(self) -> None:
+        if self._png is None or self._start is None or self._end is None:
+            self._status_var.set("请先截图并框选封面")
+            return
+        try:
+            box = cover_tools.crop_box(self._start, self._end, self._scale, self._size)
+            path = cover_tools.save_cover(
+                self._runtime_dir, cover_tools.crop_png(self._png, box)
+            )
+        except (OSError, ValueError, ImportError) as exc:
+            self._status_var.set(f"保存失败：{exc}")
+            return
+        self._on_saved(path)
+        self._top.destroy()
 
 
 def _format_duration(seconds: float) -> str:

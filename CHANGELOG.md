@@ -21,6 +21,35 @@
 
 ---
 
+## 2026-09-27 · GUI 可选择模拟器地址、自动阅读小说，以及听书书名与封面
+
+**触发**：用户要求在 GUI 里选择模拟器地址和小说，听书可以选择书名和封面。此前模拟器地址只能改配置（且会被启动脚本回写），阅读书目是 `auto_read_30min.py` 的常量，听书书目写死在本机 pipeline，找不到时还会打开书架第一本。
+
+| 模块 | 修改 |
+| --- | --- |
+| GUI 标题栏（`qqreader/gui/app.py::_build_device_selector` 等） | 新增「模拟器」下拉框 + 应用 / 扫描 / 跟随配置。候选：配置地址、MuMu 12 多开默认端口 16384/16416/16448/16480、`adb devices` 在线设备；可手动输入。选择存到 `runtime/gui_device.json`，子进程通过环境变量 `QQREADER_ADB_ADDRESS` 覆盖（加载器原本就支持），不改配置文件——`启动QQReaderGUI.cmd` 每次启动会写回 MuMu 实例 0 的端口。任务运行中不能切换 |
+| `qqreader/gui/device.py`（新增） | 地址校验、`adb devices` 解析、候选排序、选择持久化、子进程环境 |
+| 任务参数（`qqreader/gui/task_catalog.py`） | 字段类型增加 `text` / `file`；自动阅读增加「小说书名」（默认「宇智波」，多个用 `/` 分隔）；听书增加「听书书名」（默认「全职法师」）、「听书封面」（默认空）、「找不到时换书」（默认勾选，保持旧行为）；新增 `carry_over_selection`，`scripts/dynamic_plan.py` 重建计划时保留书目选择 |
+| 任务详情表单 / 封面截取（`app.py::_build_detail`、`CoverCaptureDialog`；`qqreader/gui/cover.py` 新增） | 文本框、封面「选择… / 截取… / 清除」；「截取…」用 `adb exec-out screencap -p` 截当前画面，缩小显示后框选，按原尺寸裁出存到 `runtime/covers/`；尺寸不对（例如整张截图）会提示。顺带修正：详情栏窄时数字框被挤掉的布局 |
+| `qqreader/gui/commands.py::build_run_task_command` | 传 `--book-title` / `--cover-image` / `--no-first-book-fallback` |
+| `scripts/run_task.py` | 新参数；`BookSelection`；阅读把书名以 `--book` 传给 `auto_read_30min.py`；听书在 `_patch_legacy_pipeline` 中调用 `_apply_audiobook_book_overrides`：改写 `AudiobookFindBook.expected`（`re.escape`），有封面时复制为 `<resource>/image/gui_audiobook_cover.png` 并在各 next 列表的 `AudiobookFindBook` 后插入 TemplateMatch 节点 `AudiobookFindCover`（阈值 0.8），不换书时从所有 next 中去掉 `AudiobookOpenFirstShelfBook`；结束后恢复 pipeline、删除封面模板 |
+| `scripts/auto_read_30min.py` | `--book` 参数、`parse_book_keywords`；`locate_allowed_book_ui` 按所选关键词匹配（原先写死「宇智波」）；阅读完成后领奖励改用传入的 `--config`（原先写死本机配置路径） |
+| 文档 | README「书目白名单」改为「书目选择」；`docs/usage.md`、`docs/configuration.md` 补充模拟器地址和书目参数 |
+
+**改动文件**：`qqreader/gui/app.py`、`qqreader/gui/commands.py`、`qqreader/gui/task_catalog.py`、`qqreader/gui/widgets.py`、`qqreader/gui/device.py`（新增）、`qqreader/gui/cover.py`（新增）、`scripts/run_task.py`、`scripts/auto_read_30min.py`、`scripts/dynamic_plan.py`、`tests/test_book_device_selection.py`（新增）、`README.md`、`docs/usage.md`、`docs/configuration.md`、本日志。
+**验证**：新增 28 项测试（书名匹配用真实书架 OCR 帧 `autoread_shelf_frames.json`；GUI 参数 → 命令行 → `run_task` 解析 → 分发的整条链路；pipeline 覆盖；地址持久化与 `load_config` 环境覆盖；封面裁剪后模板匹配回原位置）。全量 425 passed、4 failed（与基线相同的 4 项已知失败）、1 skipped；worktree 缺 `dev/` 和旧工程目录，测试时临时建目录联接指向主检出，测完已删除。
+实机（MuMu 实例 0，`127.0.0.1:16384`，命令行 `run_task.py --task DailyAudiobookFlow --minutes 1`）：
+- 只读：书架截图 → 用 `cover.crop_box` 截《全职法师》封面 (32,562,88,116) → Maa `TemplateMatch` 命中同一位置，score 1.0。
+- 实跑 1：书名「全职法师」+ 封面 + 不换书 → `AudiobookFindBook` 命中 (133,585)，旧流程 success，听书奖励“今日奖励已领取”，exit 0。
+- 实跑 2：书名「书架上没有这本书」+ 同一封面 + 不换书 → 书名未命中，`AudiobookFindCover` 命中 (32,419)（刚听过，《全职法师》已移到书架第一位，同帧 OCR 标题在 y=442），播放页 OCR 为「全职法师 / AI朗读」，exit 0。
+- 两次运行后 `qq_reader_trial.json` md5 与运行前一致（`7a261df0…`），`gui_audiobook_cover.png` 已删除。
+- GUI：本机构建窗口截图检查布局；切换 / 恢复模拟器地址由脚本调用界面方法验证。
+**未覆盖 / 遗留**：「截取…」对话框的鼠标框选和「扫描」按钮没有人工点击验证（裁剪与解析逻辑有单元测试，截图函数在实机调用过）；自动阅读选其他书只由单元测试覆盖（没有实机去读别的书）；听书“不换书且书名、封面都找不到”时由 `AudiobookBackUntilShelf` 返回 8 次后失败，只由单元测试覆盖 pipeline 结构，实机未触发；模拟器地址覆盖只作用于 GUI 启动的子进程，`调试QQReader.cmd` 仍用配置文件；GUI 改动后未重建 `dist/QQReaderGUI.exe`。
+**分支**：`claude/simulator-novel-selection-20260927`（基于未合并的 `claude/qqr-55-reading-shelf-20260927`，GUI 已在该分支上重写，合并需先合它）
+**回滚**：`git log --oneline -S "GUI 可选择模拟器地址、自动阅读小说" -- CHANGELOG.md` 定位后 `git revert <hash>`。
+
+---
+
 ## 2026-09-27 · 实机极端场景测试：去掉交接检查与自动阅读中的三处盲点（QQR-53 / QQR-55）
 
 **触发**：用户要求设计极端场景并实机测试。MuMu 实例 0（`127.0.0.1:16384`），用 worktree 新代码直接运行 `scripts/run_task.py --task HandoffCheck` 和 `scripts/auto_read_30min.py`，没有经过主检出的旧 GUI。
