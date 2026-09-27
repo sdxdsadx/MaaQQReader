@@ -21,13 +21,25 @@ Sleep = Callable[[float], None]
 _CAPTCHA_MARKERS = ("安全验证", "拖动下方滑块", "拖动滑块", "滑动验证", "完成拼图")
 _REWARD_MARKERS = (
     "今日已获赠币",
+    "今日还可领",
+    "已连续签到",
+    "每日阅读领赠币",
+    "签到提醒",
     "看小视频领好礼",
     "玩游戏领赠币",
     "每看完1次",
     "获奖记录",
     "明日再来",
 )
-_SHELF_ENTRY_MARKERS = ("兑赠币", "签到领赠币", "分钟领", "本周阅读时长")
+_SHELF_ENTRY_MARKERS = (
+    "兑赠币",
+    "签到领赠币",
+    "分钟领",
+    "本周阅读时长",
+    # 2026-09-22 实机新版书架：顶部时长卡会显示
+    # “38分钟 / 再读10分钟领20赠币”，不再出现旧版入口文案。
+    "再读",
+)
 _INTRO_MARKERS = ("继续阅读", "开始阅读", "免费阅读", "阅读全文")
 _BOOKSTORE_MARKERS = ("男生", "女生", "排行榜", "本周强推", "今日必读", "高分必读")
 _BODY_CHAPTER = re.compile(r"第\s*\d+\s*章")
@@ -55,6 +67,15 @@ def _find(boxes: Sequence[OcrBox], markers: Sequence[str]) -> Optional[OcrBox]:
     return None
 
 
+def _shelf_reward_button(boxes: Sequence[OcrBox]) -> Optional[OcrBox]:
+    """优先定位书架顶部时长卡右侧的领币按钮，排除底部悬浮领币图标。"""
+    for item in boxes:
+        label, (x, y, _, _) = item
+        if x >= 420 and y < 300 and re.fullmatch(r"领\s*\d+\s*赠币|签到领赠币", label.strip()):
+            return item
+    return None
+
+
 def _tap(client: MaaClient, item: OcrBox) -> bool:
     _, (x, y, width, height) = item
     return client.click(x + width // 2, y + height // 2)
@@ -75,7 +96,7 @@ def goto_reward_page(
     """从常见落地页导航到奖励页，成功返回 ``True``。
 
     分支顺序为：验证码阻塞 → 退出弹窗 → 开屏跳过 → 简介继续阅读 →
-    奖励页确认 → 书架奖励入口 → 书城切书架 → 正文/未知页返回。所有动作
+    奖励页确认 → 书架奖励入口 → 书城切书架 → 正文页返回。未知页不盲返。所有动作
     后都重新截图确认，达到 ``max_steps`` 仍未确认奖励页则返回 ``False``。
     """
     for _ in range(max_steps):
@@ -114,7 +135,7 @@ def goto_reward_page(
 
         # 书架顶部卡片同时包含说明文案和蓝色“签到领赠币”按钮；说明文案
         # 本身在部分版本不可点击。优先点击按钮，找不到时才退回卡片文案。
-        entry = _find(boxes, ("签到领赠币",)) or _find(boxes, _SHELF_ENTRY_MARKERS)
+        entry = _shelf_reward_button(boxes) or _find(boxes, _SHELF_ENTRY_MARKERS)
         if entry is not None:
             _tap(client, entry)
             _sleep(settle_seconds, sleep)
@@ -126,14 +147,13 @@ def goto_reward_page(
             _sleep(settle_seconds, sleep)
             continue
 
-        # 正文（第 N 章）显式走 BACK；书友榜/广告残留等未知页采用相同的
-        # 单层恢复。每次返回后必须重新 OCR，不用固定 BACK 次数猜测层级。
+        # 正文（第 N 章）显式走 BACK；无法确认的页面停止导航，交给
+        # 上层页面状态确认。否则刚进入奖励页但 OCR 文案变化时会被关掉。
         if _BODY_CHAPTER.search(text):
             client.click_key(4)
             _sleep(settle_seconds, sleep)
             continue
-        client.click_key(4)
-        _sleep(settle_seconds, sleep)
+        return False
     return False
 
 

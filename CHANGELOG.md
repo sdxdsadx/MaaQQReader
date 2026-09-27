@@ -21,6 +21,26 @@
 
 ---
 
+## 2026-09-27 · 入库主检出中已在使用但未提交的工作区改动（QQR-53 前置）
+
+**触发**：用户要求依次修复 QQR-53 / 54 / 55。主检出 `G:\project_X` 的 `master` 工作区有约 2,500 行未提交改动（GUI、广告/奖励/游戏任务、自动阅读、验证码求解器），GUI 每天实际运行的是这版代码，但 Git 里没有；基于 `master` 修复会与之冲突，也会改到过时代码。用户同意先入库再修复。
+
+| 分组 | 文件 | 对应的既有 CHANGELOG 条目 |
+| --- | --- | --- |
+| GUI | `qqreader/gui/app.py`、`dynamic_plan.py`、`task_catalog.py`，新增 `theme.py`、`widgets.py`；`启动QQReaderGUI.cmd`；测试 `test_dynamic_plan`、`test_gui_task_catalog`、`test_issue12_gui_observability`，新增 `test_gui_stale_settings` | 09-26「修复旧 GUI 沿用 2 分钟任务超时」、09-24「整理启动脚本」 |
+| 验证码求解器 | `qqreader/captcha/factory.py`、`slide.py`；`test_qqr29_captcha` | 09-26「滑动验证每 4 次失败刷新」「修正滑块缺口定位」 |
+| 自动阅读 | `scripts/auto_read_30min.py`、`_autoread_final300.py`、`_swipe280b.py`；`test_autoread_book_guard` | 09-24「修复 09-23 日志中…阅读失败」 |
+| 广告 / 奖励 / 游戏任务 | `qqreader/page/*`、`reward/nav.py`、`runner/recording.py`、`tasks/*`、`scripts/run_task.py` 及对应测试，新增 `test_ad_corner_close` | 09-26「广告观看后识别左右上角 X」「恢复 45 分钟超时」「阅读卡标题 OCR 误读」、09-24 条目 |
+
+**改动文件**：见上表；文件内容与主检出工作区逐字一致（复制，无编辑）。
+**未入库**：`qqreader/runner/runner.py`、`tests/test_qqr39_observe_interrupt.py`（QQR-39，另一会话在做）；根目录 `build-gui-exe.cmd`、`start-gui.cmd` 的删除；`runtime/screenshots/ad_watch/captcha_now.png` 的删除（需用户同意）；约 480 个未跟踪的 `scripts/_*.py` 临时脚本和 `docs/` 未跟踪文档；`scripts/live_sendevent.py`（`scripts/live_captcha_auto.py` 依赖它，但内含写死的 `G:\project_X\runtime` 路径，归 QQR-34 处理）。
+**验证**：worktree 通过目录联接引用主检出的 `dev/` 与 `_backup_old_project_20260909_200716/` 后，`py -3.10 -m pytest`：353 passed、4 failed、3 skipped。4 项失败都是原本就有的：`test_qqr27_ad_flow::test_ad_play_waits_40_seconds_before_handling_buttons`、`test_ad_round_regressions::test_each_ad_round_has_its_own_initial_wait`（40 秒 vs 35 秒）、`test_ad_round_regressions::test_live_exit_attempt_does_not_restart_eight_swipe_cycle`、`test_issue15_reward_nav::test_live_snap_detects_saved_png_not_raw_screenshot_data`（`live_sendevent` 未入库）。未实机验证（代码与每日实际运行版本相同）。
+**未覆盖 / 遗留**：分组提交的中间状态不保证单独可测，只保证最后一个提交全量测试结果如上。
+**分支**：`claude/import-wip-20260927`
+**回滚**：`git log --oneline -S "入库主检出中已在使用但未提交" -- CHANGELOG.md` 定位后，对 4 个导入提交逐个 `git revert <hash>`。
+
+---
+
 ## 2026-09-27 · README 补充每日听书书目说明，合并为「书目白名单」
 
 **触发**：用户要求把每日听书的白名单也写进 README。

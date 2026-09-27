@@ -177,6 +177,19 @@ class GameTaskAdapter(PlannedTaskAdapter):
         "去玩游戏",
     )
 
+    #: 计时开始后，只有这些「确实回到了加载/登录/协议页」的强信号才会暂停
+    #: 计时并处理加载页。「活动」「新游」「同意」等泛词在游戏 HUD 按钮和
+    #: 聊天滚动里随处可见，2026-09-23 实测它们间歇命中导致计时器被反复清零，
+    #: 挂机 35 分钟仍未满 25 分钟而超时。
+    _RUNNING_STRONG_LOADING_TEXTS = (
+        "正在连接服务器",
+        "正在进入游戏",
+        "我已详细阅读并同意",
+        "点击选服",
+        "踏入仙途",
+        "开始游戏",
+    )
+
     def __init__(
         self,
         *,
@@ -221,6 +234,7 @@ class GameTaskAdapter(PlannedTaskAdapter):
         agreement_text: str = DEFAULT_FEATURE_KEYS.game_ocr_agreement,
         claim_text: str = DEFAULT_FEATURE_KEYS.game_ocr_claim,
         agree_text: str = DEFAULT_FEATURE_KEYS.game_ocr_agree,
+        reject_text: str = DEFAULT_FEATURE_KEYS.game_ocr_reject,
         online_play_text: str = DEFAULT_FEATURE_KEYS.game_ocr_online_play,
         login_game_text: str = DEFAULT_FEATURE_KEYS.game_ocr_login_game,
         carousel_action: Optional[Action] = None,
@@ -229,6 +243,7 @@ class GameTaskAdapter(PlannedTaskAdapter):
         game_center_online_play_points: Optional[Tuple[Action, ...]] = None,
         agreement_action: Optional[Action] = None,
         agreement_action_alt: Optional[Action] = None,
+        privacy_agree_action: Optional[Action] = None,
         reward_game_button_action: Optional[Action] = None,
         entry_scroll_action: Optional[Action] = None,
         max_entry_scrolls: int = 4,
@@ -269,6 +284,7 @@ class GameTaskAdapter(PlannedTaskAdapter):
         self._agreement_text = agreement_text
         self._claim_text = claim_text
         self._agree_text = agree_text
+        self._reject_text = reject_text
         self._online_play_text = online_play_text
         self._login_game_text = login_game_text
         self._carousel_action = carousel_action or Action.tap_point(360, 360)
@@ -301,6 +317,9 @@ class GameTaskAdapter(PlannedTaskAdapter):
             )
             if action is not None
         )
+        # 720x1280 real-device calibration. Generic OCR “同意” also matches the
+        # dialog body and “不同意”, so this modal needs its own button target.
+        self._privacy_agree_action = privacy_agree_action or Action.tap_point(494, 761)
         # 奖励页「去玩游戏」按钮的坐标 fallback（OCR 定位失败时使用）。
         self._reward_game_button_action = (
             reward_game_button_action or Action.tap_point(592, 606)
@@ -359,7 +378,19 @@ class GameTaskAdapter(PlannedTaskAdapter):
 
         # 用户验收口径：进入在线游戏的公告/登录落地页后即可开始挂机。
         # 某些游戏没有可用的“跳过”，反复返回只会重新打开公告并导致永不计时。
-        if state is PageState.GAME_ANNOUNCEMENT:
+        # A long announcement body can contain the phrase “无法进入游戏” and the
+        # floating “领币” label.  The generic OCR matcher may therefore rank it as
+        # GAME_LOADING before GAME_ANNOUNCEMENT.  The announcement title is a
+        # stronger signal and must win before any “进入游戏” click is attempted.
+        announcement_visible = self._has_any_text(
+            context,
+            (
+                keys.game_ocr_announcement,
+                keys.game_ocr_announcement_open_server,
+                keys.game_ocr_announcement_players,
+            ),
+        )
+        if state is PageState.GAME_ANNOUNCEMENT or announcement_visible:
             if context.get("game_exit_done"):
                 return self._execute(Action.press_back(), context)
             started = context.get("game_started_at")
@@ -498,7 +529,15 @@ class GameTaskAdapter(PlannedTaskAdapter):
         if state is PageState.GAME_RUNNING:
             # QQR-20：游戏加载/协议页也可能出现「领币」，必须先等真正进入
             # 游戏运行态后再开始计时，否则会提前退出。
-            if self._has_any_text(context, self._RUNNING_BLOCK_TEXTS):
+            started = context.get("game_started_at")
+            blocked = self._has_any_text(context, self._RUNNING_BLOCK_TEXTS)
+            if blocked and started is not None:
+                # 已确认进入游戏并开始计时：泛词（HUD「活动」按钮、聊天
+                # 滚动文字）不代表回到加载页，绝不清零已累计的挂机时间。
+                blocked = self._has_any_text(
+                    context, self._RUNNING_STRONG_LOADING_TEXTS
+                )
+            if blocked:
                 # issue #12：兜底——列表页指纹出现时，即使仍在阻塞词名单
                 # （旧的兜底分支只空转），也必须推进列表页救援。
                 if (
@@ -507,11 +546,14 @@ class GameTaskAdapter(PlannedTaskAdapter):
                     and self._has_text(context, keys.game_ocr_browse_games)
                 ):
                     return self._advance_game_center(context)
-                context.update_data(game_started_at=None)
+                if started is None:
+                    return self._handle_loading_like(
+                        context, note="游戏仍在加载/协议页，暂不计时"
+                    )
+                # 计时已开始后确实出现加载/协议页：处理页面但保留计时起点。
                 return self._handle_loading_like(
-                    context, note="游戏仍在加载/协议页，暂不计时"
+                    context, note="游戏重新出现加载/协议页，保留已累计挂机时间"
                 )
-            started = context.get("game_started_at")
             if started is None:
                 context.update_data(game_started_at=context.now)
                 return StepResult(
@@ -532,6 +574,17 @@ class GameTaskAdapter(PlannedTaskAdapter):
                     actions=(),
                     progress=False,
                 )
+        # 2026-09-24 实测：App 停在「我的」等其他 tab 时没有奖励入口，原计划只会
+        # 反复“未定位到特征 home_ocr_reward_entry”空转到超时。先切回「书架」。
+        if state is PageState.HOME and not context.get("game_exit_done"):
+            has_entry = any(
+                re.search(keys.home_ocr_reward_entry, text)
+                for text in context.observation.ocr_texts
+            )
+            taps = int(context.get("game_shelf_tab_taps", 0))
+            if not has_entry and taps < 3:
+                context.update_data(game_shelf_tab_taps=taps + 1)
+                return self._execute(Action.tap_point(89, 1263), context)
         return super().advance(context)
 
     def _advance_game_center(self, context: TaskContext) -> StepResult:
@@ -564,6 +617,15 @@ class GameTaskAdapter(PlannedTaskAdapter):
         modal_step = self._handle_agreement_modal(context)
         if modal_step is not None:
             return modal_step
+        # Some games show a first-launch privacy dialog with two standalone
+        # buttons, “不同意” and “同意”.  Its body also contains “进入游戏”, so
+        # substring matching that phrase first clicks the paragraph forever.
+        # The exact button pair is a stronger, unambiguous modal signal.
+        reject_visible = self._has_exact_text(
+            context, self._reject_text
+        ) or self._has_exact_text(context, "不同意")
+        if reject_visible and self._has_exact_text(context, self._agree_text):
+            return self._execute(self._privacy_agree_action, context)
         if self._has_text(context, self._agreement_text):
             clicks = int(context.get("game_agreement_clicks", 0))
             if clicks < len(self._agreement_actions):
@@ -640,6 +702,10 @@ class GameTaskAdapter(PlannedTaskAdapter):
     @staticmethod
     def _has_text(context: TaskContext, needle: str) -> bool:
         return any(needle in text for text in context.observation.ocr_texts)
+
+    @staticmethod
+    def _has_exact_text(context: TaskContext, needle: str) -> bool:
+        return any(text.strip() == needle for text in context.observation.ocr_texts)
 
     _COIN_PATTERN = re.compile(DEFAULT_FEATURE_KEYS.reward_ocr_granted_regex)
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from ..captcha.guard import CaptchaGuard
+from ..captcha.guard import CaptchaGuard, ManualCaptchaGuard
 from ..config import AppConfig, ConfigError
 from ..page.feature_keys import DEFAULT_FEATURE_KEYS, FeatureKeys
 from ..page.profiles import build_default_state_definitions
@@ -70,6 +70,10 @@ def build_default_registry(
                 f"captcha.solver={config.captcha.solver!r} 需要注入 captcha_guard；"
                 "自动求解器尚未实现，当前只支持 manual（等待人工）"
             )
+        if config.captcha.solver == "manual" and captcha_guard is None:
+            # 把配置语义落实到任务定义；否则 ad/game 的独立构造器会采用
+            # 默认滑块求解器，导致 manual 配置仍自动点击验证码。
+            captcha_guard = ManualCaptchaGuard()
 
     recognizer = PageStateRecognizer(build_default_state_definitions(keys))
     recovery = EscalationPolicy()

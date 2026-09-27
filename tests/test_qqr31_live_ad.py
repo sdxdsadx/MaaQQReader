@@ -59,4 +59,4 @@ def test_live_ad_exits_after_max_swipes() -> None:
     )
     step = adapter.advance(context)
     assert step.actions == ("TAP_POINT",)
-    assert ("tap_point", 55, 118) in device.calls
+    assert ("tap_point", 48, 70) in device.calls

@@ -120,6 +120,9 @@ class FeatureKeys:
     game_ocr_reject: str = "拒绝"
     #: 游戏更新公告弹窗标题 OCR（真机 2026-09-11 实测）。
     game_ocr_announcement: str = "亲爱的仙使大人"
+    #: 另一类小游戏首发公告的稳定标题/称呼（2026-09-22 实机）。
+    game_ocr_announcement_open_server: str = "开服公告"
+    game_ocr_announcement_players: str = "亲爱的各位玩家"
     #: 公告弹窗正文特征（备用证据）。
     game_ocr_announcement_alt: str = "一、全新功能"
     #: 公告弹窗右上角「跳过」按钮文案。

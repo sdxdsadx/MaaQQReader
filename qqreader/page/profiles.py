@@ -438,9 +438,13 @@ def build_default_state_definitions(
                 _text(
                     FeatureKind.OCR,
                     keys.game_ocr_announcement,
+                    values=(
+                        keys.game_ocr_announcement_open_server,
+                        keys.game_ocr_announcement_players,
+                    ),
                     weight=2.0,
                     required=True,
-                    mode=MatchMode.CONTAINS,
+                    mode=MatchMode.ONE_OF,
                     description="游戏更新公告弹窗标题",
                 ),
                 _text(

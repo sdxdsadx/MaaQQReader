@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 import sys
 import time
@@ -23,6 +24,7 @@ for _stream in (sys.stdout, sys.stderr):
         reconfigure(encoding="utf-8", errors="replace")
 
 from qqreader.config import load_config
+from qqreader.captcha.guard import ManualCaptchaGuard
 from qqreader.errors import ContractViolation
 from qqreader.maa.catalog import FeatureCatalog
 from qqreader.maa.device import MaaDeviceController
@@ -134,6 +136,36 @@ def _apply_level_ad_runtime_overrides(data: Dict[str, Any]) -> None:
     if isinstance(level_ready, dict):
         level_ready["next"] = ["LevelTopReady", "LevelScrollToTop"]
 
+    # 返回广告后要按来源区分两张等级卡。原链先用宽泛的
+    # LevelAfterCoinAd 命中“用户等级”，导致积分广告结束后再次进入
+    # LevelFindPointsAd，最后滑到底触发 max_hit=8。
+    coin_return = data.get("LevelAfterCoinAd")
+    if isinstance(coin_return, dict):
+        coin_return["expected"] = "看小视频.*积分"
+    stable = data.get("AdReturnStable")
+    if isinstance(stable, dict) and isinstance(stable.get("next"), list):
+        _insert_before(stable["next"], "LevelAfterPointsAd", "AdDailyComplete")
+    points_return = data.get("LevelAfterPointsAd")
+    if isinstance(points_return, dict):
+        # 返回等级页仅证明广告关闭，仍须看见积分任务行的“今日已完成”。
+        # 2026-09-24 实测：积分广告可能是需跳第三方的浏览型广告，流程会
+        # 「跳过」放弃奖励后返回，积分行仍是「看小视频」。此时换一条广告
+        # 重试（LevelClickPointsAdAgain 最多 2 次），而不是直接判失败。
+        points_return["next"] = [
+            "LevelPointsSectionFound", "LevelClickPointsAdAgain", "LevelVerifyPointsScroll",
+        ]
+    data["LevelVerifyPointsScroll"] = {
+        "action": "Swipe",
+        "begin": [360, 420],
+        "end": [360, 1120],
+        "duration": 500,
+        "post_delay": 700,
+        "max_hit": 5,
+        "next": [
+            "LevelPointsSectionFound", "LevelClickPointsAdAgain", "LevelVerifyPointsScroll",
+        ],
+    }
+
     points_done = data.get("LevelPointsSectionFound")
     if isinstance(points_done, dict):
         # 不能只凭左侧“看小视频，+5积分”标题判完成：未执行时该标题
@@ -145,6 +177,9 @@ def _apply_level_ad_runtime_overrides(data: Dict[str, Any]) -> None:
             "roi": [520, 500, 180, 300],
             "focus": "等级页积分广告已显示今日完成，流程结束",
         })
+
+    _apply_level_entry_popup_overrides(data)
+    _apply_level_ad_launch_retry_overrides(data)
 
     data["LevelTopReady"] = {
         "recognition": "OCR",
@@ -195,8 +230,91 @@ def _apply_level_ad_runtime_overrides(data: Dict[str, Any]) -> None:
     }
 
 
+LEVEL_POPUP_CLOSE_NODES = ("LevelTeenModeDismiss",)
+
+
+def _apply_level_entry_popup_overrides(data: Dict[str, Any]) -> None:
+    """点击「等级」后没进入等级页时，关掉青少年模式提示并重新点击。
+
+    2026-09-23 20:30 实测：点「等级」时青少年模式提示正在弹出/收起，点击被
+    吞掉，页面停在「我的」；原 LevelClickLevelIcon 的 next 只有
+    LevelPageReady，20 秒后整条等级广告流程超时失败。
+    注意：「我的」页「基因」图标会被 OCR 成孤立的 “X”，因此绝不能按
+    OCR “X” 去点关闭（2026-09-24 验证时误入「我的阅读基因」页）。
+    """
+    retry_next = ["LevelPageReady", *LEVEL_POPUP_CLOSE_NODES, "LevelClickLevelIconAgain"]
+    data.pop("LevelMyPopupClose", None)
+    data["LevelTeenModeDismiss"] = {
+        "recognition": "OCR",
+        "expected": "^(我知道了|知道了)$",
+        "action": "Click",
+        "post_delay": 1200,
+        "max_hit": 3,
+        "focus": "关闭青少年模式提示",
+        "next": list(retry_next),
+    }
+    data["LevelClickLevelIconAgain"] = {
+        "recognition": "OCR",
+        "expected": "^等级$",
+        "roi": [0, 560, 720, 240],
+        "action": "Click",
+        "post_delay": 3000,
+        "max_hit": 3,
+        "focus": "上次点击「等级」未进入等级页，重新点击",
+        "next": list(retry_next),
+    }
+    icon = data.get("LevelClickLevelIcon")
+    if isinstance(icon, dict):
+        icon["next"] = list(retry_next)
+    my_ready = data.get("LevelMyPageReady")
+    if isinstance(my_ready, dict) and isinstance(my_ready.get("next"), list):
+        my_ready["next"] = [n for n in my_ready["next"] if n != "LevelMyPopupClose"]
+        for name in reversed(LEVEL_POPUP_CLOSE_NODES):
+            if name not in my_ready["next"]:
+                my_ready["next"].insert(0, name)
+
+
+def _apply_level_ad_launch_retry_overrides(data: Dict[str, Any]) -> None:
+    """点击等级页广告入口后广告没拉起来时，等待并重试，而不是去滑等级页。
+
+    2026-09-23 18:16 实测：点「看小视频」3.5 秒后仍停在等级页，链路落到
+    AdScrollDownRepeat 把等级页本身下滑，再被 AdReturnedAfterClose 当成
+    “广告已关闭”，最终积分行没有“今日已完成”而失败。
+    """
+    for click_name, wait_name, again_name in (
+        ("LevelClickPointsAd", "LevelPointsAdNotStarted", "LevelClickPointsAdAgain"),
+        ("LevelClickCoinAd", "LevelCoinAdNotStarted", "LevelClickCoinAdAgain"),
+    ):
+        click = data.get(click_name)
+        if not isinstance(click, dict) or not isinstance(click.get("next"), list):
+            continue
+        base_next = [n for n in click["next"] if n not in (wait_name, again_name)]
+        _insert_before(base_next, wait_name, "AdScrollDownRepeat")
+        click["next"] = base_next
+        wait_next = [n for n in base_next if n != wait_name]
+        _insert_before(wait_next, again_name, "AdScrollDownRepeat")
+        _insert_before(wait_next, wait_name, "AdScrollDownRepeat")
+        data[wait_name] = {
+            "recognition": "OCR",
+            "expected": "完成任务积分自动下发|用户等级|提升等级",
+            "action": "DoNothing",
+            "post_delay": 3000,
+            "max_hit": 4,
+            "focus": "广告入口已点击但仍停在等级页，等待广告拉起",
+            "next": wait_next,
+        }
+        again = {k: v for k, v in click.items() if k != "next"}
+        again.update({
+            "max_hit": 2,
+            "focus": "广告未拉起，重新点击等级页广告入口",
+            "next": list(base_next),
+        })
+        data[again_name] = again
+
+
 def _patch_legacy_pipeline(
-    resource_dir: Path, node: Optional[str], minutes: Optional[float]
+    resource_dir: Path, node: Optional[str], minutes: Optional[float],
+    task: Optional[str] = None,
 ):
     pipeline_path = resource_dir / "pipeline" / "qq_reader_trial.json"
     if not pipeline_path.is_file():
@@ -204,7 +322,8 @@ def _patch_legacy_pipeline(
     original = pipeline_path.read_bytes()
     try:
         data = json.loads(original.decode("utf-8"))
-        _apply_level_ad_runtime_overrides(data)
+        if task == "DailyLevelAdFlow":
+            _apply_level_ad_runtime_overrides(data)
         if node and minutes and node in data:
             data[node]["post_delay"] = int(float(minutes) * 60000)
         pipeline_path.write_text(
@@ -242,7 +361,7 @@ def _run_legacy_task(task: str, config: Any, minutes: Optional[float]) -> int:
     if not ready:
         print("[legacy] 设备不可截图，旧流程可能仍会失败。", flush=True)
     patched_minutes = float(minutes) if minutes and float(minutes) > 0 else None
-    original = _patch_legacy_pipeline(resource_dir, node, patched_minutes)
+    original = _patch_legacy_pipeline(resource_dir, node, patched_minutes, task)
     command = [
         sys.executable,
         str(runner),
@@ -391,6 +510,13 @@ def _build_runtime(client: Any, *, verbose: bool):
     return keys, observer, device, recognizer
 
 
+def _captcha_guard_from_config(config: Any):
+    """把 CLI 使用的验证码配置传给直接构造的任务定义。"""
+    if config.captcha.solver == "manual":
+        return ManualCaptchaGuard()
+    return None
+
+
 def _run_system_task(
     client: Any,
     task: str,
@@ -451,13 +577,33 @@ def run_device_preflight(client, config, policy, *, adb_probe=run_adb, log=None)
     )
 
 
+def _run_reading_task(config_path: str, minutes: Optional[float]) -> int:
+    """正文页禁止截图，使用按 Activity 计时的自动阅读流程。"""
+    duration = math.ceil(float(minutes)) if minutes is not None else 35
+    if duration < 1:
+        print("[配置错误] 阅读分钟必须 > 0", file=sys.stderr, flush=True)
+        return 2
+    command = [
+        sys.executable,
+        str(_ROOT / "scripts" / "auto_read_30min.py"),
+        "--config", str(config_path),
+        "--minutes", str(duration),
+        "--skip-claim",
+    ]
+    print(f"[reading] 正文保护页按 Activity 看护 {duration} 分钟", flush=True)
+    return subprocess.run(command, cwd=str(_ROOT), check=False).returncode
+
+
 def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
     if args.task == "ClaimAudiobookReward":
         from scripts.daily_all import claim_audiobook_reward
         return 0 if claim_audiobook_reward(args.config) else 2
     if args.task in LEGACY_NOT_IMPLEMENTED:
         minutes = args.minutes if args.minutes is not None else args.duration_minutes
-        code = _run_legacy_task(args.task, config, minutes)
+        if args.task == "DailyReadingFlow":
+            code = _run_reading_task(args.config, minutes)
+        else:
+            code = _run_legacy_task(args.task, config, minutes)
         if code != 0:
             return code
         if args.task == "DailyAudiobookFlow":
@@ -476,9 +622,11 @@ def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
                     evidence_prefix="reading_reward_after_flow",
                 )
                 print("[result] " + result.reason, flush=True)
+                _LOG.info("reading reward: %s", result.reason)
                 return 0 if result.succeeded else 2
             except Exception as exc:
                 print(f"[post-task] 阅读奖励领取异常: {exc}", flush=True)
+                _LOG.error("reading reward exception: %s", exc)
                 return 2
             finally:
                 client.close()
@@ -545,6 +693,7 @@ def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
             )
 
         recovery = EscalationPolicy()
+        captcha_guard = _captcha_guard_from_config(config)
         if args.task == GAME_TASK_NAME:
             definition = build_game_definition(
                 keys,
@@ -554,6 +703,7 @@ def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
                 recognizer,
                 timeout_seconds=args.timeout_minutes * 60.0,
                 game_duration_seconds=float(game_duration) * 60.0,
+                captcha_guard=captcha_guard,
             )
         else:
             definition = build_ad_definition(
@@ -563,6 +713,7 @@ def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
                 recovery,
                 recognizer,
                 timeout_seconds=args.timeout_minutes * 60.0,
+                captcha_guard=captcha_guard,
                 navigation_client=client,
             )
         recorder = FileRunRecorder(
@@ -638,6 +789,10 @@ def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
         print("[result] " + result.summary(), flush=True)
         print("[outcome] " + result.outcome.value, flush=True)
         print("[reason] " + result.reason, flush=True)
+        _LOG.info(
+            "outcome=%s reason=%s record=%s",
+            result.outcome.value, result.reason, result.record_path,
+        )
         if result.record_path:
             print("[record] " + result.record_path, flush=True)
         for event in result.diagnostics[-60:]:
@@ -653,6 +808,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
     setup_task_file_logging(_ROOT / "runtime" / "logs", args.task)
     _LOG.info("task start argv=%s", " ".join(sys.argv[1:]))
+    code = _main_guarded(args)
+    # 之前 gui_*.log 只有 "task start" 一行，排查时看不到任务结果。
+    _LOG.info("task end exit=%s", code)
+    return code
+
+
+def _main_guarded(args: argparse.Namespace) -> int:
     try:
         policy = BackoffPolicy(max_retries=args.max_retries)
         # 配置缺失等致命错误由 is_retryable 判定为不可重试，直接上抛。

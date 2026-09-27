@@ -116,6 +116,57 @@ def test_goto_reward_page_prefers_actionable_shelf_button_over_copy() -> None:
     assert client.clicks == [(590, 185)]
 
 
+def test_goto_reward_page_uses_current_top_button_and_keeps_reward_page_open() -> None:
+    client = FakeClient(
+        [
+            [
+                ("书架", (30, 45, 90, 40)),
+                ("本周阅读时长/领赠币", (60, 197, 250, 30)),
+                ("领414赠币", (527, 163, 133, 40)),
+                ("领2266赠币", (564, 1122, 110, 32)),
+            ],
+            [
+                ("已连续签到31天", (75, 340, 260, 45)),
+                ("今日还可领227赠币", (60, 840, 290, 35)),
+            ],
+        ]
+    )
+
+    assert goto_reward_page(client, settle_seconds=0) is True
+    assert client.clicks == [(593, 183)]
+    assert client.keys == []
+
+
+def test_goto_reward_page_does_not_back_out_of_unrecognized_page() -> None:
+    client = FakeClient(
+        [
+            [("领414赠币", (527, 163, 133, 40))],
+            [("奖励页面加载中", (100, 350, 240, 40))],
+        ]
+    )
+
+    assert goto_reward_page(client, settle_seconds=0) is False
+    assert client.clicks == [(593, 183)]
+    assert client.keys == []
+
+
+def test_goto_reward_page_handles_new_shelf_read_more_copy() -> None:
+    client = FakeClient(
+        [
+            [
+                ("书架", (27, 45, 105, 43)),
+                ("38分钟", (145, 155, 95, 35)),
+                ("再读10分钟领20赠币", (140, 200, 260, 40)),
+            ],
+            [("看小视频领好礼", (60, 1100, 260, 50))],
+        ]
+    )
+
+    assert goto_reward_page(client, settle_seconds=0) is True
+    assert client.clicks == [(270, 220)]
+    assert client.keys == []
+
+
 def test_goto_reward_page_stops_before_clicking_when_captcha_is_visible() -> None:
     client = FakeClient(
         [[("安全验证", (80, 350, 120, 40)), ("今日已获赠币160", (220, 60, 280, 50))]]

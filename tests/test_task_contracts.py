@@ -264,6 +264,7 @@ def test_default_registry_uses_config_enabled_and_timeout() -> None:
     )
     assert registry.names() == (AD_TASK_NAME,)
     assert registry.get(AD_TASK_NAME).contract.timeout.seconds == 99
+    assert isinstance(registry.get(AD_TASK_NAME).captcha_guard, ManualCaptchaGuard)
 
 
 def test_default_registry_rejects_auto_solver_without_guard() -> None:

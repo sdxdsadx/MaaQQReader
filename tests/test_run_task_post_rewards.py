@@ -54,6 +54,8 @@ def test_reading_gui_entry_claims_reward_after_success(monkeypatch, tmp_path: Pa
     client = FakeClient()
     monkeypatch.setattr(run_task, "_run_legacy_task", lambda *_args: 0)
     monkeypatch.setattr(run_task, "build_maa_client", lambda _config: client)
+    # 阅读已改走 _run_reading_task（auto_read_30min.py 子进程）；不打桩会连真实设备。
+    monkeypatch.setattr(run_task, "_run_reading_task", lambda *_args: 0)
     monkeypatch.setattr(
         run_task,
         "claim_reading_rewards",
