@@ -21,6 +21,23 @@
 
 ---
 
+## 2026-09-27 · 等级页广告：识别截断的倒计时，挽留弹窗点「继续观看」（QQR-54）
+
+**触发**：GUI 批次 `daily_20260927_114947_a58b6564`，`DailyLevelAdFlow` 07:03:13 失败，留下的广告弹窗又拖垮了听书。逐帧核对 `runtime/logs/maafw.bak.2026.09.27-07.03.17.990.log` 第 26519～28318 行的 OCR 结果。
+
+| 模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| 倒计时识别 | 07:02:30～33 广告仍在倒计时（OCR「观看20秒」「前观看17秒」），链路却去关广告 | `AdCountdown` 只认 `观看.*秒.*可获得奖励`，截断的倒计时认不出；`AdBrowseOfferModal` 的「了解详情 / 跳转详情页或第三方应用」在普通视频广告上也有，于是倒计时中点了左上角 ×，触发挽留弹窗 | 等级广告覆盖里 `AdCountdown.expected` 增加 `观看\s*\d+\s*秒`（不会匹配弹窗正文「观看视频30秒」）；所有 next 列表里 `AdCountdown` 排到 `AdBrowseOfferModal` 之前 |
+| 挽留弹窗 | 07:02:36 起弹窗停留 37 秒，返回 8 次无效后失败 | 调查结论修正了 Issue 的说法：弹窗是提前关闭造成的；`AdBrowseOfferModal` / `AdCloseByBackKey` / `AdBackUntilRewardOrShelf` 等节点的 next 都没有弹窗分支 | `scripts/run_task.py::_apply_level_ad_retention_overrides`：新增 `LevelAdRetentionContinue`（点「继续观看」，最多 3 次）和 `LevelAdRetentionGiveUp`（之后点「放弃奖励」，回等级页走原有的换广告重试和“今日已完成”核对）；插入 8 个关闭/返回/倒计时节点的 next，位置在验证码节点之后、其余节点之前。该函数放在覆盖函数末尾执行，避免被 `AdStaticDownloadClose` 的重建冲掉 |
+
+**改动文件**：`scripts/run_task.py`、`tests/test_qqr54_level_ad_retention.py`（新）、`tests/fixtures/level_ad_ocr_frames.json`（新，3 帧真实 OCR）、本日志。
+**验证**：`tests/test_qqr54_level_ad_retention.py` 9 项通过：用本机真实 pipeline 加覆盖，再按 MaaFW next 顺序模拟识别真实 OCR 帧。先复现原链：弹窗上只会落到返回键节点，截断倒计时会命中 `AdBrowseOfferModal`。修复后：倒计时帧从 4 个入口都停在 `AdCountdown` 等待；弹窗帧从 8 个入口都点真实「继续观看」框 (291,754,133,39)；3 次后改点「放弃奖励」(299,840,119,37)；验证码节点仍排在最前；可重复应用、无悬空引用。全量 384 passed、4 failed（与基线相同）、2 skipped。**未实机验证**。
+**未覆盖 / 遗留**：模拟器不评估 TemplateMatch（验证码模板）和 MaaFW 的 timeout / on_error 细节，实机行为仍需 GUI 单跑「每日等级广告」确认。赠币卡没有像积分卡那样的“今日已完成”核对：我手上没有赠币卡完成状态的真实截图，没有贸然加判定，本条仍需补。覆盖只在 `DailyLevelAdFlow` 启动时注入，`DailyAdFlow`（新流程）不受影响。
+**分支**：`claude/qqr-54-level-ad-retention-20260927`（基于 `claude/qqr-53-handoff-20260927`）
+**回滚**：`git log --oneline -S "等级页广告：识别截断的倒计时" -- CHANGELOG.md` 定位后 `git revert <hash>`。
+
+---
+
 ## 2026-09-27 · 串行任务之间先做交接检查，验证码阻塞不再继续下一项（QQR-53）
 
 **触发**：GUI 批次 `daily_20260927_114947_a58b6564`：等级广告停在「继续观看 / 放弃奖励」挽留弹窗上失败（exit 2），听书随即从广告页启动，`AudiobookBackUntilShelf` 返回 8 次后也失败（`runtime/logs/maafw.log` 第 507 行是听书启动时的画面）。另外离线核对确认：新流程除 SUCCESS 外一律 exit 2，验证码阻塞后继续排下一项是可达的代码路径。

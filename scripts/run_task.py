@@ -243,6 +243,8 @@ def _apply_level_ad_runtime_overrides(data: Dict[str, Any]) -> None:
             "AdCloseByBackKey",
         ],
     }
+    # 必须最后执行：上面会整体重建 AdStaticDownloadClose 等节点。
+    _apply_level_ad_retention_overrides(data)
 
 
 LEVEL_POPUP_CLOSE_NODES = ("LevelTeenModeDismiss",)
@@ -325,6 +327,82 @@ def _apply_level_ad_launch_retry_overrides(data: Dict[str, Any]) -> None:
             "next": list(base_next),
         })
         data[again_name] = again
+
+
+#: 挽留弹窗要先于倒计时处理：弹窗背后的倒计时文字（「首观看16秒」）仍可见。
+LEVEL_RETENTION_NODES = ("LevelAdRetentionContinue", "LevelAdRetentionGiveUp")
+#: 关闭 / 返回后可能落到挽留弹窗的节点；原 next 没有弹窗分支，只会连按返回。
+LEVEL_RETENTION_ENTRY_NODES = (
+    "AdBrowseOfferModal",
+    "AdCloseByBackKey",
+    "AdBackUntilRewardOrShelf",
+    "AdStaticDownloadClose",
+    "AdCloseAfterNormalCountdown",
+    "AdCountdown",
+    "AdScrollDownRepeat",
+    "AdSkipBrowseOffer",
+)
+LEVEL_CAPTCHA_NODES = ("AdSlideCaptchaDetected", "AdCaptchaDetected")
+
+
+def _apply_level_ad_retention_overrides(data: Dict[str, Any]) -> None:
+    """QQR-54：等级页广告的倒计时识别与「继续观看 / 放弃奖励」挽留弹窗。
+
+    2026-09-27 ``daily_20260927_114947_a58b6564`` 实测：赠币广告左上角倒计时 OCR
+    只有「观看20秒」「前观看17秒」（截断，没有「可获得奖励」），``AdCountdown``
+    识别不到，链路落到 ``AdBrowseOfferModal`` 在倒计时中点左上角 × 提前关闭，
+    触发挽留弹窗「观看视频30秒，才能获得奖励 / 继续观看 / 放弃奖励」；之后
+    ``AdCloseByBackKey`` / ``AdBackUntilRewardOrShelf`` 没有弹窗分支，返回键对
+    弹窗无效，8 次后任务失败并把弹窗留给下一项。
+    """
+    countdown = data.get("AdCountdown")
+    if isinstance(countdown, dict):
+        # 短倒计时：数字紧跟「观看」，不会误中弹窗正文「观看视频30秒」。
+        countdown["expected"] = "观看.*秒.*可获得奖励|观看\\s*\\d+\\s*秒"
+
+    data["LevelAdRetentionContinue"] = {
+        "recognition": "OCR",
+        "expected": "^继续观看$",
+        "action": "Click",
+        "post_delay": 1500,
+        "max_hit": 3,
+        "focus": "广告挽留弹窗：奖励需要看满，点「继续观看」回到广告",
+        "next": [
+            *LEVEL_CAPTCHA_NODES,
+            "AdCompleted",
+            "AdRewardIssued",
+            "AdCountdown",
+            "AdCloseAfterNormalCountdown",
+            "AdScrollDownRepeat",
+        ],
+    }
+    data["LevelAdRetentionGiveUp"] = {
+        "recognition": "OCR",
+        "expected": "^(放弃奖励|坚持退出)$",
+        "action": "Click",
+        "post_delay": 1800,
+        "max_hit": 2,
+        "focus": "继续观看 3 次后仍回到挽留弹窗：放弃本条广告，回等级页由换广告重试和“今日已完成”核对决定结果",
+        "next": [*LEVEL_CAPTCHA_NODES, "AdReturnedAfterClose", "AdCloseByBackKey"],
+    }
+    for name in LEVEL_RETENTION_ENTRY_NODES:
+        node = data.get(name)
+        if not isinstance(node, dict) or not isinstance(node.get("next"), list):
+            continue
+        rest = [n for n in node["next"] if n not in LEVEL_RETENTION_NODES]
+        captcha = [n for n in rest if n in LEVEL_CAPTCHA_NODES]
+        others = [n for n in rest if n not in LEVEL_CAPTCHA_NODES]
+        # 验证码仍然最先判断；挽留弹窗紧随其后，先于倒计时和返回键。
+        node["next"] = [*captcha, *LEVEL_RETENTION_NODES, *others]
+    # 倒计时仍在走时不能去点左上角 ×：所有 next 里 AdCountdown 先于 AdBrowseOfferModal。
+    for node in data.values():
+        if not isinstance(node, dict) or not isinstance(node.get("next"), list):
+            continue
+        nexts = node["next"]
+        if "AdCountdown" in nexts and "AdBrowseOfferModal" in nexts:
+            if nexts.index("AdCountdown") > nexts.index("AdBrowseOfferModal"):
+                nexts.remove("AdCountdown")
+                nexts.insert(nexts.index("AdBrowseOfferModal"), "AdCountdown")
 
 
 def _patch_legacy_pipeline(
