@@ -62,6 +62,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from qqreader.config import load_config
+from qqreader.page.blocking_popup import find_blocking_popup
 
 LOG = ROOT / "runtime" / "logs" / "auto_read.log"
 
@@ -261,6 +262,8 @@ def dismiss_blocking_dialogs() -> int:
          不能点「安装」，否则会改动被测环境版本。
       2. 退出确认「确定退出QQ阅读？」—— 点「取消」。
       3. 运营活动弹窗（中秋找玉兔等）—— 点右上角 X。
+      4. 每日弹窗（2026-09-29）：书架居中运营海报点海报下方 X，奖励页
+         「签到成功」点「我知道了」，识别见 ``qqreader.page.blocking_popup``。
 
     只点「取消 / 关闭」类按钮，绝不点确认类，保证不改变被测环境。
     """
@@ -270,6 +273,20 @@ def dismiss_blocking_dialogs() -> int:
         if not boxes:
             return closed
         all_text = " ".join(t for t, _ in boxes)
+        # 4) 每日弹窗（2026-09-29 新增）：书架居中运营海报点下方 X，奖励页签到
+        #    弹窗点「我知道了」。按版式识别，不依赖每期都变的活动文案。
+        #    升级 / 退出确认框叠在上面时先由下面的分支点它的「取消」。
+        topmost_dialog = any(
+            m in all_text for m in UPGRADE_DIALOG_MARKERS + EXIT_DIALOG_MARKERS
+        )
+        popup = None if topmost_dialog else find_blocking_popup(boxes)
+        if popup is not None:
+            label, (x, y) = popup
+            tap(x, y)
+            log(f"已关闭每日弹窗（点「{label}」@({x},{y})）")
+            closed += 1
+            time.sleep(2.0)
+            continue
 
         # 书城页的横幅本身就写着「勋章/装扮限时返场」「免费读一年」，不是弹窗。
         # 2026-09-27 实机：把它当活动弹窗后，在书城页盲点 (307,764) / 点任意「X」。
@@ -359,9 +376,12 @@ def is_on_shelf() -> bool:
 
 
 def classify_page(boxes: list[tuple[str, tuple[int, int, int, int]]]) -> str:
-    """把一帧 OCR 归为「书架 / 书城 / 其他 / 无文本」，供判定和失败记录共用。"""
+    """把一帧 OCR 归为「书架 / 书城 / 弹窗 / 其他 / 无文本」，供判定和失败记录共用。"""
     if not boxes:
         return "无文本"
+    # 弹窗遮住书名时 OCR 仍读得到书架文案；不能当成书架去做白名单校验。
+    if find_blocking_popup(boxes) is not None:
+        return "弹窗"
     texts = [t.replace(" ", "") for t, _ in boxes]
     joined = " ".join(texts)
     if any(marker in joined for marker in NON_SHELF_MARKERS):

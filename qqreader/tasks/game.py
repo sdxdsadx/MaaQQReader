@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import re
-from typing import Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
 
 from ..captcha.factory import build_default_captcha_guard
 from ..captcha.guard import CaptchaGuard, ManualCaptchaGuard
@@ -18,6 +18,7 @@ from ..contract.conditions import (
     state_in,
 )
 from ..contract.contract import TaskContract, TimeoutSpec
+from ..page.blocking_popup import may_have_blocking_popup
 from ..page.feature_keys import DEFAULT_FEATURE_KEYS, FeatureKeys
 from ..page.recognizer import PageStateRecognizer
 from ..page.states import PageState
@@ -33,7 +34,10 @@ from .common import (
     popup_recoverable,
     wrong_page_recoverable,
 )
-from .plan import Action, PlannedTaskAdapter, StateActionPlan
+from .plan import Action, ActionKind, PlannedTaskAdapter, StateActionPlan
+
+if TYPE_CHECKING:  # pragma: no cover
+    from ..maa.client import MaaClient
 
 GAME_TASK_NAME = "DailyGameFlow"
 DEFAULT_GAME_TIMEOUT_SECONDS = 30 * 60
@@ -256,6 +260,9 @@ class GameTaskAdapter(PlannedTaskAdapter):
         #: issue #12：游戏中心列表页救援开关与「在线玩」tab 下首卡坐标。
         list_page_rescue_enabled: bool = True,
         list_page_card_points: Optional[Tuple[Action, ...]] = None,
+        #: 用于关闭每日弹窗的 Maa 客户端（重新截图取 OCR 坐标）；为 None 时不处理。
+        navigation_client: Optional["MaaClient"] = None,
+        max_popup_taps: int = 3,
     ) -> None:
         super().__init__(
             device=device,
@@ -269,6 +276,8 @@ class GameTaskAdapter(PlannedTaskAdapter):
             raise ValueError("max_entry_scrolls 必须 >= 0")
         self._game_duration = game_duration_seconds
         self._exit_action = exit_action
+        self._navigation_client = navigation_client
+        self._max_popup_taps = max_popup_taps
         self._reward_entry_key = reward_entry_key
         self._go_play_key = go_play_key
         self._reward_entry_text = reward_entry_text
@@ -364,6 +373,10 @@ class GameTaskAdapter(PlannedTaskAdapter):
     def advance(self, context: TaskContext) -> StepResult:
         keys = DEFAULT_FEATURE_KEYS
         state = context.decision.state if context.decision is not None else None
+
+        popup_step = self._dismiss_blocking_popup(context, state)
+        if popup_step is not None:
+            return popup_step
 
         # issue #12：真机日志中列表页被误判成 GAME_RUNNING（空转 40 分钟），
         # 但其 OCR 指纹是列表页。无论识别器给出什么状态，只要「在线玩」+
@@ -587,6 +600,38 @@ class GameTaskAdapter(PlannedTaskAdapter):
                 return self._execute(Action.tap_point(89, 1263), context)
         return super().advance(context)
 
+    def _dismiss_blocking_popup(
+        self, context: TaskContext, state: Optional[PageState]
+    ) -> Optional[StepResult]:
+        """书架运营海报 / 奖励页签到弹窗：先关掉，不在遮罩下点入口。
+
+        2026-09-28 书架弹窗遮住入口，游戏在 HOME 反复点「再读7分钟领20赠币」
+        空转 35 分钟超时。每次只点一下，下一步重新观测确认；同一弹窗最多点
+        ``max_popup_taps`` 次，之后交回原有流程与恢复阶梯。
+        """
+        if self._navigation_client is None or state not in (
+            PageState.HOME, PageState.REWARD_HOME, PageState.GAME_ENTRY,
+        ):
+            return None
+        if not may_have_blocking_popup(context.observation.ocr_texts):
+            context.data.pop("game_popup_taps", None)
+            return None
+        taps = int(context.get("game_popup_taps", 0))
+        if taps >= self._max_popup_taps:
+            return None
+        from ..reward.nav import dismiss_blocking_popup
+
+        popup = dismiss_blocking_popup(self._navigation_client)
+        if popup is None:
+            return None
+        context.update_data(game_popup_taps=taps + 1)
+        label, (x, y) = popup
+        return StepResult(
+            f"关闭遮挡入口的每日弹窗：点「{label}」({x}, {y})",
+            actions=(ActionKind.TAP_POINT.value,),
+            progress=True,
+        )
+
     def _advance_game_center(self, context: TaskContext) -> StepResult:
         """游戏中心列表页推进（issue #12：OCR 定位优先 + 坐标兜底）。
 
@@ -736,6 +781,7 @@ def build_game_definition(
     game_duration_seconds: float = DEFAULT_GAME_DURATION_SECONDS,
     captcha_guard: Optional[CaptchaGuard] = None,
     entry_scroll_action: Optional[Action] = None,
+    navigation_client: Optional["MaaClient"] = None,
 ) -> TaskDefinition:
     """装配游戏任务。"""
     contract = build_game_contract(keys, timeout_seconds=timeout_seconds)
@@ -781,6 +827,7 @@ def build_game_definition(
         agreement_action=Action.tap_point(157, 1032),
         agreement_action_alt=Action.tap_point(152, 1066),
         entry_scroll_action=entry_scroll_action,
+        navigation_client=navigation_client,
     )
     if captcha_guard is None:
         captcha_guard = build_default_captcha_guard(

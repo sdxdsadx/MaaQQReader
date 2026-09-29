@@ -10,6 +10,7 @@
 * 任何一帧出现验证码 → 立即返回 ``CAPTCHA``，不点击、不返回、不重启；
 * 已确认在书架（所有每日任务共同的公共起点）→ ``READY``；
 * 否则按页面类型处理：确认框点「取消」、广告挽留弹窗点「放弃奖励」、
+  每日运营 / 签到弹窗点 X 或「我知道了」、
   书城切到「书架」tab、开屏点「跳过」，其余页面按返回键；返回耗尽后
   重启一次 App；每个动作之后都重新截图确认；
 * 仍无法确认 → ``UNSAFE``，由调度方跳过下一项任务并保留原因。
@@ -29,6 +30,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Sequence, Tuple
 
 from ..maa.client import Box, MaaClient
+from ..page.blocking_popup import find_blocking_popup
 
 OcrBox = Tuple[str, Box]
 Sleep = Callable[[float], None]
@@ -62,6 +64,7 @@ class FrameKind(str, Enum):
     EXIT_DIALOG = "EXIT_DIALOG"
     UPGRADE_DIALOG = "UPGRADE_DIALOG"
     AD_RETENTION = "AD_RETENTION"
+    BLOCKING_POPUP = "BLOCKING_POPUP"
     SHELF = "SHELF"
     BOOKSTORE = "BOOKSTORE"
     SPLASH = "SPLASH"
@@ -136,6 +139,10 @@ def classify_frame(boxes: Sequence[OcrBox]) -> FrameKind:
         return FrameKind.UPGRADE_DIALOG
     if _find_exact(boxes, RETENTION_MARKERS) is not None:
         return FrameKind.AD_RETENTION
+    # 书架上的运营海报 / 奖励页签到弹窗同样透出背景文案（2026-09-28 书架弹窗
+    # 被判成书架，后续任务在遮罩下空点 36 分钟）。
+    if find_blocking_popup(boxes) is not None:
+        return FrameKind.BLOCKING_POPUP
     if is_shelf_text(text) and has_shelf_label(boxes):
         return FrameKind.SHELF
     # 只有底部导航里真的看得到「书架」tab 才算可切换的书城主页；排行榜等二级页
@@ -166,6 +173,8 @@ def _targeted_action(kind: FrameKind, boxes: Sequence[OcrBox]) -> Optional[Tuple
         item = _find_exact(boxes, ("取消",))
     elif kind is FrameKind.AD_RETENTION:
         item = _find_exact(boxes, RETENTION_MARKERS)
+    elif kind is FrameKind.BLOCKING_POPUP:
+        return find_blocking_popup(boxes)
     elif kind is FrameKind.BOOKSTORE:
         point = _shelf_tab(boxes)
         return ("书架tab", point) if point is not None else None

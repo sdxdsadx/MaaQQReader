@@ -432,6 +432,42 @@ def _apply_level_ad_retention_overrides(data: Dict[str, Any]) -> None:
                 nexts.insert(nexts.index("AdBrowseOfferModal"), "AdCountdown")
 
 
+EXTERNAL_CHECKIN_DISMISS_NODE = "ExternalCheckinPopupDismiss"
+#: 进入奖励页后、开始找「去点评」时的节点；签到弹窗只在当天第一次进奖励页时出现。
+EXTERNAL_CHECKIN_HOSTS = (
+    "ExternalOpenRewardFromShelf",
+    "ExternalRewardPageReady",
+    "ExternalScrollToDianping",
+    "ExternalBackUntilRewardOrShelf",
+)
+
+
+def _apply_external_checkin_popup_overrides(data: Dict[str, Any]) -> None:
+    """奖励页每日签到弹窗先点「我知道了」，再找「去点评」。
+
+    2026-09-28 run ``daily_20260928_233026_1486afea``：当天第一次进奖励页弹出
+    「签到成功，获得10赠币 / 我知道了」。``ExternalRewardPageReady`` 只认
+    「今日已获赠币」，弹窗下照样命中，随后 ``ExternalScrollToDianping`` 在弹窗上
+    空滑 14 次失败。「我知道了」实测框 (311,750,92,28)；ROI 限定在弹窗按钮
+    一带，不点「看视频额外领」（会打开广告）。
+    """
+    data[EXTERNAL_CHECKIN_DISMISS_NODE] = {
+        "recognition": "OCR",
+        "expected": "^我知道了$",
+        "roi": [180, 690, 360, 140],
+        "action": "Click",
+        "post_delay": 1500,
+        "max_hit": 3,
+        "focus": "关闭奖励页每日签到弹窗",
+        "next": ["ExternalBothComplete", "ExternalRewardPageReady", "ExternalScrollToDianping"],
+    }
+    for name in EXTERNAL_CHECKIN_HOSTS:
+        node = data.get(name)
+        if isinstance(node, dict) and isinstance(node.get("next"), list):
+            if EXTERNAL_CHECKIN_DISMISS_NODE not in node["next"]:
+                node["next"].insert(0, EXTERNAL_CHECKIN_DISMISS_NODE)
+
+
 def _apply_audiobook_book_overrides(
     data: Dict[str, Any], selection: BookSelection, *, with_cover: bool
 ) -> None:
@@ -493,6 +529,8 @@ def _patch_legacy_pipeline(
             _apply_level_ad_runtime_overrides(data)
         if task == "DailyAudiobookFlow" and selection is not None:
             _apply_audiobook_book_overrides(data, selection, with_cover=with_cover)
+        if task == "DailyExternalAppFlow":
+            _apply_external_checkin_popup_overrides(data)
         if node and minutes and node in data:
             data[node]["post_delay"] = int(float(minutes) * 60000)
         pipeline_path.write_text(
@@ -986,6 +1024,7 @@ def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
                 timeout_seconds=args.timeout_minutes * 60.0,
                 game_duration_seconds=float(game_duration) * 60.0,
                 captcha_guard=captcha_guard,
+                navigation_client=client,
             )
         else:
             definition = build_ad_definition(

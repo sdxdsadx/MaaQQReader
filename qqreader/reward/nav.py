@@ -14,6 +14,7 @@ import time
 from typing import Callable, List, Optional, Sequence, Tuple
 
 from ..maa.client import Box, MaaClient
+from ..page.blocking_popup import find_blocking_popup
 
 OcrBox = Tuple[str, Box]
 Sleep = Callable[[float], None]
@@ -86,6 +87,31 @@ def _sleep(delay: float, sleep: Sleep) -> None:
         sleep(delay)
 
 
+def _tap_blocking_popup(client: MaaClient, boxes: Sequence[OcrBox]) -> bool:
+    """书架运营海报点 X、奖励页签到弹窗点「我知道了」；没有弹窗返回 False。"""
+    popup = find_blocking_popup(boxes)
+    if popup is None:
+        return False
+    _, (x, y) = popup
+    client.click(x, y)
+    return True
+
+
+def dismiss_blocking_popup(client: MaaClient) -> Optional[Tuple[str, Tuple[int, int]]]:
+    """重新截图；有每日弹窗就点关闭并返回 (按钮, 坐标)，验证码或无弹窗返回 None。
+
+    只点一次，不在这里确认结果：调用方下一步会重新观测页面。
+    """
+    boxes = _ocr(client)
+    if _contains_any(_joined(boxes), _CAPTCHA_MARKERS):
+        return None
+    popup = find_blocking_popup(boxes)
+    if popup is None:
+        return None
+    client.click(*popup[1])
+    return popup
+
+
 def goto_reward_page(
     client: MaaClient,
     *,
@@ -95,7 +121,7 @@ def goto_reward_page(
 ) -> bool:
     """从常见落地页导航到奖励页，成功返回 ``True``。
 
-    分支顺序为：验证码阻塞 → 退出弹窗 → 开屏跳过 → 简介继续阅读 →
+    分支顺序为：验证码阻塞 → 退出弹窗 → 每日弹窗 → 开屏跳过 → 简介继续阅读 →
     奖励页确认 → 书架奖励入口 → 书城切书架 → 正文页返回。未知页不盲返。所有动作
     后都重新截图确认，达到 ``max_steps`` 仍未确认奖励页则返回 ``False``。
     """
@@ -109,6 +135,10 @@ def goto_reward_page(
         give_up = _find(boxes, ("放弃奖励", "坚持退出"))
         if give_up is not None:
             _tap(client, give_up)
+            _sleep(settle_seconds, sleep)
+            continue
+        # 每日弹窗透出背景奖励页 / 书架文案，必须先关掉再确认页面。
+        if _tap_blocking_popup(client, boxes):
             _sleep(settle_seconds, sleep)
             continue
         close = next(
@@ -171,6 +201,11 @@ def find_watch_entry(
         text = _joined(boxes)
         if _contains_any(text, _CAPTCHA_MARKERS):
             return None
+        if _tap_blocking_popup(client, boxes):
+            # 签到弹窗盖在奖励页上时滑动无效：本轮只关弹窗、不滑动；
+            # 仍占用一轮循环，弹窗关不掉时不会无限点击。
+            _sleep(settle_seconds, sleep)
+            continue
         watch = _find(boxes, ("立即观看",))
         if watch is not None:
             return watch
@@ -207,6 +242,10 @@ def back_to_reward(
             _tap(client, give_up)
             _sleep(settle_seconds, sleep)
             continue
+        # 每日弹窗透出背景奖励页 / 书架文案，必须先关掉再确认页面。
+        if _tap_blocking_popup(client, boxes):
+            _sleep(settle_seconds, sleep)
+            continue
         close = next(
             (item for item in boxes if item[0].strip() in _CLOSE_TEXTS and item[1][1] < 400),
             None,
@@ -223,4 +262,4 @@ def back_to_reward(
     return False
 
 
-__all__ = ["back_to_reward", "find_watch_entry", "goto_reward_page"]
+__all__ = ["back_to_reward", "dismiss_blocking_popup", "find_watch_entry", "goto_reward_page"]
