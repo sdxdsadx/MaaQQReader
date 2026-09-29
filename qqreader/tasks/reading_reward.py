@@ -204,6 +204,9 @@ def claim_reading_rewards(
         )
 
     clicked = 0
+    # 2026-09-29 实机：最后一帧 OCR 把「今日已获赠币」和数字拆成两个框，读不到
+    # 数字；点击过程中每帧都读，保留最后一次读到的值作为领取后的币值。
+    after = before
     for _ in range(3):
         buttons = reading_claim_buttons(boxes)
         if not buttons:
@@ -212,12 +215,14 @@ def claim_reading_rewards(
         clicked += 1
         time.sleep(2)
         boxes = _show_reading_card(client)
+        coins = parse_coin_total(boxes)
+        if coins is not None:
+            after = coins
         if reading_rewards_complete(boxes):
             break
 
     after_path = screenshot_dir / f"{evidence_prefix}_after.png"
     _save_evidence(client, after_path)
-    after = parse_coin_total(boxes)
     complete = reading_rewards_complete(boxes)
     grew = before is not None and after is not None and after > before
     if complete or grew:

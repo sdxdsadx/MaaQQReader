@@ -432,6 +432,52 @@ def _apply_level_ad_retention_overrides(data: Dict[str, Any]) -> None:
                 nexts.insert(nexts.index("AdBrowseOfferModal"), "AdCountdown")
 
 
+EXTERNAL_POPUP_DISMISS_NODE = "ExternalPopupDismiss"
+#: 进入奖励页后、开始找「去点评」时的节点；每日签到弹窗在当天第一次进奖励页时出现。
+EXTERNAL_POPUP_HOSTS = (
+    "ExternalOpenRewardFromShelf",
+    "ExternalRewardPageReady",
+    "ExternalScrollToDianping",
+    "ExternalBackUntilRewardOrShelf",
+)
+
+
+def _external_popup_expected() -> str:
+    from qqreader.page.blocking_popup import DISMISS_LABELS
+
+    # 「取消」「不了」在奖励页任务行里可能是正常文字的一部分，这里只用整框
+    # 精确匹配的纯关闭类按钮；X 图形由下一项任务前的交接检查处理（pipeline
+    # 节点无法排除奖励页「邀请好友」头像被 OCR 成的 X）。
+    labels = [label for label in DISMISS_LABELS if label not in ("取消", "不了")]
+    return "^(" + "|".join(labels) + ")$"
+
+
+def _apply_external_popup_overrides(data: Dict[str, Any]) -> None:
+    """奖励页上的计划外弹窗先点关闭类按钮，再找「去点评」。
+
+    2026-09-28 run ``daily_20260928_233026_1486afea``：当天第一次进奖励页弹出
+    「签到成功，获得10赠币 / 我知道了」。``ExternalRewardPageReady`` 只认
+    「今日已获赠币」，弹窗下照样命中，随后 ``ExternalScrollToDianping`` 在弹窗上
+    空滑 14 次失败。节点只点「我知道了 / 关闭 / 以后再说 …」这类按钮，不点
+    「看视频额外领」（会打开广告）；ROI 避开状态栏和底部导航。
+    """
+    data[EXTERNAL_POPUP_DISMISS_NODE] = {
+        "recognition": "OCR",
+        "expected": _external_popup_expected(),
+        "roi": [0, 120, 720, 1030],
+        "action": "Click",
+        "post_delay": 1500,
+        "max_hit": 3,
+        "focus": "关闭奖励页计划外弹窗",
+        "next": ["ExternalBothComplete", "ExternalRewardPageReady", "ExternalScrollToDianping"],
+    }
+    for name in EXTERNAL_POPUP_HOSTS:
+        node = data.get(name)
+        if isinstance(node, dict) and isinstance(node.get("next"), list):
+            if EXTERNAL_POPUP_DISMISS_NODE not in node["next"]:
+                node["next"].insert(0, EXTERNAL_POPUP_DISMISS_NODE)
+
+
 def _apply_audiobook_book_overrides(
     data: Dict[str, Any], selection: BookSelection, *, with_cover: bool
 ) -> None:
@@ -493,6 +539,8 @@ def _patch_legacy_pipeline(
             _apply_level_ad_runtime_overrides(data)
         if task == "DailyAudiobookFlow" and selection is not None:
             _apply_audiobook_book_overrides(data, selection, with_cover=with_cover)
+        if task == "DailyExternalAppFlow":
+            _apply_external_popup_overrides(data)
         if node and minutes and node in data:
             data[node]["post_delay"] = int(float(minutes) * 60000)
         pipeline_path.write_text(
@@ -986,6 +1034,7 @@ def _main(args: argparse.Namespace, policy: BackoffPolicy, config: Any) -> int:
                 timeout_seconds=args.timeout_minutes * 60.0,
                 game_duration_seconds=float(game_duration) * 60.0,
                 captcha_guard=captcha_guard,
+                navigation_client=client,
             )
         else:
             definition = build_ad_definition(

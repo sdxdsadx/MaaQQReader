@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import re
-from typing import Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
 
 from ..captcha.factory import build_default_captcha_guard
 from ..captcha.guard import CaptchaGuard, ManualCaptchaGuard
@@ -18,6 +18,7 @@ from ..contract.conditions import (
     state_in,
 )
 from ..contract.contract import TaskContract, TimeoutSpec
+from ..page.blocking_popup import may_have_blocking_popup
 from ..page.feature_keys import DEFAULT_FEATURE_KEYS, FeatureKeys
 from ..page.recognizer import PageStateRecognizer
 from ..page.states import PageState
@@ -33,7 +34,10 @@ from .common import (
     popup_recoverable,
     wrong_page_recoverable,
 )
-from .plan import Action, PlannedTaskAdapter, StateActionPlan
+from .plan import Action, ActionKind, PlannedTaskAdapter, StateActionPlan
+
+if TYPE_CHECKING:  # pragma: no cover
+    from ..maa.client import MaaClient
 
 GAME_TASK_NAME = "DailyGameFlow"
 DEFAULT_GAME_TIMEOUT_SECONDS = 30 * 60
@@ -84,8 +88,10 @@ def build_game_contract(
         # 成功语义回归任务本质：进游戏→挂机计时→自动退出→回到奖励页，
         # 流程闭环即 success。赠币计数（game_coin_baseline/after）仍由
         # adapter 捕获，但只作遥测证据，不作门禁条件。
+        # 2026-09-29：退出游戏后的奖励页常因「游戏任意充值领赠币 / 去玩游戏」
+        # 行被识别成 GAME_ENTRY；它就是同一个奖励页，同样算回到奖励页。
         success_condition=all_of(
-            StateIs(PageState.REWARD_HOME),
+            state_in(PageState.REWARD_HOME, PageState.GAME_ENTRY),
             game_flow_completed(),
         ),
         recoverable_error=(
@@ -256,6 +262,9 @@ class GameTaskAdapter(PlannedTaskAdapter):
         #: issue #12：游戏中心列表页救援开关与「在线玩」tab 下首卡坐标。
         list_page_rescue_enabled: bool = True,
         list_page_card_points: Optional[Tuple[Action, ...]] = None,
+        #: 用于关闭每日弹窗的 Maa 客户端（重新截图取 OCR 坐标）；为 None 时不处理。
+        navigation_client: Optional["MaaClient"] = None,
+        max_popup_taps: int = 3,
     ) -> None:
         super().__init__(
             device=device,
@@ -269,6 +278,8 @@ class GameTaskAdapter(PlannedTaskAdapter):
             raise ValueError("max_entry_scrolls 必须 >= 0")
         self._game_duration = game_duration_seconds
         self._exit_action = exit_action
+        self._navigation_client = navigation_client
+        self._max_popup_taps = max_popup_taps
         self._reward_entry_key = reward_entry_key
         self._go_play_key = go_play_key
         self._reward_entry_text = reward_entry_text
@@ -365,6 +376,10 @@ class GameTaskAdapter(PlannedTaskAdapter):
         keys = DEFAULT_FEATURE_KEYS
         state = context.decision.state if context.decision is not None else None
 
+        popup_step = self._dismiss_blocking_popup(context, state)
+        if popup_step is not None:
+            return popup_step
+
         # issue #12：真机日志中列表页被误判成 GAME_RUNNING（空转 40 分钟），
         # 但其 OCR 指纹是列表页。无论识别器给出什么状态，只要「在线玩」+
         # 「阅游戏」同屏且尚未退出游戏，一律走列表页救援。
@@ -402,7 +417,10 @@ class GameTaskAdapter(PlannedTaskAdapter):
                     progress=True,
                 )
             if context.now - float(started) >= self._game_duration:
-                context.update_data(game_exit_started=True, game_exit_done=True)
+                context.update_data(
+                    game_exit_started=True, game_exit_done=True,
+                    game_claim_pending=self._navigation_client is not None,
+                )
                 return self._execute(Action.press_back(), context)
             return self._execute(Action.wait(10.0), context)
 
@@ -410,6 +428,8 @@ class GameTaskAdapter(PlannedTaskAdapter):
             """issue #11：退出游戏后先读「今日已获赠币」计数器——数值较进游戏前
             增长即视为领取成功（不再依赖页面按钮文案）；「立即领取」出现仍直接点；
             都没有时才滚动查找。绝不点「去玩游戏」，绝不做下拉刷新手势。"""
+            if ctx.get("game_claim_pending"):
+                return self._claim_game_row(ctx)
             baseline = ctx.get("game_coin_baseline")
             current = self._read_granted_coin(ctx)
             if baseline is not None and current is not None:
@@ -567,6 +587,7 @@ class GameTaskAdapter(PlannedTaskAdapter):
                     context.update_data(
                         game_exit_started=True,
                         game_exit_done=True,
+                        game_claim_pending=self._navigation_client is not None,
                     )
                     return self._execute(self._exit_action, context)
                 return StepResult(
@@ -586,6 +607,69 @@ class GameTaskAdapter(PlannedTaskAdapter):
                 context.update_data(game_shelf_tab_taps=taps + 1)
                 return self._execute(Action.tap_point(89, 1263), context)
         return super().advance(context)
+
+    def _claim_game_row(self, context: TaskContext) -> StepResult:
+        """点「玩游戏领赠币」那一行的「立即领取」，直到该行不再显示它。
+
+        2026-09-29 实机 run daily_20260929_111500_9cb3bb10：退出游戏后游戏行显示
+        「立即领取 / 每日在线游戏20分钟即可领取」，旧逻辑看到「今日已获赠币」
+        50 → 70（其他任务的币）就判领取成功，没点按钮。每次只点一下，下一步
+        重新截图确认；最多点 ``max_popup_taps`` 次，之后不再阻塞成功判定。
+        """
+        from ..reward.nav import find_row_button
+
+        assert self._navigation_client is not None
+        button = find_row_button(
+            self._navigation_client, (self._reward_entry_text,), (self._claim_text,)
+        )
+        taps = int(context.get("game_claim_taps", 0))
+        if button is not None and taps < self._max_popup_taps:
+            _, (x, y, width, height) = button
+            self._navigation_client.click(x + width // 2, y + height // 2)
+            context.update_data(game_claim_taps=taps + 1)
+            return StepResult(
+                f"点击游戏行「{self._claim_text}」({x + width // 2}, {y + height // 2})",
+                actions=(ActionKind.TAP_POINT.value,),
+                progress=True,
+            )
+        context.update_data(game_claim_pending=False)
+        if button is None:
+            return StepResult("游戏行已无「立即领取」，游戏奖励已领取或无需领取", progress=True)
+        return StepResult(
+            f"游戏行「立即领取」点击 {taps} 次仍在，停止重复点击", progress=True
+        )
+
+    def _dismiss_blocking_popup(
+        self, context: TaskContext, state: Optional[PageState]
+    ) -> Optional[StepResult]:
+        """书架运营海报 / 奖励页签到弹窗：先关掉，不在遮罩下点入口。
+
+        2026-09-28 书架弹窗遮住入口，游戏在 HOME 反复点「再读7分钟领20赠币」
+        空转 35 分钟超时。每次只点一下，下一步重新观测确认；同一弹窗最多点
+        ``max_popup_taps`` 次，之后交回原有流程与恢复阶梯。
+        """
+        if self._navigation_client is None or state not in (
+            PageState.HOME, PageState.REWARD_HOME, PageState.GAME_ENTRY,
+        ):
+            return None
+        if not may_have_blocking_popup(context.observation.ocr_texts):
+            context.data.pop("game_popup_taps", None)
+            return None
+        taps = int(context.get("game_popup_taps", 0))
+        if taps >= self._max_popup_taps:
+            return None
+        from ..reward.nav import dismiss_blocking_popup
+
+        popup = dismiss_blocking_popup(self._navigation_client)
+        if popup is None:
+            return None
+        context.update_data(game_popup_taps=taps + 1)
+        label, (x, y) = popup
+        return StepResult(
+            f"关闭遮挡入口的每日弹窗：点「{label}」({x}, {y})",
+            actions=(ActionKind.TAP_POINT.value,),
+            progress=True,
+        )
 
     def _advance_game_center(self, context: TaskContext) -> StepResult:
         """游戏中心列表页推进（issue #12：OCR 定位优先 + 坐标兜底）。
@@ -736,6 +820,7 @@ def build_game_definition(
     game_duration_seconds: float = DEFAULT_GAME_DURATION_SECONDS,
     captcha_guard: Optional[CaptchaGuard] = None,
     entry_scroll_action: Optional[Action] = None,
+    navigation_client: Optional["MaaClient"] = None,
 ) -> TaskDefinition:
     """装配游戏任务。"""
     contract = build_game_contract(keys, timeout_seconds=timeout_seconds)
@@ -781,6 +866,7 @@ def build_game_definition(
         agreement_action=Action.tap_point(157, 1032),
         agreement_action_alt=Action.tap_point(152, 1066),
         entry_scroll_action=entry_scroll_action,
+        navigation_client=navigation_client,
     )
     if captcha_guard is None:
         captcha_guard = build_default_captcha_guard(

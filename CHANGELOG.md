@@ -21,6 +21,69 @@
 
 ---
 
+## 2026-09-29 · 计划外弹窗统一优先找关闭按钮；修复奖励页被判书架、游戏退出后不领奖空转、阅读领奖漏读币值
+
+**触发**：用户要求不要只处理固定弹窗——任何计划外弹窗都优先找关闭按钮（X 或「关闭」），并实机完整跑一轮（自动阅读 1 轮 × 10 分钟）。实机运行 `daily_20260929_111500_9cb3bb10` 和补跑 `daily_20260929_123918_ff2993fd` 又暴露三个原有缺陷。
+
+| 模块 | 现象 / 原因 | 修改 |
+| --- | --- | --- |
+| `qqreader/page/blocking_popup.py`（重写） | 上一条按“签到成功”和“居中 X + 正上方按钮”两种固定版式识别，新活动换版式就会漏 | 通用规则：背景是计划内主页面（书架 / 奖励页 / 书城的独有文案）时，在屏幕中部（按钮中心 y 120～1150）先找关闭类文字（我知道了 / 知道了 / 关闭 / 以后再说 / 下次再说 / 暂不 / 暂不需要 / 残忍拒绝 / 不了 / 取消），再找单独的 X / × / ✕，多个取最靠中线的；弹窗盖满屏、只剩底部导航「书架 / 书城」tab 时只认居中（偏离中线 ≤40）的 X。排除页面自带 X：奖励页「邀请好友」一排头像占位（同行多个 X / + 或正下方「待邀请」）、听书时书架左下角悬浮播放器的 X（同屏「正在播放」，点了会停听书）。有验证码时一律不点。不点任何「立即参与 / 看视频额外领 / 立即领取」 |
+| `scripts/run_task.py::_apply_external_popup_overrides` | 外部 App 覆盖节点原来只认「我知道了」 | 改名 `ExternalPopupDismiss`，OCR 整框匹配上述关闭类文字（去掉易与任务行文字混淆的「取消」「不了」），ROI `[0,120,720,1030]`；X 图形由交接检查处理（pipeline 节点排除不了邀请头像的 X） |
+| `scripts/auto_read_30min.py::classify_page` | 实机 05:15：关掉签到弹窗后停在奖励页，奖励页的「今日再读7分钟领20赠币」含书架判据「再读」，被判成书架 → 白名单拒绝 exit 3 | 新增 `REWARD_PAGE_MARKERS`，先判「奖励页」，由回书架流程按返回键 |
+| `qqreader/tasks/game.py`、`qqreader/contract/conditions.py::GameFlowCompleted`、`qqreader/reward/nav.py::find_row_button` | 实机 05:41～05:50：退出游戏后奖励页因「游戏任意充值领赠币 / 去玩游戏」行被识别成 `GAME_ENTRY`，成功条件只认 `REWARD_HOME`；领奖分支看到「今日已获赠币」50 → 70（其他任务的币）就判领取成功、不点游戏行的「立即领取」，每 10 秒空转一次直到 35 分钟超时 | 成功条件改为 `REWARD_HOME` 或 `GAME_ENTRY`；有设备客户端时退出游戏即置 `game_claim_pending`，回奖励页后重新截图，点「玩游戏领赠币」同一行（纵向 ≤45）的「立即领取」，该行不再有按钮才清除标记（最多点 3 次）；`GameFlowCompleted` 在标记未清除时不判成功 |
+
+| `qqreader/tasks/reading_reward.py::claim_reading_rewards` | 补跑 06:50：只读 13 分钟，10 分钟档领到（赠币 194 → 214、按钮变「已领取」），30 分钟档按钮是灰的点不动；最后一帧 OCR 把「今日已获赠币」和数字拆成两个框，只看最后一帧就读不到币值 → 判“缺少币值证据” exit 2 | 点击过程中每帧都读币值，保留最后一次读到的值 |
+
+**改动文件**：上表各文件；`tests/test_daily_popups.py`、`tests/fixtures/daily_popup_ocr_frames.json`（新增实机帧：另外两期活动弹窗、听书悬浮播放器、验证码帧、「我的」页、09-29 签到弹窗、签到后的奖励页、游戏退出后的奖励页、阅读领奖三帧）；本日志。
+**验证**：
+- 识别离线回放：`maafw*.log` 全部 11188 帧真实 OCR，只命中签到弹窗与三期不同活动弹窗（09-24 中秋找玉兔、09-27 现金红包〈盖满屏〉、09-28 秋日豪礼）；邀请头像、悬浮播放器、验证码、「我的」页、广告页、游戏页均不命中。
+- 全量 `py -3.10 -m pytest`：456 passed、4 failed（master 原有已知失败，见 `claude/known-test-failures-20260929`）、1 skipped；新增用例全部用真实 OCR 帧，修复前对应用例均失败。
+- 实机（worktree 代码；命令行按 GUI「直接运行已选」同一套 `build_serial_plan` / `build_run_task_command` / `build_handoff_command` / `apply_handoff` 串行，任务间隔 3 秒 + 交接检查；用户未授权桌面操作，未点 GUI）：
+
+| 运行 | 任务 | 结果 |
+| --- | --- | --- |
+| `daily_20260929_111500_9cb3bb10` | 自动阅读 1×10 分钟 | 失败 exit 3：开跑即遇今日「签到成功」弹窗，第 1 次点「我知道了」时弹窗在动画中未关，重新截图后第 2 次关掉；随后奖励页被判书架（本次修复前代码） |
+| 同上 | 游戏 25 分钟 | 失败 exit 11：挂机、退出正常，回奖励页后空转到 35 分钟超时（本次修复前代码） |
+| 同上 | 广告 / 等级广告 / 听书 35 分钟 / 外部 App | 全部成功；每项前的交接检查均 READY |
+| `daily_20260929_123918_ff2993fd`（补跑） | 自动阅读 1×10 分钟 | 起点停在奖励页（含被 OCR 成「X X」的邀请头像，未误点）→ 判「奖励页」按返回 1 次回书架 → 选中《宇智波》读满 10 分钟；领奖 exit 2（上表阅读领奖缺陷，已修复，仅由真实帧回放测试覆盖，未再实机补跑：今日已读 23 分钟，再读 10 分钟也到不了 30 分钟档，必然无可领） |
+| 同上 | 游戏 25 分钟 | **成功**（27 分钟）：退出后点游戏行「立即领取」(592,611)，重新截图确认按钮消失后判成功 |
+
+**未覆盖 / 遗留**：书架活动海报（X 图形）与「关闭」文字弹窗本次实机没有出现，只由历史真实帧回放和单元测试覆盖；阅读领奖修复未实机复跑；旧 pipeline 任务运行中途弹出的 X 图形弹窗只靠下一项前的交接检查关闭；奖励页里性质不明、偏离中线的 X 保守不点。实机运行使用 worktree 下复制的本机配置 `configs/qqreader.local.json` 与任务表 `runtime/gui_tasks.json`（均被 .gitignore 忽略，未入库）。
+**分支**：`claude/daily-popup-dismiss-20260929`
+**回滚**：`git log --oneline -S "计划外弹窗统一优先找关闭按钮" -- CHANGELOG.md` 定位后 `git revert <hash>`。
+
+---
+
+## 2026-09-29 · 关闭书架每日运营弹窗与奖励页签到弹窗，避免后续任务全部卡住
+
+**触发**：用户反馈每日第一次进奖励页时的签到弹窗没有及时关闭，自动阅读之后的任务全部卡住。运行 `daily_20260928_233026_1486afea`（`runtime/records/daily_flows/`）7 项全部失败；用 `runtime/logs/auto_read.log`、`gui_*.log`、`maafw.bak.2026.09.28-18.07/18.25.log`、`maafw.log` 的 OCR 逐帧还原。
+
+| 时间（本机） | 现象 | 根因 |
+| --- | --- | --- |
+| 18:02（北京 00:02 跨天） | 自动阅读第 3 段回书架后 exit 3「书架上没有白名单书目」；第 2 次阅读同样 exit 3 | 书架弹出运营海报「双倍月票开启 / 秋日豪礼开抢 / 立即参与」，海报下方单独一个 X（OCR `X (342,930,33,32)`）。海报遮住书名（「宇智波」被读成「宇餐」），背景书架文案仍在，`classify_page` 判成书架 → 白名单拒绝。原活动弹窗只认写死的活动文案（「找兔子」等），不认识这一期 |
+| 18:02～18:39 | 交接检查 5 次都判 READY；游戏在 HOME 连点 694 次「再读7分钟领20赠币」直到 35 分钟超时；广告 `ad_watch_entry_not_found`；等级广告失败 | `handoff.classify_frame` 同样把弹窗后的书架判成 SHELF；`reward/nav.goto_reward_page` 只关 y<400 的 X；游戏计划在遮罩下点入口。弹窗从 18:02 一直挂到 18:39 |
+| 18:40 | 外部 App 失败 | 当天第一次进奖励页弹出「签到成功，获得10赠币 / 看视频额外领 / 我知道了」。`ExternalRewardPageReady` 只认「今日已获赠币」，弹窗下照样命中，`ExternalScrollToDianping` 在弹窗上空滑 14 次 |
+
+| 模块 | 修改 |
+| --- | --- |
+| 新增 `qqreader/page/blocking_popup.py` | `find_blocking_popup(boxes)`：签到弹窗（「签到成功」+「我知道了」）→ 点「我知道了」，不点「看视频额外领」；居中运营海报按版式识别——屏幕中部（水平偏离中线 ≤40、y 300～1150）单独的 X，正上方 40～320 像素有居中的短按钮文案 → 点 X。不依赖活动文案（同一活动也会以横幅出现在书城页）。`may_have_blocking_popup(texts)` 供只有文字的地方预检 |
+| `qqreader/runner/handoff.py` | 新增 `FrameKind.BLOCKING_POPUP`，排在验证码 / 确认框 / 挽留弹窗之后、书架之前；点 OCR 看到的关闭按钮后重新截图确认 |
+| `scripts/auto_read_30min.py` | `classify_page` 有弹窗时返回「弹窗」而不是「书架」；`dismiss_blocking_dialogs` 先关每日弹窗（升级 / 退出确认框叠在上面时仍先点它的「取消」） |
+| `qqreader/reward/nav.py` | `goto_reward_page`、`find_watch_entry`、`back_to_reward` 在确认页面前先关每日弹窗；新增 `dismiss_blocking_popup(client)` |
+| `qqreader/tasks/game.py`、`scripts/run_task.py` | 游戏适配器接收 `navigation_client`：HOME / REWARD_HOME / GAME_ENTRY 下 OCR 预检到 X 或「签到成功」时重新截图，点关闭按钮，下一步重新观测；同一弹窗最多点 3 次后交回原流程 |
+| `scripts/run_task.py::_apply_external_checkin_popup_overrides` | 外部 App 运行时覆盖新增节点 `ExternalCheckinPopupDismiss`（OCR `^我知道了$`，ROI `[180,690,360,140]`，max_hit 3），排在 `ExternalOpenRewardFromShelf` / `ExternalRewardPageReady` / `ExternalScrollToDianping` / `ExternalBackUntilRewardOrShelf` 的 next 最前 |
+
+**改动文件**：上表各文件；`tests/test_daily_popups.py`（17 项）、`tests/fixtures/daily_popup_ocr_frames.json`（6 帧真实 OCR：书架海报、签到弹窗、弹窗关闭后的书架、普通奖励页，以及两个反例——书城横幅上的同款活动文案、奖励页偏离中线的 X）；本日志。
+**验证**：
+- 识别离线回放：`maafw*.log` 全部 10207 帧真实 OCR 中，命中的只有签到弹窗（09-22、09-23、09-28）、书架运营海报（09-24「中秋找玉兔」、09-27「现金红包」、09-28「秋日豪礼」）；09-28 当天 1446 帧书架海报、179 帧签到弹窗全部命中，其余帧 0 误中。
+- 新测试先写：接入前 15 项中 9 项失败（识别函数 6 项通过）；之后补的外部 App 覆盖、升级框优先 2 项未在修复前单独跑过。修复后 17 项全部通过。全量 `py -3.10 -m pytest`：441 passed、4 failed、3 skipped；4 项失败是 master 上原有的已知失败（广告等待 40/35 秒 ×2、直播退出、`live_sendevent` 未入库），在分支 `claude/known-test-failures-20260929` 另行修复。
+- **未实机验证**：两类弹窗每天只在跨天后 / 第一次进奖励页出现，需等下一次每日运行自然触发。
+**未覆盖 / 遗留**：旧 pipeline 任务（外部 App、听书、等级广告）运行中途才弹出的书架海报只靠下一次交接检查关闭，pipeline 内没有加 X 节点（「我的」页有图标会被 OCR 成 X，Maa 节点无法同时校验按钮文案）；广告任务的 `AdTaskAdapter` 通过 `reward/nav` 覆盖，未单独加适配器级处理；奖励页偏离中线的 X（09-22/09-26 各一帧，性质未确认）保守不点。
+**分支**：`claude/daily-popup-dismiss-20260929`
+**回滚**：`git log --oneline -S "关闭书架每日运营弹窗与奖励页签到弹窗" -- CHANGELOG.md` 定位后 `git revert <hash>`。
+
+---
+
 ## 2026-09-27 · GUI 实机验证模拟器地址 / 书名 / 封面，修正截取对话框说明被截断
 
 **触发**：用户要求实际操作并实机验证上一条的新功能（合并后的 `master`，`启动QQReaderGUI.cmd` 启动 GUI，通过桌面操作点击）。
