@@ -97,6 +97,27 @@ def _tap_blocking_popup(client: MaaClient, boxes: Sequence[OcrBox]) -> bool:
     return True
 
 
+def find_row_button(
+    client: MaaClient,
+    row_markers: Sequence[str],
+    labels: Sequence[str],
+    *,
+    row_gap: int = 45,
+) -> Optional[OcrBox]:
+    """重新截图，返回与 ``row_markers`` 同一行（纵向相差 ≤ ``row_gap``）的按钮框。
+
+    奖励页多行都有「立即领取」，只认目标任务那一行；有验证码时返回 None。
+    """
+    boxes = _ocr(client)
+    if _contains_any(_joined(boxes), _CAPTCHA_MARKERS):
+        return None
+    rows = [box for text, box in boxes if _contains_any(text, row_markers)]
+    for text, box in boxes:
+        if text.strip() in labels and any(abs(box[1] - row[1]) <= row_gap for row in rows):
+            return text, box
+    return None
+
+
 def dismiss_blocking_popup(client: MaaClient) -> Optional[Tuple[str, Tuple[int, int]]]:
     """重新截图；有每日弹窗就点关闭并返回 (按钮, 坐标)，验证码或无弹窗返回 None。
 
@@ -262,4 +283,10 @@ def back_to_reward(
     return False
 
 
-__all__ = ["back_to_reward", "dismiss_blocking_popup", "find_watch_entry", "goto_reward_page"]
+__all__ = [
+    "back_to_reward",
+    "dismiss_blocking_popup",
+    "find_row_button",
+    "find_watch_entry",
+    "goto_reward_page",
+]

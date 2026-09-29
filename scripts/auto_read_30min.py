@@ -100,6 +100,10 @@ NON_SHELF_MARKERS = (
     "关注", "广场", "一键三连",
     "分享", "热门话题", "回复",
 )
+# 奖励页独有文案。奖励页也有「今日再读7分钟领20赠币」，含书架判据「再读」，
+# 必须先排除（2026-09-29 实机 run daily_20260929_111500_9cb3bb10：关掉签到弹窗后
+# 停在奖励页，被判成书架 → 白名单拒绝 exit 3）。
+REWARD_PAGE_MARKERS = ("今日已获赠币", "每日阅读领赠币", "看小视频领好礼", "签到提醒", "获奖记录")
 # 书城首页/排行榜的频道与榜单文案；命中 2 个以上即判定为书城，不是书架。
 BOOKSTORE_MARKERS = ("男生", "女生", "排行榜", "本周强推", "今日必读", "高分必读")
 # 回书架时确认不了页面的受控重试次数（每次都重新截图确认）。
@@ -376,7 +380,7 @@ def is_on_shelf() -> bool:
 
 
 def classify_page(boxes: list[tuple[str, tuple[int, int, int, int]]]) -> str:
-    """把一帧 OCR 归为「书架 / 书城 / 弹窗 / 其他 / 无文本」，供判定和失败记录共用。"""
+    """把一帧 OCR 归为「书架 / 书城 / 奖励页 / 弹窗 / 其他 / 无文本」，供判定和失败记录共用。"""
     if not boxes:
         return "无文本"
     # 弹窗遮住书名时 OCR 仍读得到书架文案；不能当成书架去做白名单校验。
@@ -386,6 +390,8 @@ def classify_page(boxes: list[tuple[str, tuple[int, int, int, int]]]) -> str:
     joined = " ".join(texts)
     if any(marker in joined for marker in NON_SHELF_MARKERS):
         return "其他"
+    if any(marker in joined for marker in REWARD_PAGE_MARKERS):
+        return "奖励页"
     if sum(marker in joined for marker in BOOKSTORE_MARKERS) >= 2:
         return "书城"
     if any(marker in joined for marker in SHELF_ONLY_MARKERS):

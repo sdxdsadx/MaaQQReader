@@ -273,6 +273,10 @@ class GameFlowCompleted(Condition):
         exit_done = bool(context.get("game_exit_done"))
         if not exit_done:
             return ConditionResult.no("游戏退出流程尚未完成")
+        # 2026-09-29：游戏行出现「立即领取」（每日在线游戏20分钟 +20 赠币）时，
+        # adapter 先点它；领取确认前不判成功。
+        if context.get("game_claim_pending"):
+            return ConditionResult.no("游戏奖励尚未领取")
         return ConditionResult.yes(
             "游戏已退出并回到奖励页，daily 流程闭环",
             game_coin_baseline=context.get("game_coin_baseline"),

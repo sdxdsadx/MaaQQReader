@@ -88,8 +88,10 @@ def build_game_contract(
         # 成功语义回归任务本质：进游戏→挂机计时→自动退出→回到奖励页，
         # 流程闭环即 success。赠币计数（game_coin_baseline/after）仍由
         # adapter 捕获，但只作遥测证据，不作门禁条件。
+        # 2026-09-29：退出游戏后的奖励页常因「游戏任意充值领赠币 / 去玩游戏」
+        # 行被识别成 GAME_ENTRY；它就是同一个奖励页，同样算回到奖励页。
         success_condition=all_of(
-            StateIs(PageState.REWARD_HOME),
+            state_in(PageState.REWARD_HOME, PageState.GAME_ENTRY),
             game_flow_completed(),
         ),
         recoverable_error=(
@@ -415,7 +417,10 @@ class GameTaskAdapter(PlannedTaskAdapter):
                     progress=True,
                 )
             if context.now - float(started) >= self._game_duration:
-                context.update_data(game_exit_started=True, game_exit_done=True)
+                context.update_data(
+                    game_exit_started=True, game_exit_done=True,
+                    game_claim_pending=self._navigation_client is not None,
+                )
                 return self._execute(Action.press_back(), context)
             return self._execute(Action.wait(10.0), context)
 
@@ -423,6 +428,8 @@ class GameTaskAdapter(PlannedTaskAdapter):
             """issue #11：退出游戏后先读「今日已获赠币」计数器——数值较进游戏前
             增长即视为领取成功（不再依赖页面按钮文案）；「立即领取」出现仍直接点；
             都没有时才滚动查找。绝不点「去玩游戏」，绝不做下拉刷新手势。"""
+            if ctx.get("game_claim_pending"):
+                return self._claim_game_row(ctx)
             baseline = ctx.get("game_coin_baseline")
             current = self._read_granted_coin(ctx)
             if baseline is not None and current is not None:
@@ -580,6 +587,7 @@ class GameTaskAdapter(PlannedTaskAdapter):
                     context.update_data(
                         game_exit_started=True,
                         game_exit_done=True,
+                        game_claim_pending=self._navigation_client is not None,
                     )
                     return self._execute(self._exit_action, context)
                 return StepResult(
@@ -599,6 +607,37 @@ class GameTaskAdapter(PlannedTaskAdapter):
                 context.update_data(game_shelf_tab_taps=taps + 1)
                 return self._execute(Action.tap_point(89, 1263), context)
         return super().advance(context)
+
+    def _claim_game_row(self, context: TaskContext) -> StepResult:
+        """点「玩游戏领赠币」那一行的「立即领取」，直到该行不再显示它。
+
+        2026-09-29 实机 run daily_20260929_111500_9cb3bb10：退出游戏后游戏行显示
+        「立即领取 / 每日在线游戏20分钟即可领取」，旧逻辑看到「今日已获赠币」
+        50 → 70（其他任务的币）就判领取成功，没点按钮。每次只点一下，下一步
+        重新截图确认；最多点 ``max_popup_taps`` 次，之后不再阻塞成功判定。
+        """
+        from ..reward.nav import find_row_button
+
+        assert self._navigation_client is not None
+        button = find_row_button(
+            self._navigation_client, (self._reward_entry_text,), (self._claim_text,)
+        )
+        taps = int(context.get("game_claim_taps", 0))
+        if button is not None and taps < self._max_popup_taps:
+            _, (x, y, width, height) = button
+            self._navigation_client.click(x + width // 2, y + height // 2)
+            context.update_data(game_claim_taps=taps + 1)
+            return StepResult(
+                f"点击游戏行「{self._claim_text}」({x + width // 2}, {y + height // 2})",
+                actions=(ActionKind.TAP_POINT.value,),
+                progress=True,
+            )
+        context.update_data(game_claim_pending=False)
+        if button is None:
+            return StepResult("游戏行已无「立即领取」，游戏奖励已领取或无需领取", progress=True)
+        return StepResult(
+            f"游戏行「立即领取」点击 {taps} 次仍在，停止重复点击", progress=True
+        )
 
     def _dismiss_blocking_popup(
         self, context: TaskContext, state: Optional[PageState]

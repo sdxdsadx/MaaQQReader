@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, List, Mapping, Sequence, Tuple
@@ -108,13 +109,25 @@ class FakeClient:
 # ------------------------------------------------------------------ 识别
 
 
-def test_detects_shelf_promo_popup_close_by_layout() -> None:
-    assert find_blocking_popup(PROMO) == ("X", PROMO_X)
+@pytest.mark.parametrize(
+    "name,expected",
+    [
+        ("shelf_promo_popup", ("X", PROMO_X)),
+        # 另外两期不同文案的活动弹窗：规则里没有任何活动文案，同样命中。
+        ("shelf_cash_popup_20260927", ("X", (358, 946))),
+        ("shelf_midautumn_popup_20260924", ("X", (358, 946))),
+        # 关闭类文字优先：点「我知道了」，不点「看视频额外领」，也不点同帧的 X。
+        ("reward_checkin_popup", ("我知道了", CHECKIN_OK)),
+    ],
+)
+def test_any_popup_over_main_page_is_closed_by_its_close_button(name, expected) -> None:
+    assert find_blocking_popup(frame(name)) == expected
 
 
-def test_detects_reward_checkin_popup_and_prefers_acknowledge_button() -> None:
-    # 不点「看视频额外领」（会打开广告），也不点同帧下方的 X。
-    assert find_blocking_popup(CHECKIN) == ("我知道了", CHECKIN_OK)
+def test_close_text_button_is_preferred_over_glyph() -> None:
+    # 真实书架帧 + 一个「关闭」文字按钮（历史日志里还没有这种弹窗的实拍帧）。
+    boxes = SHELF + [("关闭", (320, 900, 80, 36)), ("X", (600, 400, 30, 30))]
+    assert find_blocking_popup(boxes) == ("关闭", (360, 918))
 
 
 @pytest.mark.parametrize(
@@ -124,11 +137,17 @@ def test_detects_reward_checkin_popup_and_prefers_acknowledge_button() -> None:
         "reward_page_plain",
         # 同一活动以横幅出现在书城页，不是弹窗。
         "bookstore_banner_same_campaign",
-        # 奖励页偏离中线的 X（性质未确认），保守不点。
+        # 奖励页「邀请好友」头像占位被 OCR 成一排 X / x。
         "reward_page_offcenter_x",
+        # 听书时书架左下角悬浮播放器的 X：点了会停止听书。
+        "shelf_audiobook_mini_player",
+        # 验证码只交给 CaptchaGuard。
+        "reward_captcha_with_x",
+        # 「我的」页不是计划内主页面，它的 X 是页面图标。
+        "my_page_with_x",
     ],
 )
-def test_plain_pages_are_not_blocking_popups(name: str) -> None:
+def test_page_owned_x_is_not_treated_as_popup(name: str) -> None:
     assert find_blocking_popup(frame(name)) is None
 
 
@@ -296,14 +315,140 @@ def test_external_pipeline_dismisses_checkin_popup_before_reward_page_nodes(tmp_
 
     assert run_task._patch_legacy_pipeline(tmp_path, None, None, "DailyExternalAppFlow") == original
     data = json.loads(pipeline.read_text(encoding="utf-8"))
-    node = data[run_task.EXTERNAL_CHECKIN_DISMISS_NODE]
-    # 「我知道了」的真实 OCR 框必须落在节点 ROI 内。
-    label, (x, y, w, h) = next(item for item in CHECKIN if item[0] == "我知道了")
-    rx, ry, rw, rh = node["roi"]
-    assert rx <= x and x + w <= rx + rw and ry <= y and y + h <= ry + rh
+    node = data[run_task.EXTERNAL_POPUP_DISMISS_NODE]
     assert node["action"] == "Click" and node["max_hit"] <= 3
     for name in ("ExternalOpenRewardFromShelf", "ExternalRewardPageReady", "ExternalScrollToDianping"):
-        assert data[name]["next"][0] == run_task.EXTERNAL_CHECKIN_DISMISS_NODE
-    # 「看视频额外领」会打开广告，不能在 ROI 里。
-    _, (vx, vy, vw, vh) = next(item for item in CHECKIN if item[0] == "看视频额外领")
-    assert not (ry <= vy and vy + vh <= ry + rh)
+        assert data[name]["next"][0] == run_task.EXTERNAL_POPUP_DISMISS_NODE
+    # 用真实签到弹窗帧模拟 Maa OCR 节点：只命中「我知道了」，且在 ROI 内。
+    pattern = re.compile(node["expected"])
+    rx, ry, rw, rh = node["roi"]
+    matched = [
+        (text, box) for text, box in CHECKIN
+        if pattern.search(text)
+        and rx <= box[0] and box[0] + box[2] <= rx + rw and ry <= box[1] and box[1] + box[3] <= ry + rh
+    ]
+    assert [text for text, _ in matched] == ["我知道了"]
+    # 普通奖励页上不命中任何文字。
+    assert not [text for text, _ in REWARD if pattern.search(text)]
+
+
+# ------------------------------------------------------------------ 2026-09-29 实机
+
+
+def test_live_checkin_popup_20260929_is_closed() -> None:
+    assert find_blocking_popup(frame("reward_checkin_popup_20260929")) == ("我知道了", (358, 766))
+
+
+def test_autoread_does_not_treat_reward_page_as_shelf() -> None:
+    # 实机 run daily_20260929_111500_9cb3bb10：关掉签到弹窗后是奖励页，
+    # 「今日再读7分钟领20赠币」含「再读」，旧判据把它当书架 → 白名单拒绝 exit 3。
+    assert arm.classify_page(frame("reward_page_after_checkin_20260929")) == "奖励页"
+
+
+def test_autoread_backs_out_of_reward_page_then_finds_book(reader, monkeypatch) -> None:
+    popup = frame("reward_checkin_popup_20260929")
+    reward = frame("reward_page_after_checkin_20260929")
+    state = {"page": "popup", "backs": 0}
+
+    class Device(FakeClient):
+        def screencap(self):
+            return FakeShot({"popup": popup, "reward": reward, "shelf": SHELF}[state["page"]])
+
+    def tap(x, y):
+        if state["page"] == "popup" and (x, y) == (358, 766):
+            state["page"] = "reward"
+
+    def back():
+        state["backs"] += 1
+        if state["page"] == "reward":
+            state["page"] = "shelf"
+
+    reader([])
+    monkeypatch.setattr(arm, "_client", Device([]))
+    monkeypatch.setattr(arm, "tap", tap)
+    monkeypatch.setattr(arm, "press_back", back)
+    why = arm.confirm_allowed_book_on_shelf()
+    assert "宇智波" in why
+    assert state["backs"] >= 1
+
+
+# ------------------------------------------------------------------ 游戏退出后领奖（2026-09-29 实机）
+
+GAME_CLAIMABLE = frame("reward_game_claimable_20260929")
+GAME_CLAIM_BUTTON = (592, 611)  # 「玩游戏领赠币+20赠币」同一行的「立即领取」(550,597,85,28)
+
+
+def test_game_reward_page_with_recharge_row_counts_as_success_page() -> None:
+    # 实机 run daily_20260929_111500_9cb3bb10：退出游戏后奖励页被识别成 GAME_ENTRY
+    # （「游戏任意充值领赠币 / 去玩游戏」行），成功条件只认 REWARD_HOME → 空转到超时。
+    from qqreader.tasks.game import build_game_contract
+
+    context = _context(GAME_CLAIMABLE)
+    assert context.state is PageState.GAME_ENTRY
+    context.update_data(game_exit_done=True)
+    assert build_game_contract().success_condition.evaluate(context).satisfied
+
+
+def test_game_claims_reward_on_game_row_before_success() -> None:
+    from qqreader.tasks.game import build_game_contract
+
+    device = SimulatedDevice()
+    claimed = [item for item in GAME_CLAIMABLE if item[0] != "立即领取"] + [("已领取", (560, 597, 70, 28))]
+    client = FakeClient([GAME_CLAIMABLE, claimed])
+    adapter = _game_adapter(device, client)
+    context = _context(GAME_CLAIMABLE)
+    context.update_data(game_exit_done=True, game_claim_pending=True, game_coin_baseline=50)
+    success = build_game_contract().success_condition
+    # 赠币计数 50 → 70 不能代替领取：仍须先点游戏行的「立即领取」。
+    assert not success.evaluate(context).satisfied
+    step = adapter.advance(context)
+    assert client.clicks == [GAME_CLAIM_BUTTON]
+    assert step.progress
+    context = _context(claimed)
+    context.update_data(game_exit_done=True, game_claim_pending=True)
+    adapter.advance(context)
+    assert client.clicks == [GAME_CLAIM_BUTTON]
+    assert success.evaluate(context).satisfied
+
+
+def test_game_claim_gives_up_after_three_taps() -> None:
+    device = SimulatedDevice()
+    client = FakeClient([GAME_CLAIMABLE])
+    adapter = _game_adapter(device, client)
+    context = _context(GAME_CLAIMABLE)
+    context.update_data(game_exit_done=True, game_claim_pending=True)
+    for _ in range(5):
+        adapter.advance(context)
+    assert client.clicks == [GAME_CLAIM_BUTTON] * 3
+    assert context.get("game_claim_pending") is False
+
+
+# ------------------------------------------------------------------ 阅读领奖（2026-09-29 实机）
+
+
+def test_reading_claim_uses_last_readable_coin_total(monkeypatch, tmp_path) -> None:
+    """实机 run daily_20260929_123918_ff2993fd：只读 13 分钟，10 分钟档领到（194 → 214），
+    30 分钟档按钮是灰的点不动；最后一帧 OCR 把「今日已获赠币」和数字拆开，旧逻辑只看
+    最后一帧，读不到数字 → 判“缺少币值证据”失败。"""
+    import qqreader.tasks.reading_reward as rr
+
+    before = frame("reading_card_before_claim_20260929")
+    claimed = frame("reading_card_after_first_claim_20260929")
+    split = frame("reading_card_coin_split_20260929")
+    assert rr.parse_coin_total(split) is None
+    state = {"page": before}
+
+    class Device(FakeClient):
+        def screencap(self):
+            return FakeShot(state["page"])
+
+        def click(self, x, y):
+            super().click(x, y)
+            state["page"] = claimed if (x, y) == (215, 1186) else split
+
+    monkeypatch.setattr(rr.time, "sleep", lambda seconds: None)
+    client = Device([])
+    result = rr.claim_reading_rewards(client, tmp_path)
+    assert result.succeeded, result.reason
+    assert (result.before_coins, result.after_coins) == (194, 214)
+    assert client.clicks[0] == (215, 1186)
