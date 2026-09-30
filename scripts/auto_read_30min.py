@@ -107,7 +107,9 @@ REWARD_PAGE_MARKERS = ("今日已获赠币", "每日阅读领赠币", "看小视
 # 书城首页/排行榜的频道与榜单文案；命中 2 个以上即判定为书城，不是书架。
 BOOKSTORE_MARKERS = ("男生", "女生", "排行榜", "本周强推", "今日必读", "高分必读")
 # 回书架时确认不了页面的受控重试次数（每次都重新截图确认）。
-SHELF_CONFIRM_ATTEMPTS = 3
+SHELF_CONFIRM_ATTEMPTS = 6
+SHELF_RECHECK_SECONDS = 3.0
+CAPTCHA_MARKERS = ("安全验证", "请在下图依次点击", "拖动下方滑块", "拖动滑块", "滑动验证", "完成拼图")
 # 底部导航栏的最小 y（720×1280；书架 tab OCR box=(70,1250,38,26)）。
 BOTTOM_NAV_MIN_Y = 1150
 
@@ -458,6 +460,10 @@ class BookNotAllowed(RuntimeError):
     """书架上找不到白名单书目 —— 不静默继续，由 main 以 exit(3) 退出。"""
 
 
+class ReadingBlockedByCaptcha(RuntimeError):
+    """选书确认中出现验证码；保留页面，不走普通失败清理。"""
+
+
 ALLOWED_BOOK_KEYWORDS = ("宇智波",)
 # 本次运行实际使用的书名关键词；GUI「小说书名」经 run_task.py 以 --book 传入。
 _allowed_keywords: tuple[str, ...] = ALLOWED_BOOK_KEYWORDS
@@ -496,27 +502,36 @@ def record_page_evidence(reason: str, boxes: list[tuple[str, tuple[int, int, int
 def confirm_allowed_book_on_shelf(attempts: int = SHELF_CONFIRM_ATTEMPTS) -> str:
     """先确认真的在书架，再做白名单校验（QQR-55）。
 
-    * 确认在书架但没有白名单书目 → ``BookNotAllowed``（exit 3，白名单保护不放宽）；
+    * 书架列表可能延迟加载：未见书名时先等待并重拍，预算耗尽仍未找到才拒绝；
     * 受控次数内始终确认不了书架 → ``RuntimeError``（exit 2），不当成白名单拒绝；
     * 每次都重新截图确认，不盲点其他书。
     """
     boxes: list[tuple[str, tuple[int, int, int, int]]] = []
     page = "无文本"
+    why = "尚未识别到白名单书目"
     for attempt in range(1, attempts + 1):
         boxes = ocr_boxes()
+        if any(marker in text for text, _ in boxes for marker in CAPTCHA_MARKERS):
+            record_page_evidence("选书确认遇到验证码，等待人工处理", boxes)
+            raise ReadingBlockedByCaptcha("选书确认遇到验证码，停止点击并等待人工处理")
         page = classify_page(boxes)
         if page == "书架":
             box, why = locate_allowed_book_ui(boxes)
             if box is not None:
                 return why
-            record_page_evidence("书架上没有白名单书目", boxes)
-            raise BookNotAllowed(why)
+            if attempt < attempts:
+                log(f"第 {attempt}/{attempts} 次：书架尚未识别到指定书名，等待列表加载后重拍")
+                time.sleep(SHELF_RECHECK_SECONDS)
+            continue
         log(f"第 {attempt}/{attempts} 次确认：当前页面是「{page}」不是书架，回书架后重新确认")
         dismiss_blocking_dialogs()
         try:
             return_to_shelf()
         except RuntimeError as exc:
             log(f"回书架未成功：{exc}")
+    if page == "书架":
+        record_page_evidence("等待并重拍后，书架仍未识别到白名单书目", boxes)
+        raise BookNotAllowed(f"{why}（{attempts} 次确认后仍未找到）")
     record_page_evidence("多次回书架后仍无法确认书架", boxes)
     raise RuntimeError(f"{attempts} 次回书架后仍无法确认书架（最后页面：{page}）")
 
@@ -691,6 +706,11 @@ def main() -> int:
         except RuntimeError as exc:
             log(f"中断清理失败：{exc}")
         return 130
+    except ReadingBlockedByCaptcha as exc:
+        from qqreader.runner.exit_codes import EXIT_BLOCKED_BY_CAPTCHA
+
+        log(f"BLOCKED_BY_CAPTCHA：{exc}")
+        return EXIT_BLOCKED_BY_CAPTCHA
     except BookNotAllowed as exc:
         log(f"❌ 书源校验/选书失败（exit 3）：{exc}")
         try:
