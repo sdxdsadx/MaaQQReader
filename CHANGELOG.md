@@ -21,6 +21,34 @@
 
 ---
 
+## 2026-10-02 · 修复滑块验证码求解器写死配置路径导致的崩溃，恢复自动求解后继续任务
+
+**触发**：用户反馈「遇到滑动验证码无法正常运行」，要求调用 GUI 模拟人工点击实机复现。`runtime/records/DailyAdFlow_20261001_173332_121299.json` 在 `captcha.detected` 之后立刻 `未预期异常: ConfigError: 配置文件不存在: configs\qqreader.local.json`，任务被判 FAILED（exit 2），滑块一次都没滑出去；`DailyAdFlow_20261001_192252_745520.json`、`DailyAdFlow_20261002_050425_790460.json` 则记为「未配置自动求解器，等待人工处理验证码」（那两次跑的是 `agent/T-008` worktree 的代码，其 `--captcha-mode manual` 默认值强制人工守卫，不在本次改动范围）。
+
+| 任务/模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| `qqreader/captcha/slide.py::_sendevent_track` | 识别到验证码后任务以「未预期异常 ConfigError」失败，验证码一次都没滑 | 函数第一行 `load_config("configs/qqreader.local.json")` 写死**相对当前工作目录**的路径；cwd 不是仓库根目录（worktree / 快捷方式 / 打包 exe / 在别的目录跑 CLI）时抛 ConfigError，异常一路冒到 runner 的通用异常分支 | 新增 `_resolve_adb_endpoint()`：显式注入 → 运行时 Maa 客户端 `config.adb_path/adb_address` → `_REPO_ROOT/configs/qqreader.local.json`（按文件位置解析）；sendevent 注入拆到 `_inject_sendevent_track()` |
+| 同上 | 取不到 adb 端点 / adb 可执行文件不存在 / sendevent 写入失败时整个任务崩成 FAILED | 没有降级路径：`getevent` 探测与 `send()` 失败都直接抛异常 | 先降级为 `device.swipe()`；再失败只抛 `SlideInputUnavailable`，由 `solve()` 转成 `solved=False`（→ `BLOCKED_BY_CAPTCHA` 等待人工），并把降级原因写进失败详情 |
+
+**改动文件**：`qqreader/captcha/slide.py`、`tests/test_qqr34_slide_captcha_runtime_adb.py`、本日志。
+**验证**：
+- 修复前确认失败：把 cwd 切到 `runtime/_cwd_probe` 后，HEAD 版 `_sendevent_track` 抛 `ConfigError: 配置文件不存在: configs\qqreader.local.json`（与 10-01 17:33 实机同一报错）；同一脚本里修复后的版本按仓库根目录解析出 `adb.exe` + `127.0.0.1:16384`，不再依赖 cwd。
+- 新增 8 项回归测试 `tests/test_qqr34_slide_captcha_runtime_adb.py`：运行时端点解析、cwd 不在仓库根目录时不读相对路径、无端点 / 无 adb / 设备 swipe 也失败三种降级路径，以及用 10-01、10-02 真实验证码截图跑完整求解循环（`solved=True`）。
+- GUI 实机（`启动QQReaderGUI.cmd` 启动；用 Win32 子窗口矩形匹配定位控件后模拟点击「全不选」→ 只勾「每日广告完整流程」→「直接运行已选」）：串行记录 `daily_20261002_141758_d366cb4e`，单步 `01-DailyAdFlow-1` → `SUCCEEDED`，exit 0，10 分 45 秒；任务记录 `DailyAdFlow_20261002_082834_335033.json` 命中 `success_condition`（`OCR 包含 "12/12"`）。
+- 验证码分支实测：08:19:32 `CAPTCHA_DETECTED`（`runtime/screenshots/20261002/DailyAdFlow_20261002_081932_349657_009_CAPTCHA_DETECTED.png`，检测到轨道 (75,806,567,26)、滑块中心 (168,818)、缺口 x=472、距离 304px）→ 求解器滑了 4 轮（304px 连续三次被拒后重新随机化，第 4 轮 409px 通过）→ 08:20:15 `CAPTCHA_CLEARED`（同目录 `..._010_CAPTCHA_CLEARED.png`，该帧已无滑块轨道）→ 记录 `captcha.handled resolution=SOLVED attempts=1` 与 `captcha.verified_gone 已确认验证码消失，恢复原任务` → 广告流程继续跑到 12/12。对照 10-01 19:21 与 10-02 05:02 的同一位置，前两次都以 `BLOCKED_BY_CAPTCHA` 结束。
+- 全量 `py -3.10 -m pytest -q`：478 项，472 passed、4 failed、2 skipped；4 项失败与改动前完全一致（广告 40/35 秒等待差异两项、直播退出一项、被删除的 `runtime/screenshots/ad_watch/captcha_now.png` fixture 一项），不是本次引入。`pytest -q` 末尾的汇总行本机被截断，数量取自同一次运行的 `--junitxml` 结果（tests=478 / failures=4 / skipped=2）。
+
+**未覆盖 / 遗留**：
+- 实机 GUI 运行的 cwd 就是仓库根目录，这条路径原本也能读到配置。被修的是「cwd 不是仓库根目录」的启动方式（worktree / 打包 exe / 快捷方式 / 在别的目录跑 CLI）；该分支只由单元测试和修复前复现脚本覆盖，**没有实机复现**。
+- `agent/T-008` worktree 里 `scripts/run_task.py` 的 `--captcha-mode manual` 默认值，以及 GUI `build_run_task_command` 强制追加该参数的问题原样保留，未纳入本次改动（用户要求只修当前检出）。那次改动正是 10-01 19:21 / 10-02 05:02 两次「未配置自动求解器」的来源。
+- 实机未触发「取不到 adb 端点」与「sendevent 写入失败」两条降级分支，只由单元测试覆盖。
+- 为复现验证码，实机跑掉了当天广告 12/12（成功）；GUI 勾选状态已恢复为操作前的 5 项，验证用的 GUI 实例已关闭。
+
+**分支**：`dsh/qqr-34-slide-captcha-cwd-20261002`
+**回滚**：`git log --oneline -S "修复滑块验证码求解器写死配置路径导致的崩溃" -- CHANGELOG.md` 定位本次提交，随后 `git revert <hash>`。
+
+---
+
 ## 2026-09-30 · 等待书架列表加载后确认自动阅读书目，避免启动即白名单拒绝
 
 **触发**：用户要求修正无法自动阅读。GUI 每日运行 `daily_20260930_103417_205adb77` 的阅读任务在 28 秒后 exit 3；`runtime/logs/auto_read.log` 04:34:44 报“书架上没有白名单书目”，但现场截图已出现《宇智波：从扉间人柱力开始》。Maa 日志 04:34:41.645 仅识别到书架导航和时长卡，04:34:56.076 才识别到完整书籍列表。
