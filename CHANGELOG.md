@@ -21,6 +21,34 @@
 
 ---
 
+## 2026-10-04 · 修复广告已领取出口与等级广告盲滑、入口遮罩
+
+**触发**：用户要求继续根据今日日志修正问题，并仅短时实机验证。最新完整串行记录 `runtime/records/daily_flows/daily_20261004_130234_ea52341f.json` 中阅读33分钟、游戏25分钟、听书35分钟均 SUCCEEDED；每日广告在 `DailyAdFlow_20261004_081823_717207.json` 报 `ad_exit_unconfirmed`，等级广告最终空滑240次失败。因此本次只复查剩余广告问题，不重跑已成功任务。
+
+| 任务/模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| `qqreader/tasks/ad.py` | 广告已显示奖励领取，关闭20秒仍不能返回 | 真实截图 `runtime/screenshots/20261004/DailyAdFlow_20261004_081233_424163_037_PAGE_AD_PLAYING.png` 没有 X，出口为右上“奖励已领取｜跳过”；旧识别没有该出口，回退点左上 | 新截图 OCR 确认右上已领取/已发放的跳过出口再点击；不把中部“返回继续体验”当退出按钮 |
+| 等级广告运行时覆盖 | 仅状态栏的加载帧开始滑动，之后落在“我的”仍滑240次 | `AdScrollDownRepeat` 为无条件 DirectHit；没有未知页等待和“我的”重入 | 滑动前要求广告特征；未知页仅等待重拍，最多20次；确认“我的”后按实际等级文字重入并确认等级页，最多3次 |
+| 等级入口 | 实机33秒后仍在书架；下一次进入“我的”却31秒后失败 | 升级提示挡住底部“我的”；双倍月票活动遮罩挡住等级图标；原候选链没有普通遮罩处理及我的入口重试 | 先确认升级文案，再找右下“取消”；我的入口未转场最多重试2次；先确认活动标题，再仅在中下方限定ROI找 X，排除基因图标 |
+
+**改动文件**：`qqreader/tasks/ad.py`、`scripts/run_task.py` 的普通等级广告运行时覆盖、`tests/test_ad_failures_20261004.py`、`tests/fixtures/ad_failures_20261004.json`、`tests/test_level_ad_runtime_overrides.py`、本日志。未修改验证码求解器、守卫构造、启用参数或本地配置。
+
+**验证**：
+- 使用原始 Maa 日志 OCR 框逐帧回放；来源在 fixture 内逐帧标注。10-04早间原始日志 `runtime/logs/maafw.bak.2026.10.04-08.31.24.108.log`：已领取跳过21306行、等级入口22837行、空白加载22867行、落回我的24377行。新入口失败日志另保存在 `runtime/records/level_entry_failure_20261004_181534.log`；活动遮罩失败保存在 `runtime/records/level_promo_failure_20261004_181915.log`。
+- 回归先失败再修复：已领取出口实际框中心(622,27)、未知页不滑、我的重入、20次等待边界、覆盖幂等性、升级/活动遮罩关闭与点击未转场重试。独立只读复核发现新增恢复入口的验证码优先级遗漏，补上现有 `LEVEL_CAPTCHA_NODES`，真实背景与验证码提示组合回放确认不点击背景或弹窗 X；最终审查无新增重要问题，原广告来源 anchor 保留。
+- `py -3.10 -m pytest -q tests/test_ad_failures_20261004.py tests/test_level_ad_runtime_overrides.py tests/test_qqr54_level_ad_retention.py`：39 passed。
+- 正式 GUI 每日广告 `daily_20261005_001320_ec572e08`（业务日仍为10-04）：超时临时设1分钟，自动进入并播放广告，点击本次实际左上关闭框(53,112)，返回奖励页出现验证码；现有流程处理并确认验证码消失，随后 TIMEOUT（exit11；任务62.343秒，GUI总耗时1分06秒）。任务记录 `runtime/records/DailyAdFlow_20261004_181425_901811.json`。未触发本次新增右上已领取跳过出口，未达到12/12。
+- 等级广告首轮 `daily_20261005_001534_a3c82e25`：33秒 FAILED（exit2），复现升级遮罩；补修后第二轮 `daily_20261005_001915_d55e4b77`：31秒 FAILED（exit2），复现月票遮罩。现场通过 MuMu GUI 关闭已确认的普通活动弹窗，截图确认等级图标可见；自动关闭分支由原始OCR回放验证。
+- 最终正式 GUI `daily_20261005_002333_b231c770`：自动确认我的页→点击等级→确认等级页→找到并点击赠币广告→实际播放广告。按短时观察要求从 GUI 停止，终态 CANCELLED（总1分13秒，含停止响应）；未声称奖励到账。运行节点与输入证据保留在 `runtime/records/level_verification_20261004_182333.log`。
+- 强制停止旧任务后 `finally` 未恢复临时资源；先备份到 `runtime/records/level_runtime_before_restore_20261004.json`，只逆转本次运行覆盖字段，保留阅读/听书等已有本机资源差异；重新应用覆盖后与停止时快照完全一致，恢复清单在 `runtime/records/level_runtime_restore_20261004.json`。未提交生成资源。曾在旧任务运行中并行全量测试，3项原始pipeline检查受到临时覆盖影响；该次结果不作最终验收。
+- 停止、恢复后重新执行 `py -3.10 -m pytest -q --junitxml=runtime/records/ad_fixes_20261004.xml`：523项，518 passed、4 failed、1 skipped。4项与改动前一致：`test_ad_round_regressions::test_each_ad_round_has_its_own_initial_wait`、`test_ad_round_regressions::test_live_exit_attempt_does_not_restart_eight_swipe_cycle`、`test_issue15_reward_nav::test_detect_slide_accepts_real_captcha_fixture`、`test_qqr27_ad_flow::test_ad_play_waits_40_seconds_before_handling_buttons`。原 GUI Tk 后台线程 warning 仍存在。`git diff --check` 通过。
+
+**未覆盖 / 遗留**：每日广告12/12、等级赠币/积分“今日已完成”及到账未完成本次短时验收；新增右上出口、升级及活动自动关闭、未知页20次恢复预算均未在最终实机复验触发。强制终止旧包装器后临时资源不会自动恢复，已在本次现场恢复，未扩大到停止机制重构。GUI参数与 `runtime/records/gui_tasks_before_ad_fixes_20261004.json` 语义一致，广告45分钟、等级30分钟已保留。既有验证码fixture删除和快捷方式均保留，不纳入提交。
+**分支**：`codex/reading-game-log-fix-20261004`
+**回滚**：上一提交 `10186de`；本条代码修改单独 revert 本次提交即可，不恢复或覆盖运行记录。
+
+---
+
 ## 2026-10-04 · 一分钟实机复验：避免阅读返回后在受保护正文调用 OCR
 
 **触发**：用户要求修复后仅用一分钟实机验证。正式 GUI `daily_20261004_121807_797ddd8f` 在 06:19:28 完成一分钟正文计时，但第一次 BACK 只取消选中文字，正文仍禁止截图；随后检查退出弹窗立即调用 Maa OCR，陷入截屏重连。06:21:25 从 GUI 停止后子进程已结束，GUI 仍显示“正在停止”，该记录未正常写回终态，随后关闭并从正式启动脚本重开 GUI，保留原记录。

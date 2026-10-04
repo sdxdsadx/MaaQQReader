@@ -103,6 +103,14 @@ def _locate_visible_corner_close(client: "MaaClient") -> Optional[Action]:
         for marker in ("安全验证", "拖动下方滑块", "完成拼图")
     ):
         return Action.wait(1.0)
+    # 10-04 实机：奖励弹窗没有 X，真正出口是顶部“奖励已领取｜跳过”。
+    # 中间“返回继续体验”会留在广告或跳第三方，不能当退出按钮。
+    for text, (x, y, width, height) in result.text_boxes():
+        label = text.replace(" ", "")
+        cx, cy = x + width // 2, y + height // 2
+        if (re.fullmatch(r"奖励已(?:领取|发放)[|｜·]*跳过", label)
+                and x >= shot.width - 240 and 0 <= cy <= 120):
+            return Action.tap_point(cx, cy)
     point = _image_corner_x(shot.data)
     if point is not None:
         return Action.tap_point(*point)

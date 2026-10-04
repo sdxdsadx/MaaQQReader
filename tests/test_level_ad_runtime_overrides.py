@@ -56,6 +56,8 @@ def test_level_ad_overrides_are_idempotent() -> None:
 
 def _level_pipeline() -> dict:
     return {
+        "AdSlideCaptchaDetected": {},
+        "AdCaptchaDetected": {},
         "LevelPageReady": {"next": []},
         "LevelMyPageReady": {"next": ["LevelClickLevelIcon"]},
         "LevelClickLevelIcon": {
@@ -77,22 +79,25 @@ def _level_pipeline() -> dict:
     }
 
 
-def test_level_icon_click_swallowed_retries_without_ocr_x_close() -> None:
-    """2026-09-23 20:30：「等级」点击被吞后必须重点；不能按 OCR “X” 关弹窗
+def test_level_icon_click_swallowed_retries_without_global_ocr_x_close() -> None:
+    """2026-09-23 20:30：「等级」点击被吞后必须重点；不能按全屏 OCR “X” 关弹窗
     （「我的」页「基因」图标会被读成 X，2026-09-24 验证时误入阅读基因页）。"""
     data = _level_pipeline()
     run_task._apply_level_ad_runtime_overrides(data)
 
     assert data["LevelClickLevelIcon"]["next"] == [
+        *run_task.LEVEL_CAPTCHA_NODES, "LevelPromoVisible",
         "LevelPageReady", "LevelTeenModeDismiss", "LevelClickLevelIconAgain",
     ]
-    assert data["LevelMyPageReady"]["next"][0] == "LevelTeenModeDismiss"
+    assert data["LevelMyPageReady"]["next"][3] == "LevelTeenModeDismiss"
     assert "LevelMyPopupClose" not in data
     assert all(
         "X" not in str(node.get("expected", ""))
         for name, node in data.items()
-        if name.startswith("Level") and isinstance(node, dict)
+        if name.startswith("Level") and name != "LevelPromoClose" and isinstance(node, dict)
     )
+    assert data["LevelPromoClose"]["roi"] == [300, 870, 120, 170]
+    assert data["LevelPromoVisible"]["next"] == [*run_task.LEVEL_CAPTCHA_NODES, "LevelPromoClose"]
     assert data["LevelClickLevelIconAgain"]["max_hit"] == 3
     for name in ("LevelTeenModeDismiss", "LevelClickLevelIconAgain"):
         for ref in data[name]["next"]:

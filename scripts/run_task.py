@@ -273,6 +273,115 @@ def _apply_level_ad_runtime_overrides(data: Dict[str, Any]) -> None:
     }
     # 必须最后执行：上面会整体重建 AdStaticDownloadClose 等节点。
     _apply_level_ad_retention_overrides(data)
+    _apply_level_ad_page_recovery_overrides(data)
+    _apply_level_home_recovery_overrides(data)
+    _apply_level_promo_recovery_overrides(data)
+
+
+def _apply_level_promo_recovery_overrides(data: Dict[str, Any]) -> None:
+    """只关闭已确认的月票活动遮罩，不把基因图标的 X 当关闭按钮。"""
+    if not isinstance(data.get("LevelMyPageReady"), dict):
+        return
+    data["LevelPromoVisible"] = {
+        "recognition": "OCR", "expected": "^(双倍月票开启|秋日豪礼开抢)$",
+        "action": "DoNothing", "max_hit": 3,
+        "focus": "确认月票活动遮罩后再找关闭按钮",
+        "next": [*LEVEL_CAPTCHA_NODES, "LevelPromoClose"],
+    }
+    data["LevelPromoClose"] = {
+        "recognition": "OCR", "expected": "^[Xx×]$",
+        "roi": [300, 870, 120, 170], "action": "Click",
+        "post_delay": 1200, "max_hit": 3,
+        "focus": "关闭已确认的月票活动遮罩底部 X",
+        "next": [*LEVEL_CAPTCHA_NODES, "LevelPageReady", "LevelMyPageReady"],
+    }
+    for name in ("DailyLevelAdFlow", "LevelMyPageReady", "LevelClickLevelIcon",
+                 "LevelClickLevelIconAgain", "LevelAdMyPageReturn", "LevelAdReenterFromMy"):
+        node = data.get(name)
+        if isinstance(node, dict) and isinstance(node.get("next"), list):
+            node["next"] = [*LEVEL_CAPTCHA_NODES, "LevelPromoVisible",
+                            *(n for n in node["next"] if n not in
+                              (*LEVEL_CAPTCHA_NODES, "LevelPromoVisible"))]
+
+
+def _apply_level_home_recovery_overrides(data: Dict[str, Any]) -> None:
+    """升级提示遮挡我的入口时先取消；点击未转场只做有界重试。"""
+    tab = data.get("LevelClickMyTab")
+    if not isinstance(tab, dict):
+        return
+    retry_next = [*LEVEL_CAPTCHA_NODES, "LevelUpgradeVisible", "LevelMyPageReady",
+                  "LevelClickMyTabAgain"]
+    data["LevelUpgradeVisible"] = {
+        "recognition": "OCR", "expected": "安装新版本|已下载新版本|是否安装",
+        "action": "DoNothing", "max_hit": 2,
+        "focus": "先确认升级弹窗，不点背景我的入口",
+        "next": [*LEVEL_CAPTCHA_NODES, "LevelUpgradeCancel"],
+    }
+    data["LevelUpgradeCancel"] = {
+        "recognition": "OCR", "expected": "^取消$",
+        "roi": [360, 1200, 360, 80], "action": "Click",
+        "post_delay": 1200, "max_hit": 2,
+        "focus": "取消已确认的升级弹窗",
+        "next": [*LEVEL_CAPTCHA_NODES, "LevelMyPageReady", "LevelClickMyTab"],
+    }
+    again = {k: v for k, v in tab.items() if k != "next"}
+    again.update({"max_hit": 2, "next": list(retry_next),
+                  "focus": "我的入口未转场，重拍后重新点击"})
+    data["LevelClickMyTabAgain"] = again
+    tab["next"] = list(retry_next)
+    for name in ("DailyLevelAdFlow", "LevelBackUntilHome"):
+        node = data.get(name)
+        if isinstance(node, dict) and isinstance(node.get("next"), list):
+            node["next"] = [*LEVEL_CAPTCHA_NODES, "LevelUpgradeVisible",
+                            *(n for n in node["next"] if n not in
+                              (*LEVEL_CAPTCHA_NODES, "LevelUpgradeVisible"))]
+
+
+def _apply_level_ad_page_recovery_overrides(data: Dict[str, Any]) -> None:
+    """广告加载未知时等待；落回“我的”页时重进等级，不再空滑 240 次。"""
+    scroll = data.get("AdScrollDownRepeat")
+    if not isinstance(scroll, dict) or not isinstance(scroll.get("next"), list):
+        return
+    # 原节点为 DirectHit，连只有状态栏的加载帧和“我的”页也会执行滑动。
+    scroll.update({
+        "recognition": "OCR",
+        "expected": "广告|直播中|进入直播间|上滑浏览|上滑或点击|跳转.*(?:详情页|第三方)|观看\\d+秒",
+    })
+    data["LevelAdMyPageReturn"] = {
+        "recognition": "OCR",
+        "expected": "^(阅读故事|浏览历史|帮助与反馈)$",
+        "action": "DoNothing",
+        "max_hit": 3,
+        "focus": "确认广告已落回我的页，重新进入等级页",
+        "next": [*LEVEL_CAPTCHA_NODES, "LevelAdReenterFromMy"],
+    }
+    data["LevelAdReenterFromMy"] = {
+        "recognition": "OCR",
+        "expected": "^等级$",
+        "action": "Click",
+        "post_delay": 2500,
+        "max_hit": 3,
+        "focus": "点击当前截图中的等级入口并重新确认等级页",
+        "next": [*LEVEL_CAPTCHA_NODES, "LevelPageReady", "LevelAdMyPageReturn"],
+    }
+    data["LevelAdUnknownWait"] = {
+        "action": "DoNothing",
+        "post_delay": 1000,
+        "max_hit": 20,
+        "focus": "未确认广告或落地页，等待重拍，不点击不滑动",
+        "next": list(scroll["next"]),
+    }
+    # 仅补在原来无条件滑动的分支处，恢复前优先检查已有验证码节点。
+    for node in data.values():
+        if not isinstance(node, dict) or not isinstance(node.get("next"), list):
+            continue
+        nexts = node["next"]
+        if "AdScrollDownRepeat" in nexts:
+            nexts[:] = [*LEVEL_CAPTCHA_NODES,
+                        *(name for name in nexts if name not in LEVEL_CAPTCHA_NODES)]
+            _insert_before(nexts, "LevelAdMyPageReturn", "AdScrollDownRepeat")
+            if "LevelAdUnknownWait" not in nexts:
+                nexts.insert(nexts.index("AdScrollDownRepeat") + 1, "LevelAdUnknownWait")
 
 
 LEVEL_POPUP_CLOSE_NODES = ("LevelTeenModeDismiss",)
@@ -333,7 +442,9 @@ def _apply_level_ad_launch_retry_overrides(data: Dict[str, Any]) -> None:
         click = data.get(click_name)
         if not isinstance(click, dict) or not isinstance(click.get("next"), list):
             continue
-        base_next = [n for n in click["next"] if n not in (wait_name, again_name)]
+        base_next = [n for n in click["next"] if n not in (
+            wait_name, again_name, "LevelAdMyPageReturn", "LevelAdUnknownWait",
+        )]
         _insert_before(base_next, wait_name, "AdScrollDownRepeat")
         click["next"] = base_next
         wait_next = [n for n in base_next if n != wait_name]
