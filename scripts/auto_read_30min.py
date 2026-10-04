@@ -378,6 +378,10 @@ def return_to_capturable(max_backs: int = 6) -> None:
     for attempt in range(1, max_backs + 1):
         press_back()
         time.sleep(1.8)
+        # BACK 可能只取消选文或停止自动滚动，正文仍受保护。
+        # 此时 Maa OCR 会陷入截屏重连；先确认可截图，再识别退出确认框。
+        if not capture_available() and reader_is_foreground():
+            continue
         # 出现退出确认框 = 已退到 App 主页（可截图），点取消即可
         if dismiss_exit_dialog():
             time.sleep(1.2)

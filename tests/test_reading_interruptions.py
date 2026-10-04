@@ -135,3 +135,39 @@ def test_book_retry_captcha_is_not_swallowed_as_navigation_failure(monkeypatch):
     with pytest.raises(arm.ReadingBlockedByCaptcha):
         arm.click_target_book()
     assert calls == []
+
+
+def test_return_skips_maa_ocr_until_protected_reader_is_capturable(monkeypatch):
+    visible = {'capturable': False}
+    results = iter([False, False, True, True])
+    actions = []
+    def capture():
+        visible['capturable'] = next(results)
+        return visible['capturable']
+    def dialog():
+        assert visible['capturable'], '正文仍禁止截图时不可进入 Maa OCR 重连'
+        actions.append('OCR')
+        return False
+    monkeypatch.setattr(arm, 'capture_available', capture)
+    monkeypatch.setattr(arm, 'reader_is_foreground', lambda: True)
+    monkeypatch.setattr(arm, 'dismiss_exit_dialog', dialog)
+    monkeypatch.setattr(arm, 'press_back', lambda: actions.append('BACK'))
+    monkeypatch.setattr(arm.time, 'sleep', lambda _: None)
+    monkeypatch.setattr(arm, 'log', lambda _: None)
+    arm.return_to_capturable(max_backs=2)
+    assert actions == ['BACK', 'BACK', 'OCR']
+
+
+def test_return_checks_captcha_when_adb_capture_fails_outside_reader(monkeypatch):
+    actions = []
+    monkeypatch.setattr(arm, 'capture_available', lambda: False)
+    monkeypatch.setattr(arm, 'reader_is_foreground', lambda: False)
+    monkeypatch.setattr(arm, 'press_back', lambda: actions.append('BACK'))
+    monkeypatch.setattr(arm.time, 'sleep', lambda _: None)
+    def dialog():
+        actions.append('OCR')
+        raise arm.ReadingBlockedByCaptcha('Maa detected captcha despite ADB failure')
+    monkeypatch.setattr(arm, 'dismiss_exit_dialog', dialog)
+    with pytest.raises(arm.ReadingBlockedByCaptcha):
+        arm.return_to_capturable(max_backs=2)
+    assert actions == ['BACK', 'OCR']
