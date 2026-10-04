@@ -21,6 +21,31 @@
 
 ---
 
+## 2026-10-04 · 修复等级广告返回路由并隔离旧任务运行资源
+
+**触发**：用户要求继续根据错误修正。上一轮正式 GUI 日志 `runtime/records/level_verification_20261004_182333.log` 中，积分广告返回后在18:24:28进入 `LevelAfterCoinAd`，绕过积分广告有界重试；GUI强制停止子进程还会跳过旧任务包装器的 `finally`，将临时覆盖留在共享资源中。
+
+| 任务/模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| 等级广告返回 | 积分广告误走赠币分支，重新进入原积分入口 | `AdReturnStable.next` 用固定候选代替已有 `LevelAfterAd` anchor；赠币与积分返回页特征相似，候选顺序无法区分来源 | 普通等级广告覆盖恢复框架支持的 anchor 引用；入口设置的来源决定返回分支，验证码候选仍优先；未绑定来源时不猜测阶段 |
+| 旧任务运行资源 | GUI强制停止后共享 pipeline 留有运行时覆盖 | 覆盖与选书模板直接写入 `dev/resource`，恢复依赖会被强停跳过的 `finally` | 每次运行复制完整资源包到独立 `runtime/legacy_resources/legacy-*/resource`，覆盖、选书模板及子进程资源参数均使用独立副本；正常结束清理，强停残留副本不影响后续任务 |
+
+**改动文件**：`scripts/run_task.py`、`tests/test_qqr54_level_ad_retention.py`、`tests/test_level_ad_stage_route.py`、`tests/test_legacy_resource_isolation.py`、`tests/fixtures/level_stage_return_20261004.json`、本日志。未修改验证码求解器、守卫构造或启用配置。
+
+**验证**：
+- 积分返回真实 OCR fixture 来源为上一轮日志6359行（18:24:27.555）；检查原积分入口、第二次入口、赠币来源、无来源和验证码优先分支。修复前4项失败、1项通过，修复后5项通过。现有本地 pipeline schema 的 NodeAttr 支持 `name` 与 `anchor: true` 引用。
+- 资源隔离3项修复前均失败；修复后检查子进程启动时共享资源字节不变、选书模板不覆盖源文件，以及真实 Windows 父子进程经 `taskkill /T /F` 强停后源文件不变。强停测试仅终止测试自己创建的进程。
+- `py -3.10 -m pytest -q tests/test_legacy_resource_isolation.py tests/test_issue13_legacy_timeout.py tests/test_book_device_selection.py`：43 passed。`py -3.10 -m pytest -q tests/test_level_ad_stage_route.py tests/test_ad_failures_20261004.py tests/test_level_ad_runtime_overrides.py tests/test_qqr54_level_ad_retention.py tests/test_legacy_resource_isolation.py`：47 passed。独立只读代码复核未发现新增重要问题。
+- 全量 `py -3.10 -m pytest -q --junitxml=runtime/records/legacy_route_fix_20261004.xml`：531项，525 passed、4 failed、2 skipped；4项与本轮改动前一致：`test_ad_round_regressions::test_each_ad_round_has_its_own_initial_wait`、`test_ad_round_regressions::test_live_exit_attempt_does_not_restart_eight_swipe_cycle`、`test_issue15_reward_nav::test_detect_slide_accepts_real_captcha_fixture`、`test_qqr27_ad_flow::test_ad_play_waits_40_seconds_before_handling_buttons`。既有 Tk 后台线程 warning 仍存在。
+- 正式 GUI 短测 `daily_20261005_011503_22432a7a`（业务日10-04）：实际使用 `runtime/legacy_resources/legacy-dvuu81xa/resource` 成功加载资源并执行。19:15:24进入积分广告；19:15:40返回 `LevelAfterPointsAd`，积分再次入口执行2次后在19:16:18转入 `LevelVerifyPointsScroll`，不再误走赠币阶段。节点证据保存在 `runtime/records/level_route_verification_20261004_191503.log`。
+- 从 GUI 停止后记录为 CANCELLED，开始17:15:03.035487 UTC、结束17:16:30.348311 UTC，总87.313秒；实际超过用户要求的一分钟，按实际时长记录。共享 pipeline 运行前、运行中、停止后 SHA-256 均为 `D0092F69CA076AEF9954EB441902936F5FA93716FC0F06F57874F5DC20AD24F8`，无需人工恢复。GUI任务设置与本轮备份 `runtime/records/gui_tasks_before_route_fix_20261004.json` 语义一致，保留用户调整后的听书顺序。
+
+**未覆盖 / 遗留**：此次实机积分广告为浏览类，现有策略仍走跳过/放弃，任务按钮未完成，没有积分到账或整体SUCCESS证据；浏览类广告完成策略与最终领奖尚需后续修正。未重跑已成功的阅读、游戏、听书，未验证三天无人值守。强制终止可能留下独立资源目录，占用磁盘但不污染共享资源；未新增自动清理策略。原有验证码截图删除及快捷方式保留，不纳入提交。
+**分支**：`codex/reading-game-log-fix-20261004`
+**回滚**：上一提交 `0e8c5bf`；单独 revert 本次提交，不覆盖运行记录或用户设置。
+
+---
+
 ## 2026-10-04 · 修复广告已领取出口与等级广告盲滑、入口遮罩
 
 **触发**：用户要求继续根据今日日志修正问题，并仅短时实机验证。最新完整串行记录 `runtime/records/daily_flows/daily_20261004_130234_ea52341f.json` 中阅读33分钟、游戏25分钟、听书35分钟均 SUCCEEDED；每日广告在 `DailyAdFlow_20261004_081823_717207.json` 报 `ad_exit_unconfirmed`，等级广告最终空滑240次失败。因此本次只复查剩余广告问题，不重跑已成功任务。

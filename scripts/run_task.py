@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -179,15 +180,15 @@ def _apply_level_ad_runtime_overrides(data: Dict[str, Any]) -> None:
     if isinstance(level_ready, dict):
         level_ready["next"] = ["LevelTopReady", "LevelScrollToTop"]
 
-    # 返回广告后要按来源区分两张等级卡。原链先用宽泛的
-    # LevelAfterCoinAd 命中“用户等级”，导致积分广告结束后再次进入
-    # LevelFindPointsAd，最后滑到底触发 max_hit=8。
+    # 两类广告的落地页包含相同等级文案，不能靠 OCR 候选顺序猜来源。
+    # 入口已有 LevelAfterAd 动态锚点；恢复引用该锚点，不硬编码赠币分支。
     coin_return = data.get("LevelAfterCoinAd")
     if isinstance(coin_return, dict):
         coin_return["expected"] = "看小视频.*积分"
     stable = data.get("AdReturnStable")
     if isinstance(stable, dict) and isinstance(stable.get("next"), list):
-        _insert_before(stable["next"], "LevelAfterPointsAd", "AdDailyComplete")
+        stable["next"] = [*LEVEL_CAPTCHA_NODES,
+                          {"name": "LevelAfterAd", "anchor": True}]
     points_return = data.get("LevelAfterPointsAd")
     if isinstance(points_return, dict):
         # 返回等级页仅证明广告关闭，仍须看见积分任务行的“今日已完成”。
@@ -671,6 +672,30 @@ def _run_legacy_task(
     minutes: Optional[float],
     selection: Optional[BookSelection] = None,
 ) -> int:
+    # GUI 用 taskkill 整树强停，Python finally 不会执行。覆盖只写本次私有
+    # bundle，源 pipeline、OCR 模型和听书封面无需依赖退出清理来恢复。
+    work_root = Path(config.machine.log_dir).resolve().parent / "legacy_resources"
+    try:
+        work_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="legacy-", dir=work_root) as run_dir:
+            run_path = Path(run_dir).resolve()
+            if not run_path.is_relative_to(work_root):
+                raise OSError("临时资源目录不在本次运行目录内")
+            resource_dir = run_path / "resource"
+            shutil.copytree(Path(config.machine.maa_resource_dir), resource_dir)
+            return _run_legacy_task_in_resource(task, config, minutes, selection, resource_dir)
+    except OSError as exc:
+        print(f"[legacy] 准备或清理本次运行资源失败: {exc}", flush=True)
+        return 3
+
+
+def _run_legacy_task_in_resource(
+    task: str,
+    config: Any,
+    minutes: Optional[float],
+    selection: Optional[BookSelection],
+    resource_dir: Path,
+) -> int:
     repo_root = Path(__file__).resolve().parents[1]
     runner = _find_legacy_runner(repo_root)
     if runner is None:
@@ -682,7 +707,6 @@ def _run_legacy_task(
     entry = LEGACY_ENTRY.get(task, task)
     node = LEGACY_TIMING_NODE.get(task)
     original = None
-    resource_dir = Path(config.machine.maa_resource_dir)
     from qqreader.maa.adb import ensure_maa_ready
 
     ready, detail = ensure_maa_ready(

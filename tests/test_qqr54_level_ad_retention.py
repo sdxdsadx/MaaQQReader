@@ -76,14 +76,23 @@ def first_match(
     current: str,
     boxes: List[Tuple[str, Box]],
     hits: Optional[Dict[str, int]] = None,
+    anchors: Optional[Dict[str, str]] = None,
 ) -> Tuple[str, Box]:
     hits = hits if hits is not None else {}
-    for name in data[current]["next"]:
+    for ref in data[current]["next"]:
+        if isinstance(ref, dict):
+            name = (anchors or {}).get(ref['name']) if ref.get('anchor') else ref['name']
+            if not name:
+                continue
+        else:
+            name = ref
         node = data[name]
         if hits.get(name, 0) >= node.get("max_hit", 10**9):
             continue
         box = node_hits(node, boxes)
         if box is not None:
+            if anchors is not None and isinstance(node.get('anchor'), dict):
+                anchors.update(node['anchor'])
             return name, box
     raise AssertionError(f"{current} 的 next 无一命中")
 
@@ -161,7 +170,7 @@ def test_retention_overrides_are_idempotent_and_resolve() -> None:
         for name, node in once.items()
         if isinstance(node, dict)
         for target in node.get("next") or []
-        if target not in once
+        if (target['name'] not in {'LevelAfterAd'} if isinstance(target, dict) else target not in once)
     ]
     assert missing == []
 
