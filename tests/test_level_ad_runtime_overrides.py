@@ -135,6 +135,7 @@ def test_points_ad_abandoned_browse_offer_retries_with_another_ad() -> None:
 
     for name in ("LevelAfterPointsAd", "LevelVerifyPointsScroll"):
         nxt = data[name]["next"]
-        assert nxt[0] == "LevelPointsSectionFound"
+        assert nxt[:len(run_task.LEVEL_CAPTCHA_NODES)] == list(run_task.LEVEL_CAPTCHA_NODES)
+        assert nxt[len(run_task.LEVEL_CAPTCHA_NODES)] == "LevelPointsSectionFound"
         assert nxt.index("LevelClickPointsAdAgain") < nxt.index("LevelVerifyPointsScroll")
     assert data["LevelClickPointsAdAgain"]["max_hit"] == 2

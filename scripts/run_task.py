@@ -184,8 +184,19 @@ def _apply_level_ad_runtime_overrides(data: Dict[str, Any]) -> None:
     # 入口已有 LevelAfterAd 动态锚点；恢复引用该锚点，不硬编码赠币分支。
     coin_return = data.get("LevelAfterCoinAd")
     if isinstance(coin_return, dict):
-        coin_return["expected"] = "看小视频.*积分"
+        coin_return["expected"] = "看小视频.*积分|^当前等级$|^等级福利$"
+        if isinstance(coin_return.get("next"), list):
+            coin_return["next"] = [*LEVEL_CAPTCHA_NODES,
+                                   *(n for n in coin_return["next"] if n not in LEVEL_CAPTCHA_NODES)]
     stable = data.get("AdReturnStable")
+    # 新版等级页返回顶部仅显示「当前等级 / 等级福利」，没有旧标题。
+    # 返回确认与任务完成分开：这些标记只恢复原广告来源的后续核对。
+    for name in ("AdReturnedAfterClose", "AdReturnStable"):
+        returned = data.get(name)
+        if isinstance(returned, dict) and isinstance(returned.get("expected"), str):
+            for marker in ("^当前等级$", "^等级福利$"):
+                if marker not in returned["expected"].split("|"):
+                    returned["expected"] += "|" + marker
     if isinstance(stable, dict) and isinstance(stable.get("next"), list):
         stable["next"] = [*LEVEL_CAPTCHA_NODES,
                           {"name": "LevelAfterAd", "anchor": True}]
@@ -196,16 +207,18 @@ def _apply_level_ad_runtime_overrides(data: Dict[str, Any]) -> None:
         # 「跳过」放弃奖励后返回，积分行仍是「看小视频」。此时换一条广告
         # 重试（LevelClickPointsAdAgain 最多 2 次），而不是直接判失败。
         points_return["next"] = [
+            *LEVEL_CAPTCHA_NODES,
             "LevelPointsSectionFound", "LevelClickPointsAdAgain", "LevelVerifyPointsScroll",
         ]
     data["LevelVerifyPointsScroll"] = {
         "action": "Swipe",
-        "begin": [360, 420],
-        "end": [360, 1120],
+        "begin": [360, 1080],
+        "end": [360, 400],
         "duration": 500,
         "post_delay": 700,
         "max_hit": 5,
         "next": [
+            *LEVEL_CAPTCHA_NODES,
             "LevelPointsSectionFound", "LevelClickPointsAdAgain", "LevelVerifyPointsScroll",
         ],
     }
@@ -381,6 +394,11 @@ def _apply_level_ad_page_recovery_overrides(data: Dict[str, Any]) -> None:
             nexts[:] = [*LEVEL_CAPTCHA_NODES,
                         *(name for name in nexts if name not in LEVEL_CAPTCHA_NODES)]
             _insert_before(nexts, "LevelAdMyPageReturn", "AdScrollDownRepeat")
+            # 已返回的已知页面必须先于 DirectHit 等待；否则后面的返回
+            # 候选永久无法判断，等待预算耗尽才暴露原本已成功的转场。
+            if "AdReturnedAfterClose" in nexts:
+                nexts.remove("AdReturnedAfterClose")
+            nexts.insert(nexts.index("AdScrollDownRepeat"), "AdReturnedAfterClose")
             if "LevelAdUnknownWait" not in nexts:
                 nexts.insert(nexts.index("AdScrollDownRepeat") + 1, "LevelAdUnknownWait")
 
