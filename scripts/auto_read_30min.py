@@ -201,11 +201,25 @@ def reader_focus() -> str:
     return adb("shell", "dumpsys", "window", timeout=15)
 
 
+def reader_is_foreground(focus: str | None = None) -> bool:
+    """只看前台焦点；窗口列表中的后台 ReaderPageActivity 不能证明正在读书。"""
+    if focus is None:
+        focus = reader_focus()
+    for key in ("mCurrentFocus", "mFocusedApp"):
+        lines = [line for line in focus.splitlines() if line.strip().startswith(key + "=")]
+        if lines:
+            return any(
+                re.search(r"com\.qq\.reader/(?:com\.qq\.reader)?\.activity\.ReaderPageActivity(?:[\s}])", line)
+                for line in lines
+            )
+    return False
+
+
 def wait_reader_page(timeout: float = 8.0) -> bool:
     """等待进入 QQ 阅读受保护的正文页。"""
     deadline = time.monotonic() + max(0.5, timeout)
     while time.monotonic() < deadline:
-        if READER_ACTIVITY in reader_focus():
+        if reader_is_foreground():
             return True
         time.sleep(0.4)
     return False
@@ -227,10 +241,16 @@ def ocr_boxes() -> list[tuple[str, tuple[int, int, int, int]]]:
     try:
         shot = _client.screencap()
         result = _client.recognize("OCR", {}, shot)
-        return list(result.text_boxes())
+        boxes = list(result.text_boxes())
     except Exception as exc:  # noqa: BLE001 - OCR 失败按「读不到」处理
         log(f"OCR 读取失败：{exc}")
         return []
+    # 每次新帧都检查，包括关弹窗、回书架、点击书目和中断恢复的内部复查。
+    # 放在异常捕获之外，不能把验证码阻塞吞成空 OCR 后继续普通恢复。
+    if any(marker in text for text, _ in boxes for marker in CAPTCHA_MARKERS):
+        record_page_evidence("阅读导航检测到验证码", boxes)
+        raise ReadingBlockedByCaptcha("阅读导航检测到验证码，停止自动操作并等待人工")
+    return boxes
 
 
 def find_text(
@@ -527,6 +547,8 @@ def confirm_allowed_book_on_shelf(attempts: int = SHELF_CONFIRM_ATTEMPTS) -> str
         dismiss_blocking_dialogs()
         try:
             return_to_shelf()
+        except ReadingBlockedByCaptcha:
+            raise
         except RuntimeError as exc:
             log(f"回书架未成功：{exc}")
     if page == "书架":
@@ -584,6 +606,8 @@ def click_target_book(max_attempts: int = 3) -> None:
             log(f"第 {attempt}/{max_attempts} 次：{message}，回到书架后重试")
             try:
                 return_to_shelf()
+            except ReadingBlockedByCaptcha:
+                raise
             except RuntimeError:
                 press_back()
                 time.sleep(2.0)
@@ -607,11 +631,45 @@ def best_effort_auto_read() -> None:
     """盲点「自动阅读」。正文页读不回状态，所以只尝试、不校验。"""
     try:
         for x, y in AUTO_READ_TAPS:
+            if not reader_is_foreground():
+                log("自动阅读按钮操作中前台已变化，停止后续点击并交给正文确认")
+                return
             tap(x, y)
             time.sleep(1.0)
         log("已尝试点击「自动阅读」；本段仍以正文停留计时为准")
     except Exception as exc:  # noqa: BLE001 - 盲点失败不影响 dwell 计时
         log(f"自动阅读按钮操作未确认，继续使用正文停留保底：{exc}")
+
+
+def recover_reader_page(attempt: int, max_attempts: int = 2) -> None:
+    """正文中断先留证据；只在确认安全页面后重新进入白名单书，验证码不恢复。"""
+    focus = reader_focus()
+    focus_lines = [line.strip() for line in focus.splitlines()
+                   if line.strip().startswith(("mCurrentFocus=", "mFocusedApp="))]
+    log("正文前台中断：" + " | ".join(focus_lines or ["未读到前台焦点"]))
+    for check in range(3):
+        boxes = ocr_boxes()
+        record_page_evidence("阅读正文中断", boxes)
+        if any(marker in text for text, _ in boxes for marker in CAPTCHA_MARKERS):
+            raise ReadingBlockedByCaptcha("阅读中断后检测到验证码，停止翻页并等待人工")
+        if reader_is_foreground():
+            return  # 短暂焦点变化已经恢复，重新计满被中断的分钟。
+        page = classify_page(boxes)
+        if page in ("书架", "书城", "奖励页", "弹窗"):
+            if attempt > max_attempts:
+                raise RuntimeError("正文重复中断，已耗尽本段受控重入次数")
+            dismiss_blocking_dialogs()
+            return_to_shelf()
+            why = confirm_allowed_book_on_shelf()
+            log(f"正文中断恢复 {attempt}/{max_attempts}：{why}")
+            click_target_book()
+            if not wait_reader_page():
+                raise RuntimeError("正文中断恢复后仍未确认前台正文页")
+            return
+        # UNKNOWN 不点击；重新截图确认，保留具体现场供后续排障。
+        if check < 2:
+            time.sleep(SHELF_RECHECK_SECONDS)
+    raise RuntimeError("正文中断后无法确认安全页面，未继续翻页或累计时长")
 
 
 def dwell(minutes: int, segment: int, segments: int) -> None:
@@ -621,15 +679,28 @@ def dwell(minutes: int, segment: int, segments: int) -> None:
     又可能因重复点击而反向关闭。因此每 18 秒补一次纵向翻页，分钟心跳同时确认
     正文 Activity 仍在前台。
     """
+    recoveries = 0
     for minute in range(1, minutes + 1):
-        for _ in range(3):
-            # 用户已将阅读器设为上下滚动模式；纵向上滑避开正文评论热点。
-            adb("shell", "input", "swipe", "360", "1050", "360", "350", "500")
-            time.sleep(18)
-        if READER_ACTIVITY not in reader_focus():
-            raise RuntimeError(f"第 {segment}/{segments} 段第 {minute} 分钟时已离开正文页")
-        # 三次翻页耗时约 54 秒，补足一分钟后再记心跳。
-        time.sleep(6)
+        while True:
+            interrupted = False
+            for _ in range(3):
+                if not reader_is_foreground():
+                    interrupted = True
+                    break
+                # 用户已将阅读器设为上下滚动模式；纵向上滑避开正文评论热点。
+                adb("shell", "input", "swipe", "360", "1050", "360", "350", "500")
+                time.sleep(18)
+                if not reader_is_foreground():
+                    interrupted = True
+                    break
+            if not interrupted:
+                time.sleep(6)
+                interrupted = not reader_is_foreground()
+            if not interrupted:
+                break
+            recoveries += 1
+            recover_reader_page(recoveries)
+            # 恢复耗时和被中断的分钟不算阅读时长，重新计满这一分钟。
         log(
             f"正文主动翻页 第 {segment}/{segments} 段：{minute}/{minutes} 分钟"
             f"（本段剩 {minutes - minute} 分钟）"
@@ -668,6 +739,7 @@ def main() -> int:
         return 2
 
     config = load_config(args.config)
+    from qqreader.runner.exit_codes import EXIT_BLOCKED_BY_CAPTCHA
     _adb_path = config.machine.adb_path
     _adb_address = config.machine.adb_address
     _evidence_dir = Path(config.machine.screenshot_dir)
@@ -703,18 +775,22 @@ def main() -> int:
         log("用户中断，尝试返回可截图页面")
         try:
             return_to_capturable()
+        except ReadingBlockedByCaptcha as exc:
+            log(f"BLOCKED_BY_CAPTCHA：{exc}")
+            return EXIT_BLOCKED_BY_CAPTCHA
         except RuntimeError as exc:
             log(f"中断清理失败：{exc}")
         return 130
     except ReadingBlockedByCaptcha as exc:
-        from qqreader.runner.exit_codes import EXIT_BLOCKED_BY_CAPTCHA
-
         log(f"BLOCKED_BY_CAPTCHA：{exc}")
         return EXIT_BLOCKED_BY_CAPTCHA
     except BookNotAllowed as exc:
         log(f"❌ 书源校验/选书失败（exit 3）：{exc}")
         try:
             return_to_capturable()
+        except ReadingBlockedByCaptcha as exc:
+            log(f"BLOCKED_BY_CAPTCHA：{exc}")
+            return EXIT_BLOCKED_BY_CAPTCHA
         except RuntimeError:
             pass
         return 3
@@ -722,6 +798,9 @@ def main() -> int:
         log(f"❌ 自动阅读失败：{exc}")
         try:
             return_to_capturable()
+        except ReadingBlockedByCaptcha as exc:
+            log(f"BLOCKED_BY_CAPTCHA：{exc}")
+            return EXIT_BLOCKED_BY_CAPTCHA
         except RuntimeError:
             pass
         return 2

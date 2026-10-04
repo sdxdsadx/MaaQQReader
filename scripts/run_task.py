@@ -34,6 +34,7 @@ from qqreader.maa.device import MaaDeviceController
 from qqreader.maa.factory import build_maa_client
 from qqreader.maa.locator import MaaFeatureLocator
 from qqreader.maa.observer import MaaPageObserver
+from qqreader.maa.probes import DeviceProbe, SubprocessShellRunner
 from qqreader.page.feature_keys import DEFAULT_FEATURE_KEYS
 from qqreader.page.profiles import build_default_state_definitions
 from qqreader.page.recognizer import PageStateRecognizer
@@ -750,10 +751,17 @@ def _build_runtime(client: Any, *, verbose: bool):
         keys,
         rois={"game_ocr_online_play": (0, 800, 720, 1280)},
     )
+    runtime_config = getattr(client, "config", None)
+    foreground_probe = None
+    if runtime_config is not None and runtime_config.adb_path:
+        foreground_probe = DeviceProbe(
+            SubprocessShellRunner(runtime_config.adb_path, runtime_config.adb_address)
+        )
     observer = DeviceScreencapGuard(
         LoggingObserver(
             MaaPageObserver(
-                client, catalog, target_package=keys.qq_reader_package
+                client, catalog, target_package=keys.qq_reader_package,
+                foreground_probe=foreground_probe,
             ),
             verbose=verbose,
         ),

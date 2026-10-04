@@ -376,6 +376,16 @@ class GameTaskAdapter(PlannedTaskAdapter):
         keys = DEFAULT_FEATURE_KEYS
         state = context.decision.state if context.decision is not None else None
 
+        # MuMu 桌面有「游戏中心」图标，不能因此把它当成 QQ 阅读游戏列表。
+        # 包名由当前设备 HOME Activity 核对；只恢复这个明确的桌面包，
+        # 不打断其他外部游戏。保留已经完成的挂机/退出/待领奖标记。
+        if context.observation.current_app == "com.mumu.launcher":
+            launches = int(context.get("game_launcher_reentries", 0))
+            if launches < 3:
+                context.update_data(game_launcher_reentries=launches + 1)
+                return self._execute(Action.launch_app(self._expected_package), context)
+            return StepResult("QQ 阅读反复退出到桌面，等待恢复或独立超时", progress=False)
+
         popup_step = self._dismiss_blocking_popup(context, state)
         if popup_step is not None:
             return popup_step
@@ -516,6 +526,8 @@ class GameTaskAdapter(PlannedTaskAdapter):
                 return _claim_or_scroll(
                     context, "游戏已退出，奖励页暂未出现可领取按钮"
                 )
+            if self._navigation_client is not None:
+                return self._open_game_row(context)
             if self._has_text(context, self._go_play_text):
                 context.update_data(game_entry_scrolls=0)
                 return self._tap_feature_or_point(
@@ -542,6 +554,8 @@ class GameTaskAdapter(PlannedTaskAdapter):
                 return _claim_or_scroll(
                     context, "游戏已退出，奖励页暂未出现可领取按钮"
                 )
+            if self._navigation_client is not None:
+                return self._open_game_row(context)
             return self._tap_feature_or_point(
                 context, self._go_play_key, self._reward_game_button_action
             )
@@ -607,6 +621,41 @@ class GameTaskAdapter(PlannedTaskAdapter):
                 context.update_data(game_shelf_tab_taps=taps + 1)
                 return self._execute(Action.tap_point(89, 1263), context)
         return super().advance(context)
+
+    def _open_game_row(self, context: TaskContext) -> StepResult:
+        """只点在线时长任务的按钮；充值行有同名按钮，不能用全屏最佳匹配。"""
+        from ..page.blocking_popup import find_blocking_popup
+        from ..reward.nav import _CAPTCHA_MARKERS, find_row_button
+
+        client = self._navigation_client
+        assert client is not None
+        shot = client.screencap()
+        boxes = list(client.recognize("OCR", {}, shot).text_boxes())
+        if any(marker in text for text, _ in boxes for marker in _CAPTCHA_MARKERS):
+            return StepResult("入口复查发现验证码，重新观测交给验证码守卫", progress=False)
+        if not boxes or find_blocking_popup(boxes) is not None:
+            return StepResult("入口被遮挡或尚未加载，重新确认页面", progress=False)
+        button = find_row_button(
+            client, (self._reward_entry_text,), (self._go_play_text,), boxes=boxes
+        )
+        if button is not None:
+            _, (x, y, w, h) = button
+            ok = client.click(x + w // 2, y + h // 2)
+            context.update_data(game_entry_scrolls=0)
+            return StepResult(
+                "点击玩游戏领赠币任务行，等待下一帧确认游戏入口",
+                actions=(ActionKind.TAP_POINT.value,), progress=ok,
+            )
+        # 只有确认仍在奖励页时才滚动；没有目标行就不点任何同名按钮。
+        reward_visible = any(
+            marker in text for text, _ in boxes
+            for marker in ("今日已获赠币", "玩游戏领赠币", "获奖记录", "看小视频领好礼")
+        )
+        attempts = int(context.get("game_entry_scrolls", 0))
+        if reward_visible and attempts < self._max_entry_scrolls:
+            context.update_data(game_entry_scrolls=attempts + 1)
+            return self._execute(self._entry_scroll_action, context)
+        return StepResult("未确认在线时长任务的按钮，重新识别或恢复", progress=False)
 
     def _claim_game_row(self, context: TaskContext) -> StepResult:
         """点「玩游戏领赠币」那一行的「立即领取」，直到该行不再显示它。

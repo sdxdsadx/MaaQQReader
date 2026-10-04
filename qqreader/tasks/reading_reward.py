@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 from ..maa.client import Box, MaaClient
+from ..reward.nav import goto_reward_page
 
 TextBox = tuple[str, Box]
 COIN_PATTERN = re.compile(r"今日已获赠币\s*(\d+)")
@@ -94,26 +95,9 @@ def _is_reward_page(boxes: Sequence[TextBox]) -> bool:
 def _open_reward_page(client: MaaClient) -> tuple[TextBox, ...]:
     client.start_app("com.qq.reader")
     time.sleep(3)
-    for _ in range(7):
-        boxes = _boxes(client)
-        if _is_reward_page(boxes):
-            return boxes
-        entry = next(
-            (
-                box
-                for text, box in boxes
-                if "兑赠币" in text
-                or "领20赠币" in text
-                or ("本周" in text and "阅读" in text)
-            ),
-            None,
-        )
-        if entry is not None:
-            _click_box(client, entry)
-            time.sleep(5)
-            continue
-        client.click_key(4)
-        time.sleep(1.2)
+    # 统一导航优先点真正的时长卡按钮；每步重拍、先处理遮罩，UNKNOWN 不盲返。
+    if goto_reward_page(client, sleep=time.sleep):
+        return _boxes(client)
     raise RuntimeError("无法从当前页面进入阅读奖励页")
 
 

@@ -21,6 +21,40 @@
 
 ---
 
+## 2026-10-04 · 修复阅读中断、领奖导航及游戏误点入口
+
+**触发**：用户要求依据今日日志修正自动阅读失败、每日游戏无法打开。正式 GUI 记录 `runtime/records/daily_flows/daily_20261004_110610_70bbe0cb.json`：阅读 33 分钟在 85 秒后 FAILED（exit 2），随后游戏被用户停止；`runtime/logs/auto_read.log` 05:07:35 报“第 1/3 段第 1 分钟时已离开正文页”。`runtime/logs/maafw.bak.2026.10.04-05.16.23.464.log` 05:09:49、05:10:21 实际点击充值行“去玩游戏”，进入空白 H5。
+
+| 任务/模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| `scripts/auto_read_30min.py` 正文确认与计时 | 正文中断后直接退出；每分钟确认前还会继续翻页 | 在完整窗口列表中查 `ReaderPageActivity`，后台窗口也能被误放行；三次翻页后才确认焦点，没有确认安全页面后重新进入的分支 | 只看前台焦点，自动阅读按钮操作及每次翻页前后确认；中断时保存焦点、OCR、截图；确认书架/书城/奖励页/弹窗后最多两次重新进入白名单书，UNKNOWN 重拍不点击；被中断的分钟重新计满 |
+| 同上恢复/选书与失败清理 | 复查中新出现验证码可能被普通导航失败捕获，继续按返回 | `ReadingBlockedByCaptcha` 是 `RuntimeError` 子类，原普通 catch 会吞掉阻塞异常 | 每次 OCR 新帧先检测验证码；选书、回书架显式传播验证码异常；失败清理遇验证码也返回 exit 10，保留现场。未修改滑块求解器或启用逻辑 |
+| `qqreader/tasks/reading_reward.py::_open_reward_page` / `qqreader/reward/nav.py::goto_reward_page` | 阅读十分钟后领奖无法进入奖励页，返回后困在退出框；正确点击后加载帧仍被判失败 | 独立领奖导航先点“再读9分钟领20赠币”说明文字 (165,205)，没有点真正按钮 (597,180)；盲 BACK 不处理退出确认框；统一导航见 H5 过渡帧立刻返回 False | 领奖复用统一导航、优先时长卡按钮；“确定退出QQ阅读”先点取消再重拍；未知/加载帧在原12步预算内等待重拍，期间无输入，仍未确认才退出 |
+| `qqreader/tasks/game.py::_open_game_row` | 在线时长任务和充值任务都有“去玩游戏”，实际点了充值入口 | 全屏 OCR 最佳匹配选中下方同名按钮，没有绑定任务标题 | 新截图内只点“玩游戏领赠币”标题同一行按钮；缺失目标只在确认奖励页时受控滚动，不用同名按钮或固定点击兜底；点击后等待下一帧确认，不提前开始计时 |
+| `scripts/run_task.py::_build_runtime` 与游戏恢复 | 第一轮复验遇网页断连、QQ 阅读无响应，恢复到 MuMu 桌面后反复按返回 | 运行观察未接已有 `DeviceProbe`，前台包名一直为 None；桌面“游戏中心”图标被当游戏列表 | 注入现有 ADB 只读前台探测；明确 `com.mumu.launcher` 时最多三次重新打开 QQ 阅读，保留游戏计时、已退出及待领奖状态 |
+
+**改动文件**：上表五个代码文件、`tests/test_daily_entry_20261004.py`、`tests/test_reading_interruptions.py`、`tests/fixtures/daily_entry_20261004.json`、本日志。
+
+**验证**：
+- 新增真实 OCR 回放：两种奖励页布局都点击在线时长任务，充值行单独存在时不点；新帧有验证码不点；桌面恢复保留游戏退出状态；实际运行组合注入前台包名。阅读回放覆盖后台正文窗口、书架中断重新进入、UNKNOWN 不盲点、恢复/选书中新验证码不返回，另检查三类失败清理保留验证码 exit 10。关键失败先在修复前复现（选书验证码回放实际记录一次错误 BACK）。
+- 相关检查 `py -3.10 -m pytest -q tests/test_reading_interruptions.py tests/test_daily_entry_20261004.py tests/test_daily_popups.py tests/test_qqr55_reading_shelf.py tests/test_autoread_book_guard.py tests/test_book_device_selection.py tests/test_reading_reward_claim.py`：108 passed。
+- 全量 `py -3.10 -m pytest -q --junitxml=runtime/records/final_fix_20261004.xml`：496 项，490 passed、4 failed、2 skipped；基线 478 项：472 passed、4 failed、2 skipped。新增18项均通过。4 项原有失败是 `test_each_ad_round_has_its_own_initial_wait`、`test_live_exit_attempt_does_not_restart_eight_swipe_cycle`、`test_detect_slide_accepts_real_captcha_fixture`、`test_ad_play_waits_40_seconds_before_handling_buttons`；前两类涉及广告等待/退出，fixture 涉及本次开始前已删除的截图，均未纳入修复。跳过项为本机 Tk 初始化不稳定的一项 GUI 测试及缺真实截图的验证码测试，GUI 测试后台线程 Tk warning 仍存在。
+- 正式 GUI 游戏 1 分钟首轮 `daily_20261004_113523_ea2230ea`：正确进入游戏并计时；返回时网页 `ERR_CONNECTION_CLOSED`、QQ 阅读无响应，退到桌面空转，随后从 GUI 停止，CANCELLED（不能记成功）。补前台探测后复验 `daily_20261004_114447_b7c38036`：进入正确游戏入口、启动并计时、退出返回奖励页，SUCCEEDED（exit 0，2 分 42 秒），任务证据 `runtime/records/DailyGameFlow_20261004_054724_305415.json`。奖励页显示“再玩18分钟即可领取”，因此这里只验证短时游戏闭环，**没有宣称20分钟档奖励到账**。
+- 正式 GUI 阅读 10 分钟 `daily_20261004_114942_62515434`：05:50 主动通过模拟器界面返回书架进行受控中断；05:50:56 留书架现场，05:50:59 确认原书、05:51:00 重新进入正文；06:01:22 计满10分钟、06:01:24 返回书架。该次整项仍 FAILED（exit 2），因暴露原有领奖入口问题。修复入口优先级后 `daily_20261004_120406_5f0f3a23` 从退出确认框重试仍失败（exit 3）；取消退出框修复后 `daily_20261004_120704_ce371ab9` 遇持续黑屏，exit 3；正式界面关闭 QQ 标签、再用 GUI 启动 QQ 阅读恢复后，书架显示时长735→745分钟，确认本轮阅读被应用记录。`daily_20261004_121006_3c857576` 再暴露 H5 过渡帧立即失败（exit 3），已加入等待重拍。
+- 最终 GUI 领奖补跑 `daily_20261004_121145_14a100b6`：SUCCEEDED（exit 0，17秒）；结果“赠币10→30”，10分钟档变为“已领取”，30分钟档仍未达到。证据 `runtime/screenshots/reading_reward_claim_before_20261004_061153.png`、`reading_reward_claim_after_20261004_061202.png`。此次十分钟阅读、中断恢复与20赠币到账分别有实机证据，**没有把前面失败记录改写成整项成功**。
+
+**未覆盖 / 遗留**：
+- 原始 05:07 阅读为何离开正文未自然重现，原日志缺少当时焦点与现场截图；此次修复的是可确认的前台判据和缺失恢复分支，实机中断为主动注入，不能写成重现原始诱因。
+- 未实机跑满阅读 33 分钟、游戏 25 分钟，未覆盖阅读跨段返回和三天无人值守；UNKNOWN/验证码及桌面重入分支主要由真实帧回放和单元测试覆盖。原有选书等待正文失败后的固定“查看原文”备用点击没有全面改造。
+- 第一轮实机网络断连与 QQ 阅读无响应属于现场故障，未修改代理或网络持久配置。原有广告测试差异、截图删除及快捷方式保留。
+- 领奖整段尚未实机遇验证码；统一入口会停止点击，但领奖上层仍可能记普通导航失败，验证码专用 outcome 尚非此次完整覆盖。最后领奖补跑前有通过正式界面的人工应用重开，未验证黑屏无人干预恢复。
+- 验证结束后通过 GUI 恢复阅读 33 分钟、游戏 25 分钟；`runtime/gui_tasks.json` 与测试前备份的 JSON 内容完全一致，勾选项和其他设置均已恢复。
+
+**分支**：`codex/reading-game-log-fix-20261004`
+**回滚**：`git log --oneline -S "修复阅读中断、领奖导航及游戏误点入口" -- CHANGELOG.md` 定位本次提交后 `git revert <hash>`。GUI 测试前配置备份：`runtime/records/gui_tasks_before_20261004_fix.json`。
+
+---
+
 ## 2026-10-02 · 修复滑块验证码求解器写死配置路径导致的崩溃，恢复自动求解后继续任务
 
 **触发**：用户反馈「遇到滑动验证码无法正常运行」，要求调用 GUI 模拟人工点击实机复现。`runtime/records/DailyAdFlow_20261001_173332_121299.json` 在 `captcha.detected` 之后立刻 `未预期异常: ConfigError: 配置文件不存在: configs\qqreader.local.json`，任务被判 FAILED（exit 2），滑块一次都没滑出去；`DailyAdFlow_20261001_192252_745520.json`、`DailyAdFlow_20261002_050425_790460.json` 则记为「未配置自动求解器，等待人工处理验证码」（那两次跑的是 `agent/T-008` worktree 的代码，其 `--captcha-mode manual` 默认值强制人工守卫，不在本次改动范围）。
