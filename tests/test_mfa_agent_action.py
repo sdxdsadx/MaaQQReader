@@ -222,6 +222,19 @@ def test_handoff_command_precedes_task(tmp_path):
     assert str(REPO_ROOT) in env["PYTHONPATH"].split(";") + env["PYTHONPATH"].split(":")
 
 
+def test_child_env_is_unbuffered(tmp_path):
+    # 2026-10-06 实机 mfa_20261006_210156_c258e537：子进程 stdout 是管道，Python
+    # 默认块缓冲，游戏任务的输出在结束时才一次性出现在 MFA 日志。
+    spec, values = reading()
+    runner, popen, _, _ = make_runner(
+        tmp_path, [FakeProcess(101, 0), FakeProcess(102, 0)]
+    )
+    runner.run(spec, values)
+    assert len(popen.kwargs) == 2
+    for kwargs in popen.kwargs:
+        assert kwargs["env"]["PYTHONUNBUFFERED"] == "1"
+
+
 def test_success_requires_exit_zero(tmp_path):
     spec, values = reading()
     runner, _, _, _ = make_runner(tmp_path, [FakeProcess(101, 0), FakeProcess(102, 0)])

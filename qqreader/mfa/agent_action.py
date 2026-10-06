@@ -275,6 +275,8 @@ class TaskRunner:
         env = dict(os.environ)
         env["PYTHONUTF8"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
+        # stdout 是管道时 Python 默认块缓冲，输出会攒到子进程结束才进 MFA 日志。
+        env["PYTHONUNBUFFERED"] = "1"
         root = str(self.repo_root)
         existing = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = root + (os.pathsep + existing if existing else "")
