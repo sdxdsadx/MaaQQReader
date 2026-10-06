@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -52,6 +53,8 @@ DEFAULT_CONFIG_RELATIVE = Path("configs/qqreader.local.json")
 
 #: 参数里允许出现但动作不处理的键（重复次数交给 MFA 的 repeat_count）。
 _IGNORED_KEYS = frozenset({"count"})
+#: MFA 未替换的占位符（例如输入框留空时原样传来的 ``{cover_image}``），按缺省处理。
+_PLACEHOLDER_RE = re.compile(r"^\{[A-Za-z_][A-Za-z0-9_]*\}$")
 _POLL_INTERVAL_SECONDS = 0.5
 _KILL_WAIT_SECONDS = 10.0
 _CONFIG_MISSING_MESSAGE = (
@@ -66,7 +69,8 @@ _CONFIG_MISSING_MESSAGE = (
 def parse_param(raw: Union[str, Mapping[str, Any]]) -> Tuple[TaskSpec, Dict[str, Any]]:
     """解析 MFA 传来的 ``custom_action_param``（JSON 字符串或字典）。
 
-    返回任务描述与按 ``TaskSettingField.normalize`` 规整后的参数（未提供的取默认值）。
+    返回任务描述与按 ``TaskSettingField.normalize`` 规整后的参数（未提供的、或仍是
+    未替换占位符 ``{name}`` 的取默认值）。
     未知任务、未知键、取值非法都抛 ``ValueError``。
     """
     if isinstance(raw, Mapping):
@@ -98,6 +102,8 @@ def parse_param(raw: Union[str, Mapping[str, Any]]) -> Tuple[TaskSpec, Dict[str,
         if item.key in _IGNORED_KEYS:
             continue
         raw_value = data.get(item.key, item.default)
+        if isinstance(raw_value, str) and _PLACEHOLDER_RE.fullmatch(raw_value.strip()):
+            raw_value = item.default
         try:
             values[item.key] = item.normalize(raw_value)
         except (TypeError, ValueError) as exc:

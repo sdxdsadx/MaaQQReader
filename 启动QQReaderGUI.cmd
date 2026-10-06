@@ -6,7 +6,8 @@ rem  1) 定位 Python 3.10
 rem  2) 用 MuMuManager 查询实例真实 adb 端口（不再写死端口）
 rem  3) 模拟器未启动则自动拉起，并等 adb 可连接 + boot 完成
 rem  4) 回写 configs\qqreader.local.json 的 adb_address
-rem  5) 设好 PYTHONPATH 后启动 GUI
+rem  5) 设好 PYTHONPATH 后启动 GUI：默认打开 MFAAvalonia（mfa\MFAAvalonia.exe）；
+rem     加参数 classic（启动QQReaderGUI.cmd classic）打开旧的 Tkinter GUI
 rem ============================================================
 setlocal EnableExtensions EnableDelayedExpansion
 set "PYTHONUTF8=1"
@@ -104,16 +105,47 @@ rem ---------- 6) 启动 GUI ----------
 set "PYTHONPATH=%ROOT%"
 if "!PYTHONPATH:~-1!"=="\" set "PYTHONPATH=!PYTHONPATH:~0,-1!"
 echo [env] PYTHONPATH=!PYTHONPATH!
-echo [env] 启动 QQReader GUI ...
 
-if "%~1"=="" (
-  if exist "%CONFIG%" (
-    %PYEXE% -m qqreader.gui --config "%CONFIG%"
-  ) else (
-    %PYEXE% -m qqreader.gui
-  )
+if /i "%~1"=="classic" goto :launch_classic
+
+rem ---------- 6a) 默认：MFAAvalonia ----------
+set "MFAEXE=%ROOT%mfa\MFAAvalonia.exe"
+if not exist "%MFAEXE%" (
+  echo [ERROR] 未找到 %MFAEXE%
+  echo         请从 https://github.com/MaaXYZ/MFAAvalonia/releases 下载 v2.16.2 win-x64 并解压到 mfa\
+  echo         或运行 启动QQReaderGUI.cmd classic 打开旧 GUI。
+  pause
+  exit /b 3
+)
+%PYEXE% -c "import maa" >nul 2>nul
+if errorlevel 1 (
+  echo [ERROR] 当前 Python 未安装 MaaFw（MFAAvalonia 的 Agent 需要它）。请运行：
+  echo         %PYEXE% -m pip install "MaaFw==5.12.3"
+  echo         或运行 启动QQReaderGUI.cmd classic 打开旧 GUI。
+  pause
+  exit /b 4
+)
+rem MFA 以 interface.json 中的 "python" 启动 Agent：把本 Python 所在目录放到 PATH 最前面。
+set "PYDIR="
+for /f "usebackq delims=" %%D in (`%PYEXE% -c "import os,sys;print(os.path.dirname(sys.executable))"`) do set "PYDIR=%%D"
+if defined PYDIR (
+  set "PATH=!PYDIR!;!PATH!"
+  echo [env] Agent Python 目录: !PYDIR!
 ) else (
-  %PYEXE% -m qqreader.gui %*
+  echo [warn] 未能取得 Python 所在目录，Agent 将使用 PATH 中的 python。
+)
+echo [env] 启动 MFAAvalonia ...
+start "" /D "%ROOT%mfa" "%MFAEXE%"
+endlocal
+exit /b 0
+
+rem ---------- 6b) classic：旧 Tkinter GUI ----------
+:launch_classic
+echo [env] 启动 QQReader GUI（classic）...
+if exist "%CONFIG%" (
+  %PYEXE% -m qqreader.gui --config "%CONFIG%"
+) else (
+  %PYEXE% -m qqreader.gui
 )
 
 if errorlevel 1 (

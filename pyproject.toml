@@ -13,6 +13,8 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]
+# MFAAvalonia Agent（mfa/agent/main.py）；版本须与 MFAAvalonia v2.16.2 内置的 MaaFramework 一致。
+mfa = ["MaaFw==5.12.3"]
 
 [tool.setuptools.packages.find]
 include = ["qqreader*"]

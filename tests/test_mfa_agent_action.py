@@ -170,6 +170,28 @@ def test_parse_param_rejects_non_number():
         parse_param({"task": "DailyReadingFlow", "minutes": "abc"})
 
 
+
+def test_unreplaced_placeholder_uses_default():
+    """MFA 未替换的占位符（如 ``{cover_image}``）按缺省处理，取字段默认值。"""
+    spec, values = parse_param(
+        {
+            "task": "DailyAudiobookFlow",
+            "minutes": "{minutes}",
+            "cover_image": "{cover_image}",
+            "book_title": "{book_title}",
+        }
+    )
+    assert spec.key == "DailyAudiobookFlow"
+    assert values["minutes"] == 35.0
+    assert values["cover_image"] == ""
+    assert values["book_title"] == "全职法师"
+
+
+def test_placeholder_like_text_with_extra_chars_is_kept():
+    _, values = parse_param({"task": "DailyReadingFlow", "book_title": "{宇智波}/火影"})
+    assert values["book_title"] == "{宇智波}/火影"
+
+
 # ------------------------------------------------------------------ TaskRunner
 
 
