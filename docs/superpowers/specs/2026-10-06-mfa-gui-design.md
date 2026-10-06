@@ -11,7 +11,7 @@
 | 问题 | 决定 |
 | --- | --- |
 | 重构方式 | 直接接入 MFAAvalonia（PI V2 `interface.json` + Python Agent），不是仿写界面 |
-| Agent 通信 | 使用官方 Python 绑定 `MaaFw`，版本对齐 `dev/` 下 MaaFramework v5.12.3 |
+| Agent 通信 | 使用官方 Python 绑定 `MaaFw`，版本对齐 `dev/` 下及 MFAAvalonia v2.16.2 自带的 MaaFramework v5.12.3 |
 | 旧 Tkinter GUI | 保留代码与测试；`启动QQReaderGUI.cmd` 默认改开 MFA，带参数 `classic` 时打开旧 GUI |
 
 **成功标准**
@@ -77,11 +77,11 @@ qqreader/mfa/
 `启动QQReaderGUI.cmd` 第 1～4 步（定位 Python、查 ADB 端口、拉起模拟器、回写配置）不变。最后一步改为：
 
 - 参数为 `classic` 时：按原方式启动 Tkinter GUI。
-- 否则：检查 `mfa\MFAAvalonia.exe` 是否存在，不存在则打印下载说明后退出。存在时检查 `import maa`，失败则打印 `py -3.10 -m pip install "MaaFw==5.12.*"` 后退出。都通过后，把 Python 目录前置到 PATH、设好 PYTHONPATH，启动 MFA。
+- 否则：检查 `mfa\MFAAvalonia.exe` 是否存在，不存在则打印下载说明后退出。存在时检查 `import maa`，失败则打印 `py -3.10 -m pip install "MaaFw==5.12.3"` 后退出。都通过后，把 Python 目录前置到 PATH、设好 PYTHONPATH，启动 MFA。
 
 ### 2.5 依赖
 
-`pyproject.toml` 增加可选依赖 `mfa = ["MaaFw==5.12.*"]`。核心包仍然零依赖，测试不依赖 `maa`：`agent_action.py` 不导入 `maa`，只有 `mfa/agent/main.py` 导入。
+`pyproject.toml` 增加可选依赖 `mfa = ["MaaFw==5.12.3"]`。核心包仍然零依赖，测试不依赖 `maa`：`agent_action.py` 不导入 `maa`，只有 `mfa/agent/main.py` 导入。
 
 ## 3. 错误处理
 
