@@ -21,6 +21,22 @@
 
 ---
 
+## 2026-10-06 · 接入 MFAAvalonia 作为日常 GUI
+
+**触发**：用户要求按 MaaFramework 官方通用 GUI 第一个 MFAAvalonia 重构 GUI（设计见 `docs/superpowers/` 下 MFAAvalonia 接入设计与实施计划）。本条随后续任务继续补充。
+
+| 任务/模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| `qqreader/mfa/agent_action.py`（新增） | MFAAvalonia 只能通过 Agent 自定义动作调用 Python，旧 Tk GUI 的串行逻辑无法复用 | 交接检查、子进程管理、记录写在 Tk 界面类 `qqreader/gui/app.py` 里 | 新增纯逻辑模块（不导入 `maa`）：`ACTION_NAME = "QQReaderRunTask"`；`parse_param` 解析 JSON 参数并按任务目录 `TaskSettingField.normalize` 规整（未知任务 / 未知键 / 非法值抛中文 `ValueError`，`count` 忽略，交给 MFA 的 `repeat_count`）；`TaskRunner.run` 加载本机配置 → 单步 `DailyFlowRun`（run_id 前缀 `mfa_`）→ `HandoffCheck` 子进程 → `apply_handoff` → `scripts/run_task.py` 子进程 → `complete_current` → 写 `records/daily_flows/`；0.5 秒轮询，停止时只按本动作启动的 PID `taskkill /T /F`，返回 13；交接 / 任务退出 10 时 `exit_code=10`、消息含 `BLOCKED_BY_CAPTCHA`；子进程输出按 UTF-8（errors=replace）逐行转发 |
+
+**改动文件**：`qqreader/mfa/__init__.py`、`qqreader/mfa/agent_action.py`、`tests/test_mfa_agent_action.py`（新增）；本日志。
+**验证**：`py -3.10 -m pytest tests/test_mfa_agent_action.py`：21 passed（实现前收集即 `ModuleNotFoundError`）。全量 `py -3.10 -m pytest`：459 passed、21 failed、2 skipped；不含新文件时为 438 passed、21 failed，失败项完全相同（4 项为 master 已知失败；其余 17 项是本 worktree 缺少被 .gitignore 忽略的 `dev/resource/pipeline/*.json` 与 `_backup_old_project_*` 目录），无新增失败。
+**未覆盖 / 遗留**：实机未验证，后续任务（interface.json / pipeline、`mfa/agent/main.py`、MFAAvalonia 打包）补实机验证；每个 MFA 任务都先跑交接检查（旧 GUI 首项不做交接），实机待确认。
+**分支**：`claude/mfa-gui-20261006`
+**回滚**：`git log --oneline -S "接入 MFAAvalonia 作为日常 GUI" -- CHANGELOG.md` 定位后 `git revert <hash>`。
+
+---
+
 ## 2026-09-29 · 计划外弹窗统一优先找关闭按钮；修复奖励页被判书架、游戏退出后不领奖空转、阅读领奖漏读币值
 
 **触发**：用户要求不要只处理固定弹窗——任何计划外弹窗都优先找关闭按钮（X 或「关闭」），并实机完整跑一轮（自动阅读 1 轮 × 10 分钟）。实机运行 `daily_20260929_111500_9cb3bb10` 和补跑 `daily_20260929_123918_ff2993fd` 又暴露三个原有缺陷。
