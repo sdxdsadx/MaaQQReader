@@ -106,7 +106,10 @@ def _find_reward_entry(boxes: Sequence[TextBox]) -> Box | None:
 
 
 def _wait_for_reward_page(
-    client: MaaClient, load_wait_seconds: float, poll_seconds: float
+    client: MaaClient,
+    load_wait_seconds: float,
+    poll_seconds: float,
+    settle_seconds: float,
 ) -> tuple[tuple[TextBox, ...], bool]:
     """点击入口后重新截图等待奖励页出现。
 
@@ -114,14 +117,21 @@ def _wait_for_reward_page(
     加载，OCR 只读到状态栏几个字符；旧逻辑据此按返回，把加载中的页面取消，
     7 轮全部失败。加载中/空白帧既不是奖励页也不是书架，只能继续等待。
 
-    返回 (最后一帧, 是否超时)。看到奖励页或入口（点击没生效）时立即返回。
+    入口仍可见只在点击 ``settle_seconds`` 秒后才算“点击没生效”：页面切换慢时
+    书架会多停留一会儿，过早重点会打开两层奖励页，之后 ``_refresh_reward_page``
+    按返回只回到旧的奖励页。
+
+    返回 (最后一帧, 是否超时)。看到奖励页、或稳定期后仍看到入口时立即返回。
     """
-    polls = max(1, math.ceil(float(load_wait_seconds) / max(float(poll_seconds), 0.01)))
+    poll = max(float(poll_seconds), 0.01)
+    polls = max(1, math.ceil(max(float(load_wait_seconds), 0.0) / poll))
     boxes: tuple[TextBox, ...] = ()
-    for _ in range(polls):
-        time.sleep(poll_seconds)
+    for index in range(1, polls + 1):
+        time.sleep(poll)
         boxes = _boxes(client)
-        if _is_reward_page(boxes) or _find_reward_entry(boxes) is not None:
+        if _is_reward_page(boxes):
+            return boxes, False
+        if index * poll >= settle_seconds and _find_reward_entry(boxes) is not None:
             return boxes, False
     return boxes, True
 
@@ -131,6 +141,7 @@ def _open_reward_page(
     *,
     load_wait_seconds: float = 15.0,
     poll_seconds: float = 1.5,
+    settle_seconds: float = 5.0,
 ) -> tuple[TextBox, ...]:
     client.start_app("com.qq.reader")
     time.sleep(3)
@@ -141,13 +152,18 @@ def _open_reward_page(
         entry = _find_reward_entry(boxes)
         if entry is not None:
             _click_box(client, entry)
-            boxes, expired = _wait_for_reward_page(client, load_wait_seconds, poll_seconds)
+            boxes, expired = _wait_for_reward_page(
+                client, load_wait_seconds, poll_seconds, settle_seconds
+            )
             if not expired:
                 continue
         # 点击前不在书架/奖励页，或点击后等满仍未出现奖励页：按返回再判定。
         client.click_key(4)
         time.sleep(1.2)
         boxes = _boxes(client)
+    # 最后一轮点击后等到了奖励页，循环已结束，不能再判失败。
+    if _is_reward_page(boxes):
+        return boxes
     raise RuntimeError("无法从当前页面进入阅读奖励页")
 
 

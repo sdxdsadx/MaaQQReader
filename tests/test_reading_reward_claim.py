@@ -237,7 +237,9 @@ def test_open_reward_page_waits_while_page_loading(no_sleep):
 def test_open_reward_page_reclicks_when_still_on_shelf(no_sleep):
     from qqreader.tasks.reading_reward import _open_reward_page
 
-    client = _FrameClient([SHELF, SHELF, LOADING[0], REWARD])
+    # 点击后书架一直在：1.5/3.0/4.5 秒的书架帧不算“点击没生效”（页面可能还在切换），
+    # 6.0 秒（过了 5 秒稳定期）仍是书架才重点。
+    client = _FrameClient([SHELF, SHELF, SHELF, SHELF, SHELF, LOADING[0], REWARD])
 
     boxes = _open_reward_page(client)
 
@@ -262,3 +264,38 @@ def test_open_reward_page_backs_out_after_wait_expires(no_sleep):
     # 点击后至少轮询满 15 秒（1.5 秒一次，共 10 次截图）才允许按返回。
     assert shots_between >= 10
     assert client.clicks() == [ENTRY_CENTER]
+
+
+def test_open_reward_page_shelf_seen_briefly_then_loads_clicks_once(no_sleep):
+    from qqreader.tasks.reading_reward import _open_reward_page
+
+    # 点击后第一次轮询（约 1.5 秒）书架还在，随后开始加载：不能重点，否则会打开两层奖励页。
+    client = _FrameClient([SHELF, SHELF, LOADING[0], LOADING[1], REWARD])
+
+    boxes = _open_reward_page(client)
+
+    assert boxes == REWARD
+    assert client.clicks() == [ENTRY_CENTER]
+    assert client.backs() == []
+
+
+def test_open_reward_page_returns_reward_seen_on_last_attempt(no_sleep):
+    from qqreader.tasks.reading_reward import _open_reward_page
+
+    # 前 6 轮都是未知页（按返回），第 7 轮回到书架点击后奖励页出现：应返回而不是报错。
+    client = _FrameClient([*([LOADING[0]] * 6), SHELF, REWARD])
+
+    boxes = _open_reward_page(client)
+
+    assert boxes == REWARD
+    assert client.clicks() == [ENTRY_CENTER]
+    assert len(client.backs()) == 6
+
+
+def test_open_reward_page_negative_poll_does_not_sleep_negative(no_sleep):
+    from qqreader.tasks.reading_reward import _open_reward_page
+
+    client = _FrameClient([SHELF, LOADING[0], REWARD])
+
+    assert _open_reward_page(client, poll_seconds=-1) == REWARD
+    assert all(seconds >= 0 for seconds in no_sleep)
