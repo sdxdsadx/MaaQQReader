@@ -44,9 +44,17 @@
 MFAAvalonia 实机冒烟（2026-10-06）：`mfa_20261006_205538_7b15d865` 阅读#1 成功；`mfa_20261006_205809_33602f6e` 阅读#2 exit 2（即上表阅读奖励页缺陷，修复前代码）；`mfa_20261006_210010_77680a4a` 听书 成功；`mfa_20261006_210156_c258e537` 游戏 成功（但游戏子进程输出在结束时才一次性出现在 MFA 日志，见上表 `_child_env` 一行）。
 
 子进程输出不缓冲：先加 `tests/test_mfa_agent_action.py::test_child_env_is_unbuffered`，修复前 `KeyError: 'PYTHONUNBUFFERED'`；修复后该文件 24 passed；全量 505 passed、4 failed（master 已知）、1 skipped（Tk 相关测试偶发因 `tk.tcl` 找不到而多跳过 1 项，与本改动无关）。
-**未覆盖 / 遗留**：实机未验证，后续任务（interface.json / pipeline、`mfa/agent/main.py`、MFAAvalonia 打包）补实机验证；每个 MFA 任务都先跑交接检查（旧 GUI 首项不做交接），实机待确认。MFA 预设不能设置重复次数：「1 分钟试跑」里自动阅读仍按默认 2 次，需手动改为 1；`interface.json` 尚未在 MFAAvalonia 中实际加载验证（输入框占位符替换、`bool` 类型转换、预设应用待实机确认）。`mfa/agent/main.py` 的 `maa` 部分（动作注册、`post_stop`、`Toolkit.init_option`）未运行过，只由 `check_runtime` 单元测试与源码核对覆盖；启动脚本完整流程（步骤 1–6 连跑）未实机运行。阅读奖励页加载等待修复后未实机复跑；「等满 15 秒仍未加载出来后按返回」「稳定期后点击未生效重点」「最后一轮才进入奖励页」三个分支只由单元测试覆盖。子进程不缓冲修复后未实机确认 MFA 日志实时显示。
+
+全量（本次最终）：`py -3.10 -m pytest -q` 508 passed、4 failed（master 已知失败，与本次改动无关：`test_each_ad_round_has_its_own_initial_wait`、`test_live_exit_attempt_does_not_restart_eight_swipe_cycle`、`test_live_snap_detects_saved_png_not_raw_screenshot_data`、`test_ad_play_waits_40_seconds_before_handling_buttons`）、1 skipped。
+
+MFAAvalonia 实机冒烟 #1（用户在 MFA 里点击，worktree 代码，修复前）：`mfa_20261006_205538_7b15d865` 阅读#1 成功；`mfa_20261006_205809_33602f6e` 阅读#2 exit 2（`reading_reward` 奖励页加载中按返回缺陷，见上表）；`mfa_20261006_210010_77680a4a` 听书 成功；`mfa_20261006_210156_c258e537` 游戏 成功（输出有缓冲，日志结束时才一次性显示，见上表 `_child_env` 一行，当时未修）。
+
+MFAAvalonia 实机冒烟 #2（修复 83c382c / 54715b2 / ff08660 之后重跑）：`mfa_20261006_221931_af0f2959` 阅读#1 成功；`mfa_20261006_222128_9bad8f41` 阅读#2 成功（两次均正常进入奖励页并确认「已领取」，验证了奖励页加载等待修复）；`mfa_20261006_222318_a6e42f2e` 游戏 成功，日志实时显示（验证了子进程不缓冲修复；结尾整段仍是 `run_task.py` 设计上固定输出的最近 60 条诊断摘要，非缓冲残留）；听书 #2 未重跑（#1 已成功，按规则不重复验证已通过任务）。
+
+旧 Tk GUI：`python -m qqreader.gui --config ...` 启动后 8 秒内无异常，按 PID 结束，确认未因本次改动（新增 `classic` 分支）破坏旧入口；`启动QQReaderGUI.cmd classic` 整个脚本未实机跑过，`classic` 分支目前只由抽出的脚本片段测试覆盖。
+**未覆盖 / 遗留**：验证码阻塞 → `context.tasker.post_stop()` 整队列停止只由单元测试覆盖，未实机触发验证码；MFA 界面「停止」按钮未实机点过；预设「正式每日」（35 分钟级，耗时长）未实机跑；MFA 预设无法设定任务重复次数，「1 分钟试跑」里自动阅读默认仍是 2 次，需要手动改成 1（或接受 2 次耗时）；点击奖励入口后若页面加载慢，最坏要等 2～3 分钟才报错（`_wait_for_reward_page` 7 轮 × 15 秒等待的设计上限）；MFA 自身的告警（Mirror 酱资源更新检查失败、首次保存配置时的 IOException）确认不影响任务运行，未进一步处理。
 **分支**：`claude/mfa-gui-20261006`
-**回滚**：`git log --oneline -S "接入 MFAAvalonia 作为日常 GUI" -- CHANGELOG.md` 定位后 `git revert <hash>`。
+**回滚**：`git log --oneline -S "接入 MFAAvalonia 作为日常 GUI" -- CHANGELOG.md` 定位到合并提交后 `git revert -m 1 <hash>`。
 
 ---
 

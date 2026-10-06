@@ -27,12 +27,14 @@ QQReader：Windows 本地运行的 QQ 阅读每日任务自动化（MaaFramework
   - `调试QQReader.cmd`：冷启动、体检、识别检查、单任务、测试、冷停止
 - `调试QQReader.cmd` 必须保持 **GBK** 编码，调用外部程序后要重新执行 `chcp 936`。其余源码和配置一律 UTF-8。
 - 启动 GUI 必须用 `启动QQReaderGUI.cmd`（它会定位 Python、查询 MuMu 的 ADB 端口、写入本机配置、设置 PYTHONPATH）。直接双击 `dist\QQReaderGUI.exe` 不会加载本机配置，运行时会提示“请先加载本机配置文件”。
+- `启动QQReaderGUI.cmd` 默认打开 **MFAAvalonia**（MaaFramework 官方通用 GUI，v2.16.2）：程序文件需自行下载 win-x64 包解压到 `mfa\` 下（gitignore，只跟踪 `mfa/interface.json`、`mfa/resource/`、`mfa/agent/`），Agent 运行需要 `py -3.10 -m pip install "MaaFw==5.12.3"`。`启动QQReaderGUI.cmd classic` 打开旧 Tkinter GUI（动态计划、截取封面、一键启动模拟器等功能仍只有旧 GUI 有）。
+- `mfa/interface.json` 与 `mfa/resource/pipeline/qqreader.json` 是由 `qqreader/mfa/interface.py` 从任务目录（`qqreader/gui/task_catalog.py`）生成的，不要手改：改了 `task_catalog.py` 后必须跑 `py -3.10 scripts/build_mfa_interface.py` 重新生成，否则 `tests/test_mfa_interface.py`（用 `--check` 比对）会失败。
 - 打包 GUI：`scripts\build-gui-exe.cmd`，产物为 `dist/QQReaderGUI.exe`。GUI 会加载当前源码，改了源码不一定要重新打包；改了 GUI 本身才需要重建。
 
 ## Testing instructions
 
 - 全部测试：`py -3.10 -m pytest`。改动哪块就先跑对应测试文件，提交前再跑全量。
-- 冒烟试跑（实机，约 7 分钟）：GUI 侧栏「选择1分钟试跑」（每日自动阅读 → 每日游戏 → 每日听书，各 1 分钟）→「直接运行已选」。三项都应显示“成功”，汇总记录在 `runtime/records/daily_flows/`。改动任务流程后、推送前跑一次。
+- 冒烟试跑（实机，约 7 分钟）：MFAAvalonia 里选预设「1 分钟试跑」（每日自动阅读 → 每日游戏 → 每日听书，各 1 分钟；注意预设不能改重复次数，自动阅读默认仍是 2 次，可手动改成 1 或接受跑 2 次）→ 运行。三项都应显示“成功”，汇总记录在 `runtime/records/daily_flows/mfa_*.json`。旧 Tkinter GUI（`classic`）同样有「选择1分钟试跑」→「直接运行已选」。改动任务流程后、推送前跑一次。
 - 只改文档（`*.md`）时可以不跑测试，但要在交付里说明“未跑测试，原因：仅文档”。
 - 缺陷修复要补回归测试。识别相关的测试用真实截图和真实 OCR，不要只在伪造模板或假对象上通过。
 - 实机验证用 GUI：点「全不选」，只勾选要验证的任务，再点「直接运行已选」或「单独运行此任务」。已经验证成功的任务不要重复跑。
