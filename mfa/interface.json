@@ -1,0 +1,523 @@
+{
+    "interface_version": 2,
+    "name": "MaaQQReader",
+    "label": "QQ阅读每日任务",
+    "title": "QQ阅读每日任务",
+    "version": "0.1.0",
+    "controller": [
+        {
+            "name": "MuMu安卓端",
+            "type": "Adb",
+            "display_short_side": 720
+        }
+    ],
+    "resource": [
+        {
+            "name": "QQ阅读",
+            "path": [
+                "./resource"
+            ]
+        }
+    ],
+    "agent": {
+        "child_exec": "python",
+        "child_args": [
+            "-X",
+            "utf8",
+            "./agent/main.py"
+        ]
+    },
+    "task": [
+        {
+            "name": "启动 QQ 阅读",
+            "entry": "QQR_LaunchQQReader",
+            "description": "启动 QQ 阅读并处理已知开屏弹窗。",
+            "default_check": false,
+            "option": []
+        },
+        {
+            "name": "页面识别检查",
+            "entry": "QQR_SmokeTest",
+            "description": "连接 MAA、截图并输出当前页面状态/OCR，用于检查识别链路。",
+            "default_check": false,
+            "option": []
+        },
+        {
+            "name": "每日自动阅读",
+            "entry": "QQR_DailyReadingFlow",
+            "description": "在书架上按「小说书名」找书并自动阅读；每次结束后自动检查并领取阅读奖励。",
+            "default_check": true,
+            "option": [
+                "DailyReadingFlow.settings"
+            ],
+            "repeatable": true,
+            "repeat_count": 2
+        },
+        {
+            "name": "每日听书",
+            "entry": "QQR_DailyAudiobookFlow",
+            "description": "按「听书书名」或「听书封面」在书架上找书并播放；结束后关闭听书悬浮框并领取20赠币。",
+            "default_check": true,
+            "option": [
+                "DailyAudiobookFlow.settings"
+            ],
+            "repeatable": true,
+            "repeat_count": 1
+        },
+        {
+            "name": "每日游戏",
+            "entry": "QQR_DailyGameFlow",
+            "description": "奖励页 → 去玩游戏 → 游戏大厅下划 → 在线玩 → 游戏中心 → 登录/协议 → 领币计时 → 退出 → 返回奖励页",
+            "default_check": true,
+            "option": [
+                "DailyGameFlow.settings"
+            ],
+            "repeatable": true,
+            "repeat_count": 1
+        },
+        {
+            "name": "每日广告完整流程",
+            "entry": "QQR_DailyAdFlow",
+            "description": "奖励页视频广告：主页 → 奖励页 → 观看广告 → 返回奖励页 → 判断次数/验证码。",
+            "default_check": true,
+            "option": [
+                "DailyAdFlow.settings"
+            ],
+            "repeatable": true,
+            "repeat_count": 1
+        },
+        {
+            "name": "外部应用每日流程",
+            "entry": "QQR_DailyExternalAppFlow",
+            "description": "可选：只处理大众点评和百度地图，不打开京东。",
+            "default_check": false,
+            "option": [
+                "DailyExternalAppFlow.settings"
+            ],
+            "repeatable": true,
+            "repeat_count": 1
+        },
+        {
+            "name": "等级页广告每日流程",
+            "entry": "QQR_DailyLevelAdFlow",
+            "description": "我的→等级：各完成一次赠币广告和+5积分广告。",
+            "default_check": true,
+            "option": [
+                "DailyLevelAdFlow.settings"
+            ],
+            "repeatable": true,
+            "repeat_count": 1
+        },
+        {
+            "name": "重新检查阅读奖励",
+            "entry": "QQR_ClaimOneReward",
+            "description": "通常无需勾选；阅读任务已自动领取，仅用于失败后重试。",
+            "default_check": false,
+            "option": [
+                "ClaimOneReward.settings"
+            ],
+            "repeatable": true,
+            "repeat_count": 1
+        },
+        {
+            "name": "领取听书奖励",
+            "entry": "QQR_ClaimAudiobookReward",
+            "description": "关闭听书悬浮框，只领取已达标的听书奖励。",
+            "default_check": false,
+            "option": [
+                "ClaimAudiobookReward.settings"
+            ],
+            "repeatable": true,
+            "repeat_count": 1
+        }
+    ],
+    "option": {
+        "DailyReadingFlow.settings": {
+            "type": "input",
+            "label": "每日自动阅读参数",
+            "inputs": [
+                {
+                    "name": "minutes",
+                    "label": "每次分钟（分钟）",
+                    "default": "35",
+                    "pipeline_type": "string",
+                    "verify": "^\\d+(\\.\\d+)?$",
+                    "pattern_msg": "请输入非负数字，例如 35 或 0.5"
+                },
+                {
+                    "name": "timeout_minutes",
+                    "label": "任务超时（分钟）",
+                    "default": "50",
+                    "pipeline_type": "string",
+                    "verify": "^\\d+(\\.\\d+)?$",
+                    "pattern_msg": "请输入非负数字，例如 35 或 0.5"
+                },
+                {
+                    "name": "book_title",
+                    "label": "小说书名",
+                    "description": "书架上可见的书名关键词，多个用 / 分隔；书必须已在书架上，找不到时不读别的书",
+                    "default": "宇智波",
+                    "pipeline_type": "string"
+                }
+            ],
+            "pipeline_override": {
+                "QQR_DailyReadingFlow": {
+                    "custom_action_param": {
+                        "task": "DailyReadingFlow",
+                        "minutes": "{minutes}",
+                        "timeout_minutes": "{timeout_minutes}",
+                        "book_title": "{book_title}"
+                    }
+                }
+            }
+        },
+        "DailyAudiobookFlow.settings": {
+            "type": "input",
+            "label": "每日听书参数",
+            "inputs": [
+                {
+                    "name": "minutes",
+                    "label": "每次分钟（分钟）",
+                    "default": "35",
+                    "pipeline_type": "string",
+                    "verify": "^\\d+(\\.\\d+)?$",
+                    "pattern_msg": "请输入非负数字，例如 35 或 0.5"
+                },
+                {
+                    "name": "timeout_minutes",
+                    "label": "任务超时（分钟）",
+                    "default": "50",
+                    "pipeline_type": "string",
+                    "verify": "^\\d+(\\.\\d+)?$",
+                    "pattern_msg": "请输入非负数字，例如 35 或 0.5"
+                },
+                {
+                    "name": "book_title",
+                    "label": "听书书名",
+                    "description": "书架上可见的书名；书必须已在书架上",
+                    "default": "全职法师",
+                    "pipeline_type": "string"
+                },
+                {
+                    "name": "cover_image",
+                    "label": "听书封面",
+                    "description": "可选：书名识别不到时按封面找；封面须是书架画面里的原尺寸截图，建议用「截取…」框选",
+                    "default": "",
+                    "pipeline_type": "string"
+                },
+                {
+                    "name": "first_book_fallback",
+                    "label": "找不到时换书",
+                    "description": "勾选：找不到指定书就打开书架第一本（旧行为）；不勾选：找不到就失败，不会听错书",
+                    "default": "true",
+                    "pipeline_type": "bool",
+                    "verify": "^(true|false)$",
+                    "pattern_msg": "请输入 true 或 false"
+                }
+            ],
+            "pipeline_override": {
+                "QQR_DailyAudiobookFlow": {
+                    "custom_action_param": {
+                        "task": "DailyAudiobookFlow",
+                        "minutes": "{minutes}",
+                        "timeout_minutes": "{timeout_minutes}",
+                        "book_title": "{book_title}",
+                        "cover_image": "{cover_image}",
+                        "first_book_fallback": "{first_book_fallback}"
+                    }
+                }
+            }
+        },
+        "DailyGameFlow.settings": {
+            "type": "input",
+            "label": "每日游戏参数",
+            "inputs": [
+                {
+                    "name": "duration_minutes",
+                    "label": "挂机分钟（分钟）",
+                    "default": "25",
+                    "pipeline_type": "string",
+                    "verify": "^\\d+(\\.\\d+)?$",
+                    "pattern_msg": "请输入非负数字，例如 35 或 0.5"
+                },
+                {
+                    "name": "timeout_minutes",
+                    "label": "任务超时（分钟）",
+                    "default": "35",
+                    "pipeline_type": "string",
+                    "verify": "^\\d+(\\.\\d+)?$",
+                    "pattern_msg": "请输入非负数字，例如 35 或 0.5"
+                }
+            ],
+            "pipeline_override": {
+                "QQR_DailyGameFlow": {
+                    "custom_action_param": {
+                        "task": "DailyGameFlow",
+                        "duration_minutes": "{duration_minutes}",
+                        "timeout_minutes": "{timeout_minutes}"
+                    }
+                }
+            }
+        },
+        "DailyAdFlow.settings": {
+            "type": "input",
+            "label": "每日广告完整流程参数",
+            "inputs": [
+                {
+                    "name": "timeout_minutes",
+                    "label": "任务超时（分钟）",
+                    "default": "45",
+                    "pipeline_type": "string",
+                    "verify": "^\\d+(\\.\\d+)?$",
+                    "pattern_msg": "请输入非负数字，例如 35 或 0.5"
+                }
+            ],
+            "pipeline_override": {
+                "QQR_DailyAdFlow": {
+                    "custom_action_param": {
+                        "task": "DailyAdFlow",
+                        "timeout_minutes": "{timeout_minutes}"
+                    }
+                }
+            }
+        },
+        "DailyExternalAppFlow.settings": {
+            "type": "input",
+            "label": "外部应用每日流程参数",
+            "inputs": [
+                {
+                    "name": "timeout_minutes",
+                    "label": "任务超时（分钟）",
+                    "default": "30",
+                    "pipeline_type": "string",
+                    "verify": "^\\d+(\\.\\d+)?$",
+                    "pattern_msg": "请输入非负数字，例如 35 或 0.5"
+                }
+            ],
+            "pipeline_override": {
+                "QQR_DailyExternalAppFlow": {
+                    "custom_action_param": {
+                        "task": "DailyExternalAppFlow",
+                        "timeout_minutes": "{timeout_minutes}"
+                    }
+                }
+            }
+        },
+        "DailyLevelAdFlow.settings": {
+            "type": "input",
+            "label": "等级页广告每日流程参数",
+            "inputs": [
+                {
+                    "name": "timeout_minutes",
+                    "label": "任务超时（分钟）",
+                    "default": "30",
+                    "pipeline_type": "string",
+                    "verify": "^\\d+(\\.\\d+)?$",
+                    "pattern_msg": "请输入非负数字，例如 35 或 0.5"
+                }
+            ],
+            "pipeline_override": {
+                "QQR_DailyLevelAdFlow": {
+                    "custom_action_param": {
+                        "task": "DailyLevelAdFlow",
+                        "timeout_minutes": "{timeout_minutes}"
+                    }
+                }
+            }
+        },
+        "ClaimOneReward.settings": {
+            "type": "input",
+            "label": "重新检查阅读奖励参数",
+            "inputs": [
+                {
+                    "name": "timeout_minutes",
+                    "label": "任务超时（分钟）",
+                    "default": "10",
+                    "pipeline_type": "string",
+                    "verify": "^\\d+(\\.\\d+)?$",
+                    "pattern_msg": "请输入非负数字，例如 35 或 0.5"
+                }
+            ],
+            "pipeline_override": {
+                "QQR_ClaimOneReward": {
+                    "custom_action_param": {
+                        "task": "ClaimOneReward",
+                        "timeout_minutes": "{timeout_minutes}"
+                    }
+                }
+            }
+        },
+        "ClaimAudiobookReward.settings": {
+            "type": "input",
+            "label": "领取听书奖励参数",
+            "inputs": [
+                {
+                    "name": "timeout_minutes",
+                    "label": "任务超时（分钟）",
+                    "default": "10",
+                    "pipeline_type": "string",
+                    "verify": "^\\d+(\\.\\d+)?$",
+                    "pattern_msg": "请输入非负数字，例如 35 或 0.5"
+                }
+            ],
+            "pipeline_override": {
+                "QQR_ClaimAudiobookReward": {
+                    "custom_action_param": {
+                        "task": "ClaimAudiobookReward",
+                        "timeout_minutes": "{timeout_minutes}"
+                    }
+                }
+            }
+        }
+    },
+    "preset": [
+        {
+            "name": "正式每日",
+            "label": "正式每日",
+            "description": "勾选每日正式任务，参数取默认值。",
+            "task": [
+                {
+                    "name": "启动 QQ 阅读",
+                    "enabled": false
+                },
+                {
+                    "name": "页面识别检查",
+                    "enabled": false
+                },
+                {
+                    "name": "每日自动阅读",
+                    "enabled": true,
+                    "option": {
+                        "DailyReadingFlow.settings": {
+                            "minutes": "35",
+                            "timeout_minutes": "50",
+                            "book_title": "宇智波"
+                        }
+                    }
+                },
+                {
+                    "name": "每日听书",
+                    "enabled": true,
+                    "option": {
+                        "DailyAudiobookFlow.settings": {
+                            "minutes": "35",
+                            "timeout_minutes": "50",
+                            "book_title": "全职法师",
+                            "cover_image": "",
+                            "first_book_fallback": "true"
+                        }
+                    }
+                },
+                {
+                    "name": "每日游戏",
+                    "enabled": true,
+                    "option": {
+                        "DailyGameFlow.settings": {
+                            "duration_minutes": "25",
+                            "timeout_minutes": "35"
+                        }
+                    }
+                },
+                {
+                    "name": "每日广告完整流程",
+                    "enabled": true,
+                    "option": {
+                        "DailyAdFlow.settings": {
+                            "timeout_minutes": "45"
+                        }
+                    }
+                },
+                {
+                    "name": "外部应用每日流程",
+                    "enabled": false
+                },
+                {
+                    "name": "等级页广告每日流程",
+                    "enabled": true,
+                    "option": {
+                        "DailyLevelAdFlow.settings": {
+                            "timeout_minutes": "30"
+                        }
+                    }
+                },
+                {
+                    "name": "重新检查阅读奖励",
+                    "enabled": false
+                },
+                {
+                    "name": "领取听书奖励",
+                    "enabled": false
+                }
+            ]
+        },
+        {
+            "name": "1 分钟试跑",
+            "label": "1 分钟试跑",
+            "description": "勾选阅读、听书、游戏，各 1 分钟，用于冒烟试跑。预设不能设置重复次数，请把每项的重复次数改为 1。",
+            "task": [
+                {
+                    "name": "启动 QQ 阅读",
+                    "enabled": false
+                },
+                {
+                    "name": "页面识别检查",
+                    "enabled": false
+                },
+                {
+                    "name": "每日自动阅读",
+                    "enabled": true,
+                    "option": {
+                        "DailyReadingFlow.settings": {
+                            "minutes": "1",
+                            "timeout_minutes": "50",
+                            "book_title": "宇智波"
+                        }
+                    }
+                },
+                {
+                    "name": "每日听书",
+                    "enabled": true,
+                    "option": {
+                        "DailyAudiobookFlow.settings": {
+                            "minutes": "1",
+                            "timeout_minutes": "50",
+                            "book_title": "全职法师",
+                            "cover_image": "",
+                            "first_book_fallback": "true"
+                        }
+                    }
+                },
+                {
+                    "name": "每日游戏",
+                    "enabled": true,
+                    "option": {
+                        "DailyGameFlow.settings": {
+                            "duration_minutes": "1",
+                            "timeout_minutes": "35"
+                        }
+                    }
+                },
+                {
+                    "name": "每日广告完整流程",
+                    "enabled": false
+                },
+                {
+                    "name": "外部应用每日流程",
+                    "enabled": false
+                },
+                {
+                    "name": "等级页广告每日流程",
+                    "enabled": false
+                },
+                {
+                    "name": "重新检查阅读奖励",
+                    "enabled": false
+                },
+                {
+                    "name": "领取听书奖励",
+                    "enabled": false
+                }
+            ]
+        }
+    ]
+}
