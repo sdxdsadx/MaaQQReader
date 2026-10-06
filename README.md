@@ -55,7 +55,7 @@
 
 1. 复制 `configs/qqreader.example.json` 为 `configs/qqreader.local.json`，填入本机的 ADB、MuMu 与 Python 路径（[字段说明](docs/configuration.md)）。
 2. 在 QQ 阅读里把要自动阅读和听书的书**加入书架**（默认是《宇智波：从扉间人柱力开始》和《全职法师》，可在 GUI 里改，见下方[书目选择](#书目选择)）。
-3. 下载 [MFAAvalonia v2.16.2](https://github.com/MaaXYZ/MFAAvalonia/releases)（win-x64），解压到项目根目录的 `mfa\` 下（该目录已 gitignore，解压后与仓库自带的 `mfa\interface.json`、`mfa\resource\`、`mfa\agent\` 共存）；再装 Agent 依赖：`py -3.10 -m pip install "MaaFw==5.12.3"`。双击根目录的 **`启动QQReaderGUI.cmd`**，它会自动启动模拟器、探测 ADB 端口，并打开 MFAAvalonia（旧版 Tkinter GUI用 `启动QQReaderGUI.cmd classic`）。
+3. 下载 [MFAAvalonia v2.16.2](https://github.com/MaaXYZ/MFAAvalonia/releases)（win-x64），解压到项目根目录的 `mfa\` 下（该目录已 gitignore，解压后与仓库自带的 `mfa\interface.json`、`mfa\resource\`、`mfa\agent\` 共存）；再装 Agent 依赖：`py -3.10 -m pip install "MaaFw==5.12.3"`。MFAAvalonia 需要 .NET 运行库，若双击后打不开，运行官方压缩包自带的 `mfa\DependencySetup_依赖库安装_win.bat` 安装依赖。双击根目录的 **`启动QQReaderGUI.cmd`**，它会自动启动模拟器、探测 ADB 端口，并打开 MFAAvalonia（旧版 Tkinter GUI用 `启动QQReaderGUI.cmd classic`）。
 4. 在 MFAAvalonia 里选好 ADB 设备（MuMu），选预设 **「1 分钟试跑」** → 运行；每日自动阅读、每日听书、每日游戏都显示成功后，日常改选预设 **「正式每日」** 即可。
 
 遇到 adb offline、端口漂移、模拟器卡死等问题，双击 **`调试QQReader.cmd`**，菜单里有环境体检、冷重启、识别检查和单任务运行。

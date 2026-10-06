@@ -33,3 +33,5 @@ mfa/*
 !mfa/interface.json
 !mfa/resource/
 !mfa/agent/
+# MFAAvalonia 运行时写入的界面布局（不是源码）
+mfa/resource/mfa_layout.json

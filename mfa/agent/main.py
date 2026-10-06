@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib.metadata
 import importlib.util
 import sys
+import traceback
 from pathlib import Path
 from typing import Optional
 
@@ -48,16 +49,15 @@ def _log(message: str) -> None:
     print(message, flush=True)
 
 
-def main() -> None:
-    error = check_runtime()
-    if error:
-        _log(error)
-        sys.exit(2)
+def register_actions():
+    """导入 ``maa`` 并向 AgentServer 注册 ``QQReaderRunTask``；返回注册的动作类。
 
+    必须在 ``check_runtime()`` 通过之后调用。单独成函数是为了让单元测试用伪造的
+    ``maa`` 模块验证动作行为（验证码时停队列、异常兜底）。
+    """
     from maa.agent.agent_server import AgentServer
     from maa.context import Context
     from maa.custom_action import CustomAction
-    from maa.toolkit import Toolkit
 
     from qqreader.mfa.agent_action import (
         ACTION_NAME,
@@ -70,6 +70,13 @@ def main() -> None:
     @AgentServer.custom_action(ACTION_NAME)
     class QQReaderRunTask(CustomAction):
         def run(self, context: Context, argv: CustomAction.RunArg) -> CustomAction.RunResult:
+            try:
+                return self._run(context, argv)
+            except Exception:  # noqa: BLE001 - 动作异常不能让 Agent 崩溃，记日志并判失败
+                _log(f"[QQReader] 动作异常：\n{traceback.format_exc()}")
+                return CustomAction.RunResult(success=False)
+
+        def _run(self, context: Context, argv: CustomAction.RunArg) -> CustomAction.RunResult:
             try:
                 spec, values = parse_param(argv.custom_action_param)
             except ValueError as exc:
@@ -87,6 +94,20 @@ def main() -> None:
                 _log("[QQReader] BLOCKED_BY_CAPTCHA：停止 MFA 任务队列，等待人工处理验证码")
                 context.tasker.post_stop()
             return CustomAction.RunResult(success=result.success)
+
+    return QQReaderRunTask
+
+
+def main() -> None:
+    error = check_runtime()
+    if error:
+        _log(error)
+        sys.exit(2)
+
+    from maa.agent.agent_server import AgentServer
+    from maa.toolkit import Toolkit
+
+    register_actions()
 
     Toolkit.init_option(str(MFA_DIR))
 
