@@ -1,3 +1,8 @@
+import json
+from pathlib import Path
+
+import pytest
+
 from qqreader.tasks.reading_reward import (
     parse_coin_total,
     reading_claim_buttons,
@@ -148,3 +153,112 @@ def test_claim_completes_when_logged_card_title_is_misread(monkeypatch, tmp_path
     assert client.refreshes == 2
     assert client.clicks
     assert result.after_coins == 50
+
+
+# ---- 进入奖励页：点击入口后页面加载中不能按返回（2026-10-06 实机 mfa_20261006_205809_33602f6e） ----
+
+_OPEN_FRAMES = json.loads(
+    (Path(__file__).parent / "fixtures" / "reading_reward_open_frames.json").read_text(
+        encoding="utf-8"
+    )
+)
+
+
+def _frame(entry):
+    return tuple((text, tuple(box)) for text, box in entry["boxes"])
+
+
+SHELF = _frame(_OPEN_FRAMES["shelf"])
+LOADING = tuple(_frame(item) for item in _OPEN_FRAMES["loading"])
+REWARD = _frame(_OPEN_FRAMES["reward"])
+ENTRY_CENTER = (56 + 208 // 2, 194 + 23 // 2)
+
+
+class _FrameClient:
+    """按顺序返回真实 OCR 帧；帧用完后重复最后一帧。记录点击、按键和截图序号。"""
+
+    def __init__(self, frames):
+        self.frames = list(frames)
+        self.index = 0
+        self.events = []
+        self.current = None
+
+    def start_app(self, _package):
+        return True
+
+    def screencap(self):
+        self.current = self.frames[min(self.index, len(self.frames) - 1)]
+        self.index += 1
+        self.events.append(("shot",))
+        return _Shot()
+
+    def recognize(self, *_args):
+        boxes = self.current
+        return type("R", (), {"text_boxes": lambda _self: boxes})()
+
+    def click_key(self, key):
+        self.events.append(("key", key))
+
+    def click(self, x, y):
+        self.events.append(("click", x, y))
+        return True
+
+    def swipe(self, *_args):
+        return True
+
+    def clicks(self):
+        return [event[1:] for event in self.events if event[0] == "click"]
+
+    def backs(self):
+        return [event for event in self.events if event == ("key", 4)]
+
+
+@pytest.fixture
+def no_sleep(monkeypatch):
+    import qqreader.tasks.reading_reward as module
+
+    slept = []
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: slept.append(seconds))
+    return slept
+
+
+def test_open_reward_page_waits_while_page_loading(no_sleep):
+    from qqreader.tasks.reading_reward import _open_reward_page
+
+    client = _FrameClient([SHELF, LOADING[0], LOADING[1], LOADING[2], LOADING[0], REWARD])
+
+    boxes = _open_reward_page(client)
+
+    assert boxes == REWARD
+    assert client.clicks() == [ENTRY_CENTER]
+    assert client.backs() == []
+
+
+def test_open_reward_page_reclicks_when_still_on_shelf(no_sleep):
+    from qqreader.tasks.reading_reward import _open_reward_page
+
+    client = _FrameClient([SHELF, SHELF, LOADING[0], REWARD])
+
+    boxes = _open_reward_page(client)
+
+    assert boxes == REWARD
+    assert client.clicks() == [ENTRY_CENTER, ENTRY_CENTER]
+    assert client.backs() == []
+
+
+def test_open_reward_page_backs_out_after_wait_expires(no_sleep):
+    import qqreader.tasks.reading_reward as module
+
+    client = _FrameClient([SHELF, *LOADING])
+
+    with pytest.raises(RuntimeError, match="无法从当前页面进入阅读奖励页"):
+        module._open_reward_page(client, load_wait_seconds=15.0, poll_seconds=1.5)
+
+    first_click = client.events.index(("click", *ENTRY_CENTER))
+    first_back = client.events.index(("key", 4))
+    shots_between = sum(
+        1 for event in client.events[first_click:first_back] if event == ("shot",)
+    )
+    # 点击后至少轮询满 15 秒（1.5 秒一次，共 10 次截图）才允许按返回。
+    assert shots_between >= 10
+    assert client.clicks() == [ENTRY_CENTER]

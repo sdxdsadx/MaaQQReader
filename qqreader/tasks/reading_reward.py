@@ -1,6 +1,7 @@
 """每日阅读奖励的定向领取与结果验证。"""
 from __future__ import annotations
 
+import math
 import re
 import time
 from dataclasses import dataclass
@@ -91,29 +92,62 @@ def _is_reward_page(boxes: Sequence[TextBox]) -> bool:
     return "今日已获赠币" in text or "每日阅读领赠币" in text
 
 
-def _open_reward_page(client: MaaClient) -> tuple[TextBox, ...]:
+def _find_reward_entry(boxes: Sequence[TextBox]) -> Box | None:
+    return next(
+        (
+            box
+            for text, box in boxes
+            if "兑赠币" in text
+            or "领20赠币" in text
+            or ("本周" in text and "阅读" in text)
+        ),
+        None,
+    )
+
+
+def _wait_for_reward_page(
+    client: MaaClient, load_wait_seconds: float, poll_seconds: float
+) -> tuple[tuple[TextBox, ...], bool]:
+    """点击入口后重新截图等待奖励页出现。
+
+    2026-10-06 实机（mfa_20261006_205809_33602f6e）：点击入口 5 秒后奖励页仍在
+    加载，OCR 只读到状态栏几个字符；旧逻辑据此按返回，把加载中的页面取消，
+    7 轮全部失败。加载中/空白帧既不是奖励页也不是书架，只能继续等待。
+
+    返回 (最后一帧, 是否超时)。看到奖励页或入口（点击没生效）时立即返回。
+    """
+    polls = max(1, math.ceil(float(load_wait_seconds) / max(float(poll_seconds), 0.01)))
+    boxes: tuple[TextBox, ...] = ()
+    for _ in range(polls):
+        time.sleep(poll_seconds)
+        boxes = _boxes(client)
+        if _is_reward_page(boxes) or _find_reward_entry(boxes) is not None:
+            return boxes, False
+    return boxes, True
+
+
+def _open_reward_page(
+    client: MaaClient,
+    *,
+    load_wait_seconds: float = 15.0,
+    poll_seconds: float = 1.5,
+) -> tuple[TextBox, ...]:
     client.start_app("com.qq.reader")
     time.sleep(3)
+    boxes = _boxes(client)
     for _ in range(7):
-        boxes = _boxes(client)
         if _is_reward_page(boxes):
             return boxes
-        entry = next(
-            (
-                box
-                for text, box in boxes
-                if "兑赠币" in text
-                or "领20赠币" in text
-                or ("本周" in text and "阅读" in text)
-            ),
-            None,
-        )
+        entry = _find_reward_entry(boxes)
         if entry is not None:
             _click_box(client, entry)
-            time.sleep(5)
-            continue
+            boxes, expired = _wait_for_reward_page(client, load_wait_seconds, poll_seconds)
+            if not expired:
+                continue
+        # 点击前不在书架/奖励页，或点击后等满仍未出现奖励页：按返回再判定。
         client.click_key(4)
         time.sleep(1.2)
+        boxes = _boxes(client)
     raise RuntimeError("无法从当前页面进入阅读奖励页")
 
 
