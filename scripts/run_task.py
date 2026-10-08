@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,7 @@ from qqreader.maa.device import MaaDeviceController
 from qqreader.maa.factory import build_maa_client
 from qqreader.maa.locator import MaaFeatureLocator
 from qqreader.maa.observer import MaaPageObserver
+from qqreader.maa.probes import DeviceProbe, SubprocessShellRunner
 from qqreader.page.feature_keys import DEFAULT_FEATURE_KEYS
 from qqreader.page.profiles import build_default_state_definitions
 from qqreader.page.recognizer import PageStateRecognizer
@@ -178,15 +180,26 @@ def _apply_level_ad_runtime_overrides(data: Dict[str, Any]) -> None:
     if isinstance(level_ready, dict):
         level_ready["next"] = ["LevelTopReady", "LevelScrollToTop"]
 
-    # 返回广告后要按来源区分两张等级卡。原链先用宽泛的
-    # LevelAfterCoinAd 命中“用户等级”，导致积分广告结束后再次进入
-    # LevelFindPointsAd，最后滑到底触发 max_hit=8。
+    # 两类广告的落地页包含相同等级文案，不能靠 OCR 候选顺序猜来源。
+    # 入口已有 LevelAfterAd 动态锚点；恢复引用该锚点，不硬编码赠币分支。
     coin_return = data.get("LevelAfterCoinAd")
     if isinstance(coin_return, dict):
-        coin_return["expected"] = "看小视频.*积分"
+        coin_return["expected"] = "看小视频.*积分|^当前等级$|^等级福利$"
+        if isinstance(coin_return.get("next"), list):
+            coin_return["next"] = [*LEVEL_CAPTCHA_NODES,
+                                   *(n for n in coin_return["next"] if n not in LEVEL_CAPTCHA_NODES)]
     stable = data.get("AdReturnStable")
+    # 新版等级页返回顶部仅显示「当前等级 / 等级福利」，没有旧标题。
+    # 返回确认与任务完成分开：这些标记只恢复原广告来源的后续核对。
+    for name in ("AdReturnedAfterClose", "AdReturnStable"):
+        returned = data.get(name)
+        if isinstance(returned, dict) and isinstance(returned.get("expected"), str):
+            for marker in ("^当前等级$", "^等级福利$"):
+                if marker not in returned["expected"].split("|"):
+                    returned["expected"] += "|" + marker
     if isinstance(stable, dict) and isinstance(stable.get("next"), list):
-        _insert_before(stable["next"], "LevelAfterPointsAd", "AdDailyComplete")
+        stable["next"] = [*LEVEL_CAPTCHA_NODES,
+                          {"name": "LevelAfterAd", "anchor": True}]
     points_return = data.get("LevelAfterPointsAd")
     if isinstance(points_return, dict):
         # 返回等级页仅证明广告关闭，仍须看见积分任务行的“今日已完成”。
@@ -194,16 +207,18 @@ def _apply_level_ad_runtime_overrides(data: Dict[str, Any]) -> None:
         # 「跳过」放弃奖励后返回，积分行仍是「看小视频」。此时换一条广告
         # 重试（LevelClickPointsAdAgain 最多 2 次），而不是直接判失败。
         points_return["next"] = [
+            *LEVEL_CAPTCHA_NODES,
             "LevelPointsSectionFound", "LevelClickPointsAdAgain", "LevelVerifyPointsScroll",
         ]
     data["LevelVerifyPointsScroll"] = {
         "action": "Swipe",
-        "begin": [360, 420],
-        "end": [360, 1120],
+        "begin": [360, 1080],
+        "end": [360, 400],
         "duration": 500,
         "post_delay": 700,
         "max_hit": 5,
         "next": [
+            *LEVEL_CAPTCHA_NODES,
             "LevelPointsSectionFound", "LevelClickPointsAdAgain", "LevelVerifyPointsScroll",
         ],
     }
@@ -272,6 +287,120 @@ def _apply_level_ad_runtime_overrides(data: Dict[str, Any]) -> None:
     }
     # 必须最后执行：上面会整体重建 AdStaticDownloadClose 等节点。
     _apply_level_ad_retention_overrides(data)
+    _apply_level_ad_page_recovery_overrides(data)
+    _apply_level_home_recovery_overrides(data)
+    _apply_level_promo_recovery_overrides(data)
+
+
+def _apply_level_promo_recovery_overrides(data: Dict[str, Any]) -> None:
+    """只关闭已确认的月票活动遮罩，不把基因图标的 X 当关闭按钮。"""
+    if not isinstance(data.get("LevelMyPageReady"), dict):
+        return
+    data["LevelPromoVisible"] = {
+        "recognition": "OCR", "expected": "^(双倍月票开启|秋日豪礼开抢)$",
+        "action": "DoNothing", "max_hit": 3,
+        "focus": "确认月票活动遮罩后再找关闭按钮",
+        "next": [*LEVEL_CAPTCHA_NODES, "LevelPromoClose"],
+    }
+    data["LevelPromoClose"] = {
+        "recognition": "OCR", "expected": "^[Xx×]$",
+        "roi": [300, 870, 120, 170], "action": "Click",
+        "post_delay": 1200, "max_hit": 3,
+        "focus": "关闭已确认的月票活动遮罩底部 X",
+        "next": [*LEVEL_CAPTCHA_NODES, "LevelPageReady", "LevelMyPageReady"],
+    }
+    for name in ("DailyLevelAdFlow", "LevelMyPageReady", "LevelClickLevelIcon",
+                 "LevelClickLevelIconAgain", "LevelAdMyPageReturn", "LevelAdReenterFromMy"):
+        node = data.get(name)
+        if isinstance(node, dict) and isinstance(node.get("next"), list):
+            node["next"] = [*LEVEL_CAPTCHA_NODES, "LevelPromoVisible",
+                            *(n for n in node["next"] if n not in
+                              (*LEVEL_CAPTCHA_NODES, "LevelPromoVisible"))]
+
+
+def _apply_level_home_recovery_overrides(data: Dict[str, Any]) -> None:
+    """升级提示遮挡我的入口时先取消；点击未转场只做有界重试。"""
+    tab = data.get("LevelClickMyTab")
+    if not isinstance(tab, dict):
+        return
+    retry_next = [*LEVEL_CAPTCHA_NODES, "LevelUpgradeVisible", "LevelMyPageReady",
+                  "LevelClickMyTabAgain"]
+    data["LevelUpgradeVisible"] = {
+        "recognition": "OCR", "expected": "安装新版本|已下载新版本|是否安装",
+        "action": "DoNothing", "max_hit": 2,
+        "focus": "先确认升级弹窗，不点背景我的入口",
+        "next": [*LEVEL_CAPTCHA_NODES, "LevelUpgradeCancel"],
+    }
+    data["LevelUpgradeCancel"] = {
+        "recognition": "OCR", "expected": "^取消$",
+        "roi": [360, 1200, 360, 80], "action": "Click",
+        "post_delay": 1200, "max_hit": 2,
+        "focus": "取消已确认的升级弹窗",
+        "next": [*LEVEL_CAPTCHA_NODES, "LevelMyPageReady", "LevelClickMyTab"],
+    }
+    again = {k: v for k, v in tab.items() if k != "next"}
+    again.update({"max_hit": 2, "next": list(retry_next),
+                  "focus": "我的入口未转场，重拍后重新点击"})
+    data["LevelClickMyTabAgain"] = again
+    tab["next"] = list(retry_next)
+    for name in ("DailyLevelAdFlow", "LevelBackUntilHome"):
+        node = data.get(name)
+        if isinstance(node, dict) and isinstance(node.get("next"), list):
+            node["next"] = [*LEVEL_CAPTCHA_NODES, "LevelUpgradeVisible",
+                            *(n for n in node["next"] if n not in
+                              (*LEVEL_CAPTCHA_NODES, "LevelUpgradeVisible"))]
+
+
+def _apply_level_ad_page_recovery_overrides(data: Dict[str, Any]) -> None:
+    """广告加载未知时等待；落回“我的”页时重进等级，不再空滑 240 次。"""
+    scroll = data.get("AdScrollDownRepeat")
+    if not isinstance(scroll, dict) or not isinstance(scroll.get("next"), list):
+        return
+    # 原节点为 DirectHit，连只有状态栏的加载帧和“我的”页也会执行滑动。
+    scroll.update({
+        "recognition": "OCR",
+        "expected": "广告|直播中|进入直播间|上滑浏览|上滑或点击|跳转.*(?:详情页|第三方)|观看\\d+秒",
+    })
+    data["LevelAdMyPageReturn"] = {
+        "recognition": "OCR",
+        "expected": "^(阅读故事|浏览历史|帮助与反馈)$",
+        "action": "DoNothing",
+        "max_hit": 3,
+        "focus": "确认广告已落回我的页，重新进入等级页",
+        "next": [*LEVEL_CAPTCHA_NODES, "LevelAdReenterFromMy"],
+    }
+    data["LevelAdReenterFromMy"] = {
+        "recognition": "OCR",
+        "expected": "^等级$",
+        "action": "Click",
+        "post_delay": 2500,
+        "max_hit": 3,
+        "focus": "点击当前截图中的等级入口并重新确认等级页",
+        "next": [*LEVEL_CAPTCHA_NODES, "LevelPageReady", "LevelAdMyPageReturn"],
+    }
+    data["LevelAdUnknownWait"] = {
+        "action": "DoNothing",
+        "post_delay": 1000,
+        "max_hit": 20,
+        "focus": "未确认广告或落地页，等待重拍，不点击不滑动",
+        "next": list(scroll["next"]),
+    }
+    # 仅补在原来无条件滑动的分支处，恢复前优先检查已有验证码节点。
+    for node in data.values():
+        if not isinstance(node, dict) or not isinstance(node.get("next"), list):
+            continue
+        nexts = node["next"]
+        if "AdScrollDownRepeat" in nexts:
+            nexts[:] = [*LEVEL_CAPTCHA_NODES,
+                        *(name for name in nexts if name not in LEVEL_CAPTCHA_NODES)]
+            _insert_before(nexts, "LevelAdMyPageReturn", "AdScrollDownRepeat")
+            # 已返回的已知页面必须先于 DirectHit 等待；否则后面的返回
+            # 候选永久无法判断，等待预算耗尽才暴露原本已成功的转场。
+            if "AdReturnedAfterClose" in nexts:
+                nexts.remove("AdReturnedAfterClose")
+            nexts.insert(nexts.index("AdScrollDownRepeat"), "AdReturnedAfterClose")
+            if "LevelAdUnknownWait" not in nexts:
+                nexts.insert(nexts.index("AdScrollDownRepeat") + 1, "LevelAdUnknownWait")
 
 
 LEVEL_POPUP_CLOSE_NODES = ("LevelTeenModeDismiss",)
@@ -332,7 +461,9 @@ def _apply_level_ad_launch_retry_overrides(data: Dict[str, Any]) -> None:
         click = data.get(click_name)
         if not isinstance(click, dict) or not isinstance(click.get("next"), list):
             continue
-        base_next = [n for n in click["next"] if n not in (wait_name, again_name)]
+        base_next = [n for n in click["next"] if n not in (
+            wait_name, again_name, "LevelAdMyPageReturn", "LevelAdUnknownWait",
+        )]
         _insert_before(base_next, wait_name, "AdScrollDownRepeat")
         click["next"] = base_next
         wait_next = [n for n in base_next if n != wait_name]
@@ -559,6 +690,30 @@ def _run_legacy_task(
     minutes: Optional[float],
     selection: Optional[BookSelection] = None,
 ) -> int:
+    # GUI 用 taskkill 整树强停，Python finally 不会执行。覆盖只写本次私有
+    # bundle，源 pipeline、OCR 模型和听书封面无需依赖退出清理来恢复。
+    work_root = Path(config.machine.log_dir).resolve().parent / "legacy_resources"
+    try:
+        work_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="legacy-", dir=work_root) as run_dir:
+            run_path = Path(run_dir).resolve()
+            if not run_path.is_relative_to(work_root):
+                raise OSError("临时资源目录不在本次运行目录内")
+            resource_dir = run_path / "resource"
+            shutil.copytree(Path(config.machine.maa_resource_dir), resource_dir)
+            return _run_legacy_task_in_resource(task, config, minutes, selection, resource_dir)
+    except OSError as exc:
+        print(f"[legacy] 准备或清理本次运行资源失败: {exc}", flush=True)
+        return 3
+
+
+def _run_legacy_task_in_resource(
+    task: str,
+    config: Any,
+    minutes: Optional[float],
+    selection: Optional[BookSelection],
+    resource_dir: Path,
+) -> int:
     repo_root = Path(__file__).resolve().parents[1]
     runner = _find_legacy_runner(repo_root)
     if runner is None:
@@ -570,7 +725,6 @@ def _run_legacy_task(
     entry = LEGACY_ENTRY.get(task, task)
     node = LEGACY_TIMING_NODE.get(task)
     original = None
-    resource_dir = Path(config.machine.maa_resource_dir)
     from qqreader.maa.adb import ensure_maa_ready
 
     ready, detail = ensure_maa_ready(
@@ -750,10 +904,17 @@ def _build_runtime(client: Any, *, verbose: bool):
         keys,
         rois={"game_ocr_online_play": (0, 800, 720, 1280)},
     )
+    runtime_config = getattr(client, "config", None)
+    foreground_probe = None
+    if runtime_config is not None and runtime_config.adb_path:
+        foreground_probe = DeviceProbe(
+            SubprocessShellRunner(runtime_config.adb_path, runtime_config.adb_address)
+        )
     observer = DeviceScreencapGuard(
         LoggingObserver(
             MaaPageObserver(
-                client, catalog, target_package=keys.qq_reader_package
+                client, catalog, target_package=keys.qq_reader_package,
+                foreground_probe=foreground_probe,
             ),
             verbose=verbose,
         ),

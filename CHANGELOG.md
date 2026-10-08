@@ -21,6 +21,192 @@
 
 ---
 
+## 2026-10-04 · 修复浏览广告误点领取及新版等级页返回漏识别
+
+**触发**：最新完整串行 `runtime/records/daily_flows/daily_20261005_012306_a21ca029.json`：阅读2×33分钟、游戏25分钟、听书35分钟成功；每日广告97秒后报 `ad_exit_unconfirmed`，等级广告118秒失败。原始 Maa 日志已保存到 `runtime/records/ad_level_failure_20261004_214027.log`，真实 OCR 回放逐帧标注来源，省略无关昵称字段。
+
+| 任务/模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| 每日广告 `AdTaskAdapter.advance` | 浏览广告退出后又回到加速弹窗，最终关闭未确认 | 21:01:11点击“去领取奖励”(358,776)，同帧也有“坚持退出”；前者返回第三方体验加速入口，并非关闭。后续左上固定点击和BACK无效 | 优先明确的“坚持退出”；浏览体验页不把“去领取奖励”当出口；新帧定位顶部“去体验5秒可立即领奖｜跳过”，复用退出后的页面确认 |
+| 等级广告普通运行时覆盖 | 21:39:39已返回等级页，仍等待20次至失败 | 新版顶部只有“当前等级/等级福利”，返回规则漏识别；`AdConfirmSkipBrowse` 的返回候选还排在DirectHit等待之后 | 返回确认补新版文字，已知返回页先于无条件等待，再按原广告来源anchor进入赠币或积分核对 |
+| 积分完成核对 | 回到顶部找不到下面的积分任务行 | 原核对滑动向顶部，而任务行在下方；跨帧核对缺验证码候选 | 向下寻找积分行，保留5次预算和任务行“今日已完成”判据；三个返回/核对节点前置现有验证码候选，不改守卫、求解器构造或启用逻辑 |
+
+**改动文件**：`qqreader/tasks/ad.py`、`scripts/run_task.py` 普通等级覆盖、`tests/test_ad_level_latest_failures.py`、`tests/fixtures/ad_level_latest_20261004.json`、`tests/test_level_ad_runtime_overrides.py`、本日志。
+
+**验证**：
+- 原始OCR：浏览挽留弹窗20176行，加速弹窗21088行，新版等级顶部25871行。回归先复现“去领取奖励”误点、顶部跳过漏定位、返回页被等待截走、赠币来源顶部返回漏识别；独立复核又发现核对跨帧验证码缺口，3项真实顶部背景+验证码叠层回放先失败，再修复为阻塞。
+- `py -3.10 -m pytest -q tests/test_ad_level_latest_failures.py tests/test_ad_failures_20261004.py tests/test_level_ad_runtime_overrides.py tests/test_level_ad_stage_route.py tests/test_qqr54_level_ad_retention.py tests/test_qqr31_live_ad.py`：58 passed。新增11项。独立只读复核最终无残留重要问题；覆盖幂等，来源anchor及业务完成候选保留。
+- 全量 `py -3.10 -m pytest -q --junitxml=runtime/records/ad_level_latest_fix_20261004.xml`：542项，535 passed、4 failed、3 skipped。失败仍为既有 `test_each_ad_round_has_its_own_initial_wait`、`test_live_exit_attempt_does_not_restart_eight_swipe_cycle`、`test_detect_slide_accepts_real_captcha_fixture`、`test_ad_play_waits_40_seconds_before_handling_buttons`；Tk后台线程warning仍存在，GUI测试的skip随本机初始化状态变化。`git diff --check`通过。
+- 正式 GUI 广告首轮 `daily_20261005_035355_f5e50c75`：应用全黑且OCR为空，随后出现“QQ阅读没有响应”，未进入广告。按短时观察停止，CANCELLED，61.496秒；这次不能证明广告修复有效。停止后应用自行恢复书架，未重启模拟器或改配置。
+- 正式 GUI 等级广告 `daily_20261005_035540_a9448ad3`：自动进入等级→播放积分广告→奖励已发放→关闭返回→积分行“今日已完成”，SUCCEEDED（exit0，39.772秒）。完成OCR在 `runtime/records/latest_level_validation_20261004_215540.log:3346`，按钮框(569,578,102,24)；MuMu界面确认同一“看小视频，+5积分”行完成。该次返回为旧版任务区域，新增顶部返回分支由真实失败帧回放覆盖。
+- 应用恢复后通过 MuMu 界面返回书架，再正式 GUI 复验广告 `daily_20261005_035751_d5df973f`：自动进入奖励页→播放广告→关闭→返回奖励页，广告卡计数为1/12；其间出现验证码，由既有流程处理，本轮未修改或人工操作验证码。按短测停止，CANCELLED，总73.061秒，实际超过一分钟要求，未继续跑满12次。Maa证据保存到 `runtime/records/latest_ad_validation_20261004_215751.log`。该次广告是上滑浏览类型，未实机触发本次浏览退出弹窗优先级修复，该分支有原失败OCR回放与既有handoff转场证据。
+- GUI设置与 `runtime/records/gui_tasks_before_latest_ad_fix_20261004.json` 语义一致，未改任务顺序、原时长、超时或本地验证码设置。
+
+**未覆盖 / 遗留**：每日广告12/12、三天无人值守未作本次短时验收；禁止购买、充值、登录授权等操作仍保持。浏览加速广告坚持退出会放弃该条奖励，正常流程需继续下一条；不能将返回页当作收益。无响应现场未自然复现到诱因，未改网络或持久配置。已成功的阅读、游戏、听书未重复运行。原有验证码截图删除和快捷方式保留。
+**分支**：`codex/reading-game-log-fix-20261004`
+**回滚**：上一提交 `c550e59`；单独revert本次提交，不覆盖运行记录及用户设置。
+
+---
+
+## 2026-10-04 · 修复等级广告返回路由并隔离旧任务运行资源
+
+**触发**：用户要求继续根据错误修正。上一轮正式 GUI 日志 `runtime/records/level_verification_20261004_182333.log` 中，积分广告返回后在18:24:28进入 `LevelAfterCoinAd`，绕过积分广告有界重试；GUI强制停止子进程还会跳过旧任务包装器的 `finally`，将临时覆盖留在共享资源中。
+
+| 任务/模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| 等级广告返回 | 积分广告误走赠币分支，重新进入原积分入口 | `AdReturnStable.next` 用固定候选代替已有 `LevelAfterAd` anchor；赠币与积分返回页特征相似，候选顺序无法区分来源 | 普通等级广告覆盖恢复框架支持的 anchor 引用；入口设置的来源决定返回分支，验证码候选仍优先；未绑定来源时不猜测阶段 |
+| 旧任务运行资源 | GUI强制停止后共享 pipeline 留有运行时覆盖 | 覆盖与选书模板直接写入 `dev/resource`，恢复依赖会被强停跳过的 `finally` | 每次运行复制完整资源包到独立 `runtime/legacy_resources/legacy-*/resource`，覆盖、选书模板及子进程资源参数均使用独立副本；正常结束清理，强停残留副本不影响后续任务 |
+
+**改动文件**：`scripts/run_task.py`、`tests/test_qqr54_level_ad_retention.py`、`tests/test_level_ad_stage_route.py`、`tests/test_legacy_resource_isolation.py`、`tests/fixtures/level_stage_return_20261004.json`、本日志。未修改验证码求解器、守卫构造或启用配置。
+
+**验证**：
+- 积分返回真实 OCR fixture 来源为上一轮日志6359行（18:24:27.555）；检查原积分入口、第二次入口、赠币来源、无来源和验证码优先分支。修复前4项失败、1项通过，修复后5项通过。现有本地 pipeline schema 的 NodeAttr 支持 `name` 与 `anchor: true` 引用。
+- 资源隔离3项修复前均失败；修复后检查子进程启动时共享资源字节不变、选书模板不覆盖源文件，以及真实 Windows 父子进程经 `taskkill /T /F` 强停后源文件不变。强停测试仅终止测试自己创建的进程。
+- `py -3.10 -m pytest -q tests/test_legacy_resource_isolation.py tests/test_issue13_legacy_timeout.py tests/test_book_device_selection.py`：43 passed。`py -3.10 -m pytest -q tests/test_level_ad_stage_route.py tests/test_ad_failures_20261004.py tests/test_level_ad_runtime_overrides.py tests/test_qqr54_level_ad_retention.py tests/test_legacy_resource_isolation.py`：47 passed。独立只读代码复核未发现新增重要问题。
+- 全量 `py -3.10 -m pytest -q --junitxml=runtime/records/legacy_route_fix_20261004.xml`：531项，525 passed、4 failed、2 skipped；4项与本轮改动前一致：`test_ad_round_regressions::test_each_ad_round_has_its_own_initial_wait`、`test_ad_round_regressions::test_live_exit_attempt_does_not_restart_eight_swipe_cycle`、`test_issue15_reward_nav::test_detect_slide_accepts_real_captcha_fixture`、`test_qqr27_ad_flow::test_ad_play_waits_40_seconds_before_handling_buttons`。既有 Tk 后台线程 warning 仍存在。
+- 正式 GUI 短测 `daily_20261005_011503_22432a7a`（业务日10-04）：实际使用 `runtime/legacy_resources/legacy-dvuu81xa/resource` 成功加载资源并执行。19:15:24进入积分广告；19:15:40返回 `LevelAfterPointsAd`，积分再次入口执行2次后在19:16:18转入 `LevelVerifyPointsScroll`，不再误走赠币阶段。节点证据保存在 `runtime/records/level_route_verification_20261004_191503.log`。
+- 从 GUI 停止后记录为 CANCELLED，开始17:15:03.035487 UTC、结束17:16:30.348311 UTC，总87.313秒；实际超过用户要求的一分钟，按实际时长记录。共享 pipeline 运行前、运行中、停止后 SHA-256 均为 `D0092F69CA076AEF9954EB441902936F5FA93716FC0F06F57874F5DC20AD24F8`，无需人工恢复。GUI任务设置与本轮备份 `runtime/records/gui_tasks_before_route_fix_20261004.json` 语义一致，保留用户调整后的听书顺序。
+
+**未覆盖 / 遗留**：此次实机积分广告为浏览类，现有策略仍走跳过/放弃，任务按钮未完成，没有积分到账或整体SUCCESS证据；浏览类广告完成策略与最终领奖尚需后续修正。未重跑已成功的阅读、游戏、听书，未验证三天无人值守。强制终止可能留下独立资源目录，占用磁盘但不污染共享资源；未新增自动清理策略。原有验证码截图删除及快捷方式保留，不纳入提交。
+**分支**：`codex/reading-game-log-fix-20261004`
+**回滚**：上一提交 `0e8c5bf`；单独 revert 本次提交，不覆盖运行记录或用户设置。
+
+---
+
+## 2026-10-04 · 修复广告已领取出口与等级广告盲滑、入口遮罩
+
+**触发**：用户要求继续根据今日日志修正问题，并仅短时实机验证。最新完整串行记录 `runtime/records/daily_flows/daily_20261004_130234_ea52341f.json` 中阅读33分钟、游戏25分钟、听书35分钟均 SUCCEEDED；每日广告在 `DailyAdFlow_20261004_081823_717207.json` 报 `ad_exit_unconfirmed`，等级广告最终空滑240次失败。因此本次只复查剩余广告问题，不重跑已成功任务。
+
+| 任务/模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| `qqreader/tasks/ad.py` | 广告已显示奖励领取，关闭20秒仍不能返回 | 真实截图 `runtime/screenshots/20261004/DailyAdFlow_20261004_081233_424163_037_PAGE_AD_PLAYING.png` 没有 X，出口为右上“奖励已领取｜跳过”；旧识别没有该出口，回退点左上 | 新截图 OCR 确认右上已领取/已发放的跳过出口再点击；不把中部“返回继续体验”当退出按钮 |
+| 等级广告运行时覆盖 | 仅状态栏的加载帧开始滑动，之后落在“我的”仍滑240次 | `AdScrollDownRepeat` 为无条件 DirectHit；没有未知页等待和“我的”重入 | 滑动前要求广告特征；未知页仅等待重拍，最多20次；确认“我的”后按实际等级文字重入并确认等级页，最多3次 |
+| 等级入口 | 实机33秒后仍在书架；下一次进入“我的”却31秒后失败 | 升级提示挡住底部“我的”；双倍月票活动遮罩挡住等级图标；原候选链没有普通遮罩处理及我的入口重试 | 先确认升级文案，再找右下“取消”；我的入口未转场最多重试2次；先确认活动标题，再仅在中下方限定ROI找 X，排除基因图标 |
+
+**改动文件**：`qqreader/tasks/ad.py`、`scripts/run_task.py` 的普通等级广告运行时覆盖、`tests/test_ad_failures_20261004.py`、`tests/fixtures/ad_failures_20261004.json`、`tests/test_level_ad_runtime_overrides.py`、本日志。未修改验证码求解器、守卫构造、启用参数或本地配置。
+
+**验证**：
+- 使用原始 Maa 日志 OCR 框逐帧回放；来源在 fixture 内逐帧标注。10-04早间原始日志 `runtime/logs/maafw.bak.2026.10.04-08.31.24.108.log`：已领取跳过21306行、等级入口22837行、空白加载22867行、落回我的24377行。新入口失败日志另保存在 `runtime/records/level_entry_failure_20261004_181534.log`；活动遮罩失败保存在 `runtime/records/level_promo_failure_20261004_181915.log`。
+- 回归先失败再修复：已领取出口实际框中心(622,27)、未知页不滑、我的重入、20次等待边界、覆盖幂等性、升级/活动遮罩关闭与点击未转场重试。独立只读复核发现新增恢复入口的验证码优先级遗漏，补上现有 `LEVEL_CAPTCHA_NODES`，真实背景与验证码提示组合回放确认不点击背景或弹窗 X；最终审查无新增重要问题，原广告来源 anchor 保留。
+- `py -3.10 -m pytest -q tests/test_ad_failures_20261004.py tests/test_level_ad_runtime_overrides.py tests/test_qqr54_level_ad_retention.py`：39 passed。
+- 正式 GUI 每日广告 `daily_20261005_001320_ec572e08`（业务日仍为10-04）：超时临时设1分钟，自动进入并播放广告，点击本次实际左上关闭框(53,112)，返回奖励页出现验证码；现有流程处理并确认验证码消失，随后 TIMEOUT（exit11；任务62.343秒，GUI总耗时1分06秒）。任务记录 `runtime/records/DailyAdFlow_20261004_181425_901811.json`。未触发本次新增右上已领取跳过出口，未达到12/12。
+- 等级广告首轮 `daily_20261005_001534_a3c82e25`：33秒 FAILED（exit2），复现升级遮罩；补修后第二轮 `daily_20261005_001915_d55e4b77`：31秒 FAILED（exit2），复现月票遮罩。现场通过 MuMu GUI 关闭已确认的普通活动弹窗，截图确认等级图标可见；自动关闭分支由原始OCR回放验证。
+- 最终正式 GUI `daily_20261005_002333_b231c770`：自动确认我的页→点击等级→确认等级页→找到并点击赠币广告→实际播放广告。按短时观察要求从 GUI 停止，终态 CANCELLED（总1分13秒，含停止响应）；未声称奖励到账。运行节点与输入证据保留在 `runtime/records/level_verification_20261004_182333.log`。
+- 强制停止旧任务后 `finally` 未恢复临时资源；先备份到 `runtime/records/level_runtime_before_restore_20261004.json`，只逆转本次运行覆盖字段，保留阅读/听书等已有本机资源差异；重新应用覆盖后与停止时快照完全一致，恢复清单在 `runtime/records/level_runtime_restore_20261004.json`。未提交生成资源。曾在旧任务运行中并行全量测试，3项原始pipeline检查受到临时覆盖影响；该次结果不作最终验收。
+- 停止、恢复后重新执行 `py -3.10 -m pytest -q --junitxml=runtime/records/ad_fixes_20261004.xml`：523项，518 passed、4 failed、1 skipped。4项与改动前一致：`test_ad_round_regressions::test_each_ad_round_has_its_own_initial_wait`、`test_ad_round_regressions::test_live_exit_attempt_does_not_restart_eight_swipe_cycle`、`test_issue15_reward_nav::test_detect_slide_accepts_real_captcha_fixture`、`test_qqr27_ad_flow::test_ad_play_waits_40_seconds_before_handling_buttons`。原 GUI Tk 后台线程 warning 仍存在。`git diff --check` 通过。
+
+**未覆盖 / 遗留**：每日广告12/12、等级赠币/积分“今日已完成”及到账未完成本次短时验收；新增右上出口、升级及活动自动关闭、未知页20次恢复预算均未在最终实机复验触发。强制终止旧包装器后临时资源不会自动恢复，已在本次现场恢复，未扩大到停止机制重构。GUI参数与 `runtime/records/gui_tasks_before_ad_fixes_20261004.json` 语义一致，广告45分钟、等级30分钟已保留。既有验证码fixture删除和快捷方式均保留，不纳入提交。
+**分支**：`codex/reading-game-log-fix-20261004`
+**回滚**：上一提交 `10186de`；本条代码修改单独 revert 本次提交即可，不恢复或覆盖运行记录。
+
+---
+
+## 2026-10-04 · 一分钟实机复验：避免阅读返回后在受保护正文调用 OCR
+
+**触发**：用户要求修复后仅用一分钟实机验证。正式 GUI `daily_20261004_121807_797ddd8f` 在 06:19:28 完成一分钟正文计时，但第一次 BACK 只取消选中文字，正文仍禁止截图；随后检查退出弹窗立即调用 Maa OCR，陷入截屏重连。06:21:25 从 GUI 停止后子进程已结束，GUI 仍显示“正在停止”，该记录未正常写回终态，随后关闭并从正式启动脚本重开 GUI，保留原记录。
+
+| 任务/模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| `scripts/auto_read_30min.py::return_to_capturable` | 计满一分钟后无法返回，持续截屏重连 | BACK 不一定退出正文，可能只取消选文或停止自动滚动；原逻辑每次 BACK 后立刻 Maa OCR | 若 ADB 截图不可用且前台仍明确是正文，跳过 OCR，继续原有有界返回；非正文保留 Maa 检查及验证码阻塞，不能只凭 ADB 截图失败跳过验证码 |
+
+**改动文件**：`scripts/auto_read_30min.py`、`tests/test_reading_interruptions.py`、本日志。
+**验证**：
+- 回归先复现受保护正文进入 OCR 的失败，再验证两次 BACK 后才 OCR；另覆盖 ADB 截图失败但前台非正文、Maa 能识别验证码时立即阻塞，不额外发送 BACK。独立只读审查发现并复核了后一个边界，最终无新增问题。
+- `py -3.10 -m pytest -q tests/test_reading_interruptions.py`：11 passed。全量 `py -3.10 -m pytest -q --junitxml=runtime/records/one_minute_fix_20261004.xml`：498 项，492 passed、4 failed、2 skipped。4 项仍为上一条记录列出的基线失败，未新增失败；原 GUI Tk 后台线程 warning 仍存在。
+- 正式 GUI 第二次阅读尝试 `daily_20261004_122657_a1cdc8ba`：书架未恢复就绪，23 秒后 FAILED（exit 2），现场已在 MuMu 桌面，未开始阅读。通过 GUI“启动QQ阅读” `daily_20261004_122742_7c800ba4` 重新打开后，实机确认完整书架，未伪造前一次成功。
+- 最终阅读复验 `daily_20261004_122842_f736970b`：06:28:53 自动打开指定书、06:29:59 计满 1/1 分钟、06:30:04 自动返回两次到可截图页面，正文运行及返回阶段通过。随后领奖页显示今日14分钟、10分钟档已领取、30分钟档未到；领奖检查 exit 2，因此整项仍 FAILED（总耗时1分42秒）。未追加阅读时长或声称新奖励到账。
+- 正式 GUI 游戏一分钟 `daily_20261004_123116_a62e9841`：自动进入在线时长任务、打开游戏、开始计时、自动退出并返回 GAME_ENTRY；SUCCEEDED（exit 0，总耗时2分11秒，含加载及返回）。任务记录 `runtime/records/DailyGameFlow_20261004_063322_949686.json` 与关键截图均保留。只验证短时运行闭环，未验证20分钟奖励到账。
+
+**未覆盖 / 遗留**：未跑满阅读33分钟、游戏25分钟或三天无人值守；未实机触发验证码。第一次停止后 GUI 终态未写回及非就绪书架现场未在本次小修中全面处理。验证后通过 GUI 恢复阅读33分钟、游戏25分钟，其他设置与 `runtime/records/gui_tasks_before_one_minute_20261004.json` 保持一致。
+**分支**：`codex/reading-game-log-fix-20261004`
+**回滚**：上一轮修复提交 `bade9e4`；本次提交可用 `git log --oneline -S "一分钟实机复验：避免阅读返回后在受保护正文调用 OCR" -- CHANGELOG.md` 定位后单独 revert。
+
+---
+
+## 2026-10-04 · 修复阅读中断、领奖导航及游戏误点入口
+
+**触发**：用户要求依据今日日志修正自动阅读失败、每日游戏无法打开。正式 GUI 记录 `runtime/records/daily_flows/daily_20261004_110610_70bbe0cb.json`：阅读 33 分钟在 85 秒后 FAILED（exit 2），随后游戏被用户停止；`runtime/logs/auto_read.log` 05:07:35 报“第 1/3 段第 1 分钟时已离开正文页”。`runtime/logs/maafw.bak.2026.10.04-05.16.23.464.log` 05:09:49、05:10:21 实际点击充值行“去玩游戏”，进入空白 H5。
+
+| 任务/模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| `scripts/auto_read_30min.py` 正文确认与计时 | 正文中断后直接退出；每分钟确认前还会继续翻页 | 在完整窗口列表中查 `ReaderPageActivity`，后台窗口也能被误放行；三次翻页后才确认焦点，没有确认安全页面后重新进入的分支 | 只看前台焦点，自动阅读按钮操作及每次翻页前后确认；中断时保存焦点、OCR、截图；确认书架/书城/奖励页/弹窗后最多两次重新进入白名单书，UNKNOWN 重拍不点击；被中断的分钟重新计满 |
+| 同上恢复/选书与失败清理 | 复查中新出现验证码可能被普通导航失败捕获，继续按返回 | `ReadingBlockedByCaptcha` 是 `RuntimeError` 子类，原普通 catch 会吞掉阻塞异常 | 每次 OCR 新帧先检测验证码；选书、回书架显式传播验证码异常；失败清理遇验证码也返回 exit 10，保留现场。未修改滑块求解器或启用逻辑 |
+| `qqreader/tasks/reading_reward.py::_open_reward_page` / `qqreader/reward/nav.py::goto_reward_page` | 阅读十分钟后领奖无法进入奖励页，返回后困在退出框；正确点击后加载帧仍被判失败 | 独立领奖导航先点“再读9分钟领20赠币”说明文字 (165,205)，没有点真正按钮 (597,180)；盲 BACK 不处理退出确认框；统一导航见 H5 过渡帧立刻返回 False | 领奖复用统一导航、优先时长卡按钮；“确定退出QQ阅读”先点取消再重拍；未知/加载帧在原12步预算内等待重拍，期间无输入，仍未确认才退出 |
+| `qqreader/tasks/game.py::_open_game_row` | 在线时长任务和充值任务都有“去玩游戏”，实际点了充值入口 | 全屏 OCR 最佳匹配选中下方同名按钮，没有绑定任务标题 | 新截图内只点“玩游戏领赠币”标题同一行按钮；缺失目标只在确认奖励页时受控滚动，不用同名按钮或固定点击兜底；点击后等待下一帧确认，不提前开始计时 |
+| `scripts/run_task.py::_build_runtime` 与游戏恢复 | 第一轮复验遇网页断连、QQ 阅读无响应，恢复到 MuMu 桌面后反复按返回 | 运行观察未接已有 `DeviceProbe`，前台包名一直为 None；桌面“游戏中心”图标被当游戏列表 | 注入现有 ADB 只读前台探测；明确 `com.mumu.launcher` 时最多三次重新打开 QQ 阅读，保留游戏计时、已退出及待领奖状态 |
+
+**改动文件**：上表五个代码文件、`tests/test_daily_entry_20261004.py`、`tests/test_reading_interruptions.py`、`tests/fixtures/daily_entry_20261004.json`、本日志。
+
+**验证**：
+- 新增真实 OCR 回放：两种奖励页布局都点击在线时长任务，充值行单独存在时不点；新帧有验证码不点；桌面恢复保留游戏退出状态；实际运行组合注入前台包名。阅读回放覆盖后台正文窗口、书架中断重新进入、UNKNOWN 不盲点、恢复/选书中新验证码不返回，另检查三类失败清理保留验证码 exit 10。关键失败先在修复前复现（选书验证码回放实际记录一次错误 BACK）。
+- 相关检查 `py -3.10 -m pytest -q tests/test_reading_interruptions.py tests/test_daily_entry_20261004.py tests/test_daily_popups.py tests/test_qqr55_reading_shelf.py tests/test_autoread_book_guard.py tests/test_book_device_selection.py tests/test_reading_reward_claim.py`：108 passed。
+- 全量 `py -3.10 -m pytest -q --junitxml=runtime/records/final_fix_20261004.xml`：496 项，490 passed、4 failed、2 skipped；基线 478 项：472 passed、4 failed、2 skipped。新增18项均通过。4 项原有失败是 `test_each_ad_round_has_its_own_initial_wait`、`test_live_exit_attempt_does_not_restart_eight_swipe_cycle`、`test_detect_slide_accepts_real_captcha_fixture`、`test_ad_play_waits_40_seconds_before_handling_buttons`；前两类涉及广告等待/退出，fixture 涉及本次开始前已删除的截图，均未纳入修复。跳过项为本机 Tk 初始化不稳定的一项 GUI 测试及缺真实截图的验证码测试，GUI 测试后台线程 Tk warning 仍存在。
+- 正式 GUI 游戏 1 分钟首轮 `daily_20261004_113523_ea2230ea`：正确进入游戏并计时；返回时网页 `ERR_CONNECTION_CLOSED`、QQ 阅读无响应，退到桌面空转，随后从 GUI 停止，CANCELLED（不能记成功）。补前台探测后复验 `daily_20261004_114447_b7c38036`：进入正确游戏入口、启动并计时、退出返回奖励页，SUCCEEDED（exit 0，2 分 42 秒），任务证据 `runtime/records/DailyGameFlow_20261004_054724_305415.json`。奖励页显示“再玩18分钟即可领取”，因此这里只验证短时游戏闭环，**没有宣称20分钟档奖励到账**。
+- 正式 GUI 阅读 10 分钟 `daily_20261004_114942_62515434`：05:50 主动通过模拟器界面返回书架进行受控中断；05:50:56 留书架现场，05:50:59 确认原书、05:51:00 重新进入正文；06:01:22 计满10分钟、06:01:24 返回书架。该次整项仍 FAILED（exit 2），因暴露原有领奖入口问题。修复入口优先级后 `daily_20261004_120406_5f0f3a23` 从退出确认框重试仍失败（exit 3）；取消退出框修复后 `daily_20261004_120704_ce371ab9` 遇持续黑屏，exit 3；正式界面关闭 QQ 标签、再用 GUI 启动 QQ 阅读恢复后，书架显示时长735→745分钟，确认本轮阅读被应用记录。`daily_20261004_121006_3c857576` 再暴露 H5 过渡帧立即失败（exit 3），已加入等待重拍。
+- 最终 GUI 领奖补跑 `daily_20261004_121145_14a100b6`：SUCCEEDED（exit 0，17秒）；结果“赠币10→30”，10分钟档变为“已领取”，30分钟档仍未达到。证据 `runtime/screenshots/reading_reward_claim_before_20261004_061153.png`、`reading_reward_claim_after_20261004_061202.png`。此次十分钟阅读、中断恢复与20赠币到账分别有实机证据，**没有把前面失败记录改写成整项成功**。
+
+**未覆盖 / 遗留**：
+- 原始 05:07 阅读为何离开正文未自然重现，原日志缺少当时焦点与现场截图；此次修复的是可确认的前台判据和缺失恢复分支，实机中断为主动注入，不能写成重现原始诱因。
+- 未实机跑满阅读 33 分钟、游戏 25 分钟，未覆盖阅读跨段返回和三天无人值守；UNKNOWN/验证码及桌面重入分支主要由真实帧回放和单元测试覆盖。原有选书等待正文失败后的固定“查看原文”备用点击没有全面改造。
+- 第一轮实机网络断连与 QQ 阅读无响应属于现场故障，未修改代理或网络持久配置。原有广告测试差异、截图删除及快捷方式保留。
+- 领奖整段尚未实机遇验证码；统一入口会停止点击，但领奖上层仍可能记普通导航失败，验证码专用 outcome 尚非此次完整覆盖。最后领奖补跑前有通过正式界面的人工应用重开，未验证黑屏无人干预恢复。
+- 验证结束后通过 GUI 恢复阅读 33 分钟、游戏 25 分钟；`runtime/gui_tasks.json` 与测试前备份的 JSON 内容完全一致，勾选项和其他设置均已恢复。
+
+**分支**：`codex/reading-game-log-fix-20261004`
+**回滚**：`git log --oneline -S "修复阅读中断、领奖导航及游戏误点入口" -- CHANGELOG.md` 定位本次提交后 `git revert <hash>`。GUI 测试前配置备份：`runtime/records/gui_tasks_before_20261004_fix.json`。
+
+---
+
+## 2026-10-02 · 修复滑块验证码求解器写死配置路径导致的崩溃，恢复自动求解后继续任务
+
+**触发**：用户反馈「遇到滑动验证码无法正常运行」，要求调用 GUI 模拟人工点击实机复现。`runtime/records/DailyAdFlow_20261001_173332_121299.json` 在 `captcha.detected` 之后立刻 `未预期异常: ConfigError: 配置文件不存在: configs\qqreader.local.json`，任务被判 FAILED（exit 2），滑块一次都没滑出去；`DailyAdFlow_20261001_192252_745520.json`、`DailyAdFlow_20261002_050425_790460.json` 则记为「未配置自动求解器，等待人工处理验证码」（那两次跑的是 `agent/T-008` worktree 的代码，其 `--captcha-mode manual` 默认值强制人工守卫，不在本次改动范围）。
+
+| 任务/模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| `qqreader/captcha/slide.py::_sendevent_track` | 识别到验证码后任务以「未预期异常 ConfigError」失败，验证码一次都没滑 | 函数第一行 `load_config("configs/qqreader.local.json")` 写死**相对当前工作目录**的路径；cwd 不是仓库根目录（worktree / 快捷方式 / 打包 exe / 在别的目录跑 CLI）时抛 ConfigError，异常一路冒到 runner 的通用异常分支 | 新增 `_resolve_adb_endpoint()`：显式注入 → 运行时 Maa 客户端 `config.adb_path/adb_address` → `_REPO_ROOT/configs/qqreader.local.json`（按文件位置解析）；sendevent 注入拆到 `_inject_sendevent_track()` |
+| 同上 | 取不到 adb 端点 / adb 可执行文件不存在 / sendevent 写入失败时整个任务崩成 FAILED | 没有降级路径：`getevent` 探测与 `send()` 失败都直接抛异常 | 先降级为 `device.swipe()`；再失败只抛 `SlideInputUnavailable`，由 `solve()` 转成 `solved=False`（→ `BLOCKED_BY_CAPTCHA` 等待人工），并把降级原因写进失败详情 |
+
+**改动文件**：`qqreader/captcha/slide.py`、`tests/test_qqr34_slide_captcha_runtime_adb.py`、本日志。
+**验证**：
+- 修复前确认失败：把 cwd 切到 `runtime/_cwd_probe` 后，HEAD 版 `_sendevent_track` 抛 `ConfigError: 配置文件不存在: configs\qqreader.local.json`（与 10-01 17:33 实机同一报错）；同一脚本里修复后的版本按仓库根目录解析出 `adb.exe` + `127.0.0.1:16384`，不再依赖 cwd。
+- 新增 8 项回归测试 `tests/test_qqr34_slide_captcha_runtime_adb.py`：运行时端点解析、cwd 不在仓库根目录时不读相对路径、无端点 / 无 adb / 设备 swipe 也失败三种降级路径，以及用 10-01、10-02 真实验证码截图跑完整求解循环（`solved=True`）。
+- GUI 实机（`启动QQReaderGUI.cmd` 启动；用 Win32 子窗口矩形匹配定位控件后模拟点击「全不选」→ 只勾「每日广告完整流程」→「直接运行已选」）：串行记录 `daily_20261002_141758_d366cb4e`，单步 `01-DailyAdFlow-1` → `SUCCEEDED`，exit 0，10 分 45 秒；任务记录 `DailyAdFlow_20261002_082834_335033.json` 命中 `success_condition`（`OCR 包含 "12/12"`）。
+- 验证码分支实测：08:19:32 `CAPTCHA_DETECTED`（`runtime/screenshots/20261002/DailyAdFlow_20261002_081932_349657_009_CAPTCHA_DETECTED.png`，检测到轨道 (75,806,567,26)、滑块中心 (168,818)、缺口 x=472、距离 304px）→ 求解器滑了 4 轮（304px 连续三次被拒后重新随机化，第 4 轮 409px 通过）→ 08:20:15 `CAPTCHA_CLEARED`（同目录 `..._010_CAPTCHA_CLEARED.png`，该帧已无滑块轨道）→ 记录 `captcha.handled resolution=SOLVED attempts=1` 与 `captcha.verified_gone 已确认验证码消失，恢复原任务` → 广告流程继续跑到 12/12。对照 10-01 19:21 与 10-02 05:02 的同一位置，前两次都以 `BLOCKED_BY_CAPTCHA` 结束。
+- 全量 `py -3.10 -m pytest -q`：478 项，472 passed、4 failed、2 skipped；4 项失败与改动前完全一致（广告 40/35 秒等待差异两项、直播退出一项、被删除的 `runtime/screenshots/ad_watch/captcha_now.png` fixture 一项），不是本次引入。`pytest -q` 末尾的汇总行本机被截断，数量取自同一次运行的 `--junitxml` 结果（tests=478 / failures=4 / skipped=2）。
+
+**未覆盖 / 遗留**：
+- 实机 GUI 运行的 cwd 就是仓库根目录，这条路径原本也能读到配置。被修的是「cwd 不是仓库根目录」的启动方式（worktree / 打包 exe / 快捷方式 / 在别的目录跑 CLI）；该分支只由单元测试和修复前复现脚本覆盖，**没有实机复现**。
+- `agent/T-008` worktree 里 `scripts/run_task.py` 的 `--captcha-mode manual` 默认值，以及 GUI `build_run_task_command` 强制追加该参数的问题原样保留，未纳入本次改动（用户要求只修当前检出）。那次改动正是 10-01 19:21 / 10-02 05:02 两次「未配置自动求解器」的来源。
+- 实机未触发「取不到 adb 端点」与「sendevent 写入失败」两条降级分支，只由单元测试覆盖。
+- 为复现验证码，实机跑掉了当天广告 12/12（成功）；GUI 勾选状态已恢复为操作前的 5 项，验证用的 GUI 实例已关闭。
+
+**分支**：`dsh/qqr-34-slide-captcha-cwd-20261002`
+**回滚**：`git log --oneline -S "修复滑块验证码求解器写死配置路径导致的崩溃" -- CHANGELOG.md` 定位本次提交，随后 `git revert <hash>`。
+
+---
+
+## 2026-09-30 · 等待书架列表加载后确认自动阅读书目，避免启动即白名单拒绝
+
+**触发**：用户要求修正无法自动阅读。GUI 每日运行 `daily_20260930_103417_205adb77` 的阅读任务在 28 秒后 exit 3；`runtime/logs/auto_read.log` 04:34:44 报“书架上没有白名单书目”，但现场截图已出现《宇智波：从扉间人柱力开始》。Maa 日志 04:34:41.645 仅识别到书架导航和时长卡，04:34:56.076 才识别到完整书籍列表。
+
+| 任务/模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| 自动阅读选书确认 | 页面已是书架，列表尚未加载时直接拒绝目标书 | 首帧没有书名就抛出 `BookNotAllowed`，未等待列表加载 | 最多 6 次重新截图确认；在书架未找到指定书名时等待 3 秒再重拍，预算耗尽才拒绝，不点击其他书 |
+| 选书复查中的验证码 | 延迟复查可能遇到验证码 | 普通页面恢复不能在验证码上执行 | 检查验证码文案，保存证据并返回 `BLOCKED_BY_CAPTCHA`（exit 10），不执行失败返回清理 |
+
+**改动文件**：`scripts/auto_read_30min.py`、`tests/test_qqr55_reading_shelf.py`、`tests/fixtures/autoread_loading_frames.json`、本日志。
+**验证**：
+- 新增 5 项回归测试均先在修复前确认失败；使用 09-30 真实 Maa OCR 加载帧、已加载帧，以及已有真实验证码帧。
+- `py -3.10 -m pytest -q tests/test_autoread_book_guard.py tests/test_qqr55_reading_shelf.py tests/test_daily_popups.py tests/test_book_device_selection.py`：84 passed。
+- 全量 `py -3.10 -m pytest -q`：464 passed、4 failed、2 skipped、1 warning；4 项失败与修改前一致（广告 40/35 秒等待差异两项、直播退出一项、原有删除的验证码截图 fixture 一项）。`git diff --check` 通过。
+- 正式 GUI 点击“单独运行此任务”，运行 `daily_20260930_120351_9f58b7b1`：1 次 × 1 分钟，自动选中《宇智波：从扉间人柱力开始》，观察正文持续向下翻页，日志确认 1/1 分钟、返回可截图页面；随后确认阅读奖励已领取，exit 0，GUI 显示成功（1 分 34 秒）。测试后 GUI 阅读设置恢复为 1 次 × 33 分钟，其他每日任务未重复执行。
+
+**未覆盖 / 遗留**：本次实机列表及时加载，延迟加载和验证码分支由真实帧回放覆盖；未实机跑满 33 分钟或验证跨段返回、服务端新增阅读时长与新奖励到账；全量测试的 4 项原有失败未修。原有 `qqreader/runner/runner.py` 修改、启动脚本及验证码截图删除均保留，未纳入本次提交。
+**分支**：`codex/qqr-55-reading-ocr-20260930`
+**回滚**：`git log --oneline -S "等待书架列表加载后确认自动阅读书目" -- CHANGELOG.md` 定位本次提交，随后 `git revert <hash>`。
+
+---
+
 ## 2026-09-29 · 计划外弹窗统一优先找关闭按钮；修复奖励页被判书架、游戏退出后不领奖空转、阅读领奖漏读币值
 
 **触发**：用户要求不要只处理固定弹窗——任何计划外弹窗都优先找关闭按钮（X 或「关闭」），并实机完整跑一轮（自动阅读 1 轮 × 10 分钟）。实机运行 `daily_20260929_111500_9cb3bb10` 和补跑 `daily_20260929_123918_ff2993fd` 又暴露三个原有缺陷。

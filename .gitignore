@@ -14,9 +14,26 @@ dist/
 *.spec
 *.exe
 
+# Generated logs, screenshots, runtime data, and local config
+# 日志
+*.log
+*.log.*
+logs/
+**/logs/
+
+# 截图
+screenshots/
+**/screenshots/
+
 # 运行数据与本机配置
 runtime/
 configs/*.local.json
+
+# 通用缓存目录
+cache/
+**/cache/
+.cache/
+**/.cache/
 
 # 手工备份（备份改用 Git 提交/分支）
 _backup_*/

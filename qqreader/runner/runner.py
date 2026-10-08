@@ -181,6 +181,42 @@ class TaskRunner:
                 RunState.FAILED,
             )
 
+    def _interrupted(
+        self,
+        context: TaskContext,
+        diagnostics: List[DiagnosticEvent],
+        stage: Optional[str],
+    ) -> Optional[TaskResult]:
+        """取消 / 独立超时检查（QQR-39）。
+
+        ``stage`` 为 ``None`` 表示循环顶部的常规检查；其他值表示观测或确认之后的
+        复查，此时额外写一条 ``run.interrupted`` 诊断，便于区分「观测中途超时/取消」。
+        语义与循环顶部一致：取消 → CANCELLED；超时 → TIMEOUT（恢复阶梯已耗尽则 FAILED）。
+        """
+        if self._token.is_cancelled:
+            reason = f"已取消: {self._token.reason or 'cancelled'}"
+            if stage is not None:
+                self._record(diagnostics, context, "run.interrupted", f"{stage}: {reason}")
+            return self._finish(
+                context, TaskOutcome.CANCELLED, reason, diagnostics, RunState.CANCELLED
+            )
+        if context.elapsed >= self._contract.timeout.seconds:
+            if context.get("recovery_exhausted"):
+                reason = "恢复阶梯已耗尽且独立超时仍未恢复"
+                outcome, state = TaskOutcome.FAILED, RunState.FAILED
+            else:
+                reason = f"独立超时 {self._contract.timeout.seconds:g}s"
+                outcome, state = TaskOutcome.TIMEOUT, RunState.TIMEOUT
+            if stage is not None:
+                self._record(
+                    diagnostics,
+                    context,
+                    "run.interrupted",
+                    f"{stage}: {reason}（elapsed={context.elapsed:.1f}s）",
+                )
+            return self._finish(context, outcome, reason, diagnostics, state)
+        return None
+
     # ------------------------------------------------------------------ 主循环
 
     def _run(self, context: TaskContext, diagnostics: List[DiagnosticEvent]) -> TaskResult:
@@ -194,14 +230,9 @@ class TaskRunner:
             context.run_state = _PHASE_RUN_STATE[phase]
             context.data[PHASE_KEY] = phase.value
 
-            if self._token.is_cancelled:
-                return self._finish(
-                    context,
-                    TaskOutcome.CANCELLED,
-                    f"已取消: {self._token.reason or 'cancelled'}",
-                    diagnostics,
-                    RunState.CANCELLED,
-                )
+            interrupted = self._interrupted(context, diagnostics, None)
+            if interrupted is not None:
+                return interrupted
             if iterations > self._config.max_steps:
                 return self._finish(
                     context,
@@ -209,22 +240,6 @@ class TaskRunner:
                     f"达到最大循环次数 {self._config.max_steps}，可能存在死循环",
                     diagnostics,
                     RunState.FAILED,
-                )
-            if context.elapsed >= self._contract.timeout.seconds:
-                if context.get("recovery_exhausted"):
-                    return self._finish(
-                        context,
-                        TaskOutcome.FAILED,
-                        "恢复阶梯已耗尽且独立超时仍未恢复",
-                        diagnostics,
-                        RunState.FAILED,
-                    )
-                return self._finish(
-                    context,
-                    TaskOutcome.TIMEOUT,
-                    f"独立超时 {self._contract.timeout.seconds:g}s",
-                    diagnostics,
-                    RunState.TIMEOUT,
                 )
 
             observation = self._observer.observe(context)
@@ -278,6 +293,13 @@ class TaskRunner:
                     return terminal
                 continue
 
+            # QQR-39：截图/OCR 可能耗时很久，观测返回后必须重新检查取消与独立超时，
+            # 否则跨过截止时间的观测会被判 SUCCESS，停止请求也会晚一个动作才生效。
+            # 放在验证码判断之后：验证码阻塞优先于超时，保证状态如实记为验证码。
+            interrupted = self._interrupted(context, diagnostics, "after_observe")
+            if interrupted is not None:
+                return interrupted
+
             # 2) 状态未确认：先按 QQR-5 的确认阶梯「重新截图 → 重新判断 →
             #    模板 B / OCR / 页面特征 → 查弹窗 → 查验证码 → 刷新状态」，
             #    确认失败只允许恢复，绝不在 UNKNOWN 上盲点，也绝不判失败。
@@ -303,6 +325,10 @@ class TaskRunner:
                     if terminal is not None:
                         return terminal
                     continue
+                # QQR-39：页面确认阶梯本身会重新截图/OCR，结束后同样要复查。
+                interrupted = self._interrupted(context, diagnostics, "after_confirm")
+                if interrupted is not None:
+                    return interrupted
                 if confirmation.confirmed:
                     # 确认本身发现页面可识别了，等价于「状态变化 → 阶梯重置」。
                     if (
@@ -412,6 +438,10 @@ class TaskRunner:
                     continue
                 self._record(diagnostics, context, "phase.prepare", result.reason)
             else:
+                # QQR-39：成功判定前复查，跨过截止时间的观测不能被记为成功。
+                interrupted = self._interrupted(context, diagnostics, "before_success")
+                if interrupted is not None:
+                    return interrupted
                 success = self._contract.success_condition.evaluate(context)
                 if success.satisfied:
                     self._record(diagnostics, context, "task.success", success.reason)
@@ -439,6 +469,10 @@ class TaskRunner:
                         continue
 
             # 6) 领域推进（点击 / 等待 / 滑动等）。
+            # QQR-39：任何领域动作之前最后确认一次未取消、未超时。
+            interrupted = self._interrupted(context, diagnostics, "before_advance")
+            if interrupted is not None:
+                return interrupted
             step = self._adapter.advance(context)
             context.step += 1
             if step.data_updates:

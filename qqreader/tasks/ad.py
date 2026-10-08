@@ -103,6 +103,14 @@ def _locate_visible_corner_close(client: "MaaClient") -> Optional[Action]:
         for marker in ("安全验证", "拖动下方滑块", "完成拼图")
     ):
         return Action.wait(1.0)
+    # 10-04 实机：奖励弹窗没有 X，真正出口是顶部“奖励已领取｜跳过”。
+    # 中间“返回继续体验”会留在广告或跳第三方，不能当退出按钮。
+    for text, (x, y, width, height) in result.text_boxes():
+        label = text.replace(" ", "")
+        cx, cy = x + width // 2, y + height // 2
+        if (re.fullmatch(r"(?:奖励已(?:领取|发放)|去体验\d+秒可立即领奖)[|｜·]*跳过", label)
+                and x >= shot.width - 300 and 0 <= cy <= 120):
+            return Action.tap_point(cx, cy)
     point = _image_corner_x(shot.data)
     if point is not None:
         return Action.tap_point(*point)
@@ -559,7 +567,14 @@ class AdTaskAdapter(PlannedTaskAdapter):
                 return self._execute(
                     Action.wait(self._initial_wait_seconds), context
                 )
-            if self._has_text(context, self._claim_exit_text):
+            # 浏览型退出弹窗同时有「去领取奖励」和「坚持退出」。前者会
+            # 返回加速/第三方体验，不能当关闭；先处理明确的退出按钮。
+            if self._has_text(context, self._force_exit_text):
+                return self._execute(
+                    Action.tap_feature(self._force_exit_key), context
+                )
+            if (self._has_text(context, self._claim_exit_text)
+                    and not self._has_text(context, "去体验")):
                 return self._execute(
                     Action.tap_feature(self._claim_exit_key), context
                 )
@@ -584,10 +599,6 @@ class AdTaskAdapter(PlannedTaskAdapter):
                     )
                 return self._execute(
                     Action.tap_feature(self._continue_key), context
-                )
-            if self._has_text(context, self._force_exit_text):
-                return self._execute(
-                    Action.tap_feature(self._force_exit_key), context
                 )
             # 广告完成倒计时后，关闭图标可能只有圆圈 X，没有“关闭”文字。
             # 从新截图定位左右上角的 X；右上角静音图标不能误当关闭。

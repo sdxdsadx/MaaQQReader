@@ -49,6 +49,18 @@ QQReader：Windows 本地运行的 QQ 阅读每日任务自动化（MaaFramework
 - 成功只认该任务的 `success_condition`。例如广告必须看到广告卡 `12/12` 或该卡的"明日再来"；"已返回奖励页""没报错"都不算。
 - 不要为修复单个任务而改 Gameflow 调度核心或备份目录。
 
+### 滑动验证码（滑块）启动逻辑：禁止修改
+
+任何 agent（Claude、Codex、Hermes 及流水线里的规划/实现/验收员）都不得修改滑动验证码的启动逻辑和相关文件，包括新增、删除、重命名、改内容，也不能借"顺手修复""让测试通过"之名修改：
+
+- `qqreader/captcha/` 下全部文件（`__init__.py`、`factory.py`、`guard.py`、`slide.py`）
+- `scripts/_captcha_guard.py`、`scripts/_captcha_solve_now.py`、`scripts/_patch_solver.py`、`scripts/live_captcha_auto.py`、`scripts/live_captcha_solve.py`、`scripts/live_captcha_solve2.py`
+- `scripts/run_task.py` 和 `qqreader/tasks/defaults.py` 里决定验证码守卫/求解器如何构造和启用的代码（`--captcha-mode` 参数、`_captcha_guard_from_config` 及其调用处）
+- 配置文件里的 `captcha` 段（例如 `captcha.solver`）
+- 验证码相关测试 `tests/test_captcha_blocking.py`、`tests/test_qqr29_captcha.py`
+
+如果任务看起来必须改到上面任何一处，就停下来，在报告里写明原因和打算怎么改，等用户明确同意；验收员发现改动涉及这些文件，直接判 `VERDICT: FAIL`。只读阅读、引用这些文件不受限制。
+
 ## CHANGELOG
 
 每次改动（代码、pipeline 覆盖、启动脚本、GUI 行为、配置默认值、Git 规则）都要在 `CHANGELOG.md` **最上方**加一条，按文件开头的模板写：

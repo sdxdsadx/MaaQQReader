@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions
-set "ROOT=%~dp0"
-if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
+rem 打包工具（原仓库根目录 build-gui-exe.cmd，2026-09-24 移到 scripts\）
+for %%I in ("%~dp0..") do set "ROOT=%%~fI"
 cd /d "%ROOT%"
 
 set "PYEXE="
