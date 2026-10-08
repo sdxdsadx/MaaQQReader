@@ -44,3 +44,11 @@ _backup_*/
 # 本机 agent / 工具目录
 .hermes/
 .serena/
+
+# MFAAvalonia：只入库 interface.json、resource/、agent/；程序文件、config/、debug/、logs/ 等忽略
+mfa/*
+!mfa/interface.json
+!mfa/resource/
+!mfa/agent/
+# MFAAvalonia 运行时写入的界面布局（不是源码）
+mfa/resource/mfa_layout.json

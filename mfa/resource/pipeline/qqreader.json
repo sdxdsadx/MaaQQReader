@@ -1,0 +1,87 @@
+{
+    "QQR_LaunchQQReader": {
+        "action": "Custom",
+        "custom_action": "QQReaderRunTask",
+        "custom_action_param": {
+            "task": "LaunchQQReader"
+        }
+    },
+    "QQR_SmokeTest": {
+        "action": "Custom",
+        "custom_action": "QQReaderRunTask",
+        "custom_action_param": {
+            "task": "SmokeTest"
+        }
+    },
+    "QQR_DailyReadingFlow": {
+        "action": "Custom",
+        "custom_action": "QQReaderRunTask",
+        "custom_action_param": {
+            "task": "DailyReadingFlow",
+            "minutes": 35,
+            "timeout_minutes": 50,
+            "book_title": "宇智波"
+        }
+    },
+    "QQR_DailyAudiobookFlow": {
+        "action": "Custom",
+        "custom_action": "QQReaderRunTask",
+        "custom_action_param": {
+            "task": "DailyAudiobookFlow",
+            "minutes": 35,
+            "timeout_minutes": 50,
+            "book_title": "全职法师",
+            "cover_image": "",
+            "first_book_fallback": true
+        }
+    },
+    "QQR_DailyGameFlow": {
+        "action": "Custom",
+        "custom_action": "QQReaderRunTask",
+        "custom_action_param": {
+            "task": "DailyGameFlow",
+            "duration_minutes": 25.0,
+            "timeout_minutes": 35
+        }
+    },
+    "QQR_DailyAdFlow": {
+        "action": "Custom",
+        "custom_action": "QQReaderRunTask",
+        "custom_action_param": {
+            "task": "DailyAdFlow",
+            "timeout_minutes": 45
+        }
+    },
+    "QQR_DailyExternalAppFlow": {
+        "action": "Custom",
+        "custom_action": "QQReaderRunTask",
+        "custom_action_param": {
+            "task": "DailyExternalAppFlow",
+            "timeout_minutes": 30
+        }
+    },
+    "QQR_DailyLevelAdFlow": {
+        "action": "Custom",
+        "custom_action": "QQReaderRunTask",
+        "custom_action_param": {
+            "task": "DailyLevelAdFlow",
+            "timeout_minutes": 30
+        }
+    },
+    "QQR_ClaimOneReward": {
+        "action": "Custom",
+        "custom_action": "QQReaderRunTask",
+        "custom_action_param": {
+            "task": "ClaimOneReward",
+            "timeout_minutes": 10
+        }
+    },
+    "QQR_ClaimAudiobookReward": {
+        "action": "Custom",
+        "custom_action": "QQReaderRunTask",
+        "custom_action_param": {
+            "task": "ClaimAudiobookReward",
+            "timeout_minutes": 10
+        }
+    }
+}

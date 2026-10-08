@@ -140,6 +140,7 @@ def goto_reward_page(
     *,
     max_steps: int = 12,
     settle_seconds: float = 1.5,
+    entry_retap_steps: int = 4,
     sleep: Sleep = time.sleep,
 ) -> bool:
     """从常见落地页导航到奖励页，成功返回 ``True``。
@@ -147,8 +148,15 @@ def goto_reward_page(
     分支顺序为：验证码阻塞 → 退出弹窗 → 每日弹窗 → 开屏跳过 → 简介继续阅读 →
     奖励页确认 → 书架奖励入口 → 书城切书架 → 正文页返回。未知页等待重拍，不盲返。所有动作
     后都重新截图确认，达到 ``max_steps`` 仍未确认奖励页则返回 ``False``。
+
+    点过书架入口后 ``entry_retap_steps`` 轮内仍看到书架只等待、不重点：页面切换
+    慢时书架会多停留一会儿，过早重点会打开两层奖励页（2026-10-06 实机
+    mfa_20261006_205809_33602f6e）。
     """
+    steps_since_entry_tap: Optional[int] = None
     for _ in range(max_steps):
+        if steps_since_entry_tap is not None:
+            steps_since_entry_tap += 1
         boxes = _ocr(client)
         text = _joined(boxes)
         if _contains_any(text, _CAPTCHA_MARKERS):
@@ -199,7 +207,9 @@ def goto_reward_page(
         # 本身在部分版本不可点击。优先点击按钮，找不到时才退回卡片文案。
         entry = _shelf_reward_button(boxes) or _find(boxes, _SHELF_ENTRY_MARKERS)
         if entry is not None:
-            _tap(client, entry)
+            if steps_since_entry_tap is None or steps_since_entry_tap >= entry_retap_steps:
+                _tap(client, entry)
+                steps_since_entry_tap = 0
             _sleep(settle_seconds, sleep)
             continue
 
