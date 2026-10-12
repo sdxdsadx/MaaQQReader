@@ -134,6 +134,8 @@ if defined PYDIR (
 ) else (
   echo [warn] 未能取得 Python 所在目录，Agent 将使用 PATH 中的 python。
 )
+rem mfa\config 不入库：新的 MFA 目录没有「教程已完成」标记，每次都会弹新手教程，启动前先写入。
+%PYEXE% -m qqreader.mfa.first_use "%ROOT%mfa"
 echo [env] 启动 MFAAvalonia ...
 start "" /D "%ROOT%mfa" "%MFAEXE%"
 endlocal

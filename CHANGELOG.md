@@ -21,6 +21,28 @@
 
 ---
 
+## 2026-10-12 · 启动 MFAAvalonia 前写入「新手教程已完成」，新 GUI 不再每次弹教程
+
+**触发**：用户反馈每次打开新 GUI（MFAAvalonia）都会弹出新手教程，要求关闭并测试。
+
+| 任务/模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| GUI 启动器 / MFAAvalonia | 打开新的 MFAAvalonia 时，主界面蒙上遮罩并弹出「工具栏概览 … 下一步」新手教程 | MFAAvalonia 启动时读 `mfa/config/config.json` 的 `UI.HasCompletedFirstUseTutorial`，不是 `true` 就弹教程，只有把教程走完才自己写入（上游 `RootViewContent.axaml.cs` / `TeachingTipOverlay.axaml.cs`）。`mfa/config/` 被 `.gitignore` 忽略，每一份新的 MFA 目录（重新解压、新 worktree、从别处拷贝程序文件）都没有这个键：主目录 `mfa/config` 是 2026-10-12 09:19 才新建的（`mfa/logs/log-20261012.log`：「检测到仅包含临时启动数据的 default 实例文件，按首次启动处理」） | 新增 `qqreader/mfa/first_use.py::ensure_tutorial_completed`：配置不存在则新建只含该键的 `config.json`；已存在则只补这一个键、其余键原样保留；已是 `true` 不改写；读不懂的配置不覆盖。`启动QQReaderGUI.cmd` 6a 段在 `start … MFAAvalonia.exe` 之前调用 `%PYEXE% -m qqreader.mfa.first_use "%ROOT%mfa"`（任何情况返回 0，不拦启动） |
+
+**改动文件**：`qqreader/mfa/first_use.py`（新增）、`启动QQReaderGUI.cmd`、`tests/test_mfa_first_use.py`（新增，9 项）、`CHANGELOG.md`。
+**验证**：
+- 单元测试：`tests/test_mfa_first_use.py` 9 项 + 其余 3 个 MFA 测试文件共 58 项全部通过。
+- 全量 `py -3.10 -m pytest`（本 worktree）：605 项，549 passed、55 failed、1 skipped。失败与本次改动无关：46 项是 worktree 里没有未入库的 `dev/resource/pipeline/qq_reader_trial.json`（`FileNotFoundError`），其余 9 项是已知失败（`test_ad_round_regressions` ×2、`test_issue13_legacy_timeout` ×4、`test_legacy_resource_isolation` ×2、`test_qqr27_ad_flow` ×1）。
+- GUI 实机（MFAAvalonia v2.16.2，把主目录 `mfa` 的程序文件拷到本 worktree 的 `mfa/`，不带 `config/`，按进程 ID 截取窗口）：
+  - 对照（不经启动器直接运行 `MFAAvalonia.exe`）：弹出「工具栏概览」教程，`config.json` 里没有该键 —— 复现。
+  - 修复后（删掉 `config/` 等运行时目录，运行 `启动QQReaderGUI.cmd`）：启动器输出「已关闭 MFAAvalonia 新手教程」，窗口无教程无遮罩，两个 preset 实例「正式每日」「1 分钟试跑」照常创建，实时视图连上模拟器；MFA 随后写回的 `config.json` 仍保留 `"UI.HasCompletedFirstUseTutorial": true`。
+  - 测试用的 MFA 进程按进程 ID 结束，拷入的程序文件已删除；未动主目录正在运行的 MFAAvalonia。
+**未覆盖 / 遗留**：未跑任何 QQ 阅读任务（本次不涉及任务流程）。绕过启动器直接双击 `mfa\MFAAvalonia.exe` 打开一份全新目录时仍会弹教程。主目录当前 `mfa/config/config.json` 已是 `true`（15:38 写入），本修复合入前它也不会再弹。MFAAvalonia 首次启动会自动执行一次「启动任务」（连接模拟器、拉起 Agent），这是它原有行为，未改。
+**分支**：`claude/tutorial-popup-issue-81925d`（基于 `6b11044`）；未推送、未合并。主目录工作区对 `启动QQReaderGUI.cmd` 另有未提交改动（去掉 `chcp 65001`），与本次改动不在同一行。
+**回滚**：`git log --oneline -S "新 GUI 不再每次弹教程" -- CHANGELOG.md` 定位后 `git revert <hash>`。
+
+---
+
 ## 2026-10-11 · MFAAvalonia GUI 入口统一
 
 **触发**：用户要求 ProjectX 的 GUI 启动入口默认使用新 GUI。
