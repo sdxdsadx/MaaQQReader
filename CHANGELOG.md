@@ -21,6 +21,33 @@
 
 ---
 
+## 2026-10-12 · 广告「获得加速机会」弹窗：点「继续播放视频内容」，再多等 30 秒
+
+**触发**：用户贴出新广告形式截图（「获得加速机会！去看9秒可直接拿奖励 / 我要加速领奖 / 继续播放视频内容」，顶部「还需观看28秒领奖｜跳过」），要求点下方文字继续看视频，并在原等待基础上延长 30 秒。对应今天三次 `DailyAdFlow` 失败：`mfa_20261012_234639_db3a34bc`、`mfa_20261012_235405_fefbb57d`、`mfa_20261012_235812_fc36744e`（`runtime/records/DailyAdFlow_20261012_175124_078016.json`、`…_175726_088040.json`、`…_180749_747125.json`，均为 `ad_exit_unconfirmed`）。
+
+| 任务/模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| `DailyAdFlow` / `qqreader/tasks/ad.py::AdTaskAdapter.advance` | 记录里三次都是：进广告 → `点击特征 ad_ocr_accelerate` → 等 35 秒 → 点「跳过」→ 点 (48,70) → 返回键 → 20 秒未回奖励页，`ad_exit_unconfirmed`。失败截图里弹窗仍在，倒计时停在 27 / 28 秒；17:57 那次停在第三方应用详情页（「去浏览9秒 / 立即下载」） | 弹窗按钮「我要加速领奖」包含旧文案「我要加速」（`ad_ocr_accelerate`），被当成加速按钮点掉，跳去第三方应用；弹窗挂着时倒计时不走，之后怎么退都看不满 | 新增 `_handle_accelerate_offer`，排在广告播放分支最前：同屏有「加速机会 / 加速领奖 / 可直接拿奖励」且有「继续播放视频内容」时点后者（新特征 `ad_ocr_continue_video`，「10s后自动放弃继续播放视频内容」同样命中）；重新截图确认弹窗消失后等 30 秒，本轮还没做过 35 秒初始等待时合并成 65 秒；弹窗还在就再点，不开始计时。有「我要加速领奖」但小字没被 OCR 读到时只等 2 秒重看，不点加速。同屏有「坚持退出 / 放弃奖励」时不介入，仍走原退出分支。回到奖励页时清掉未用的加长等待 |
+| 同上 | 这类广告底部写着「上滑或点击 跳转至详情页或第三方应用」，命中直播间文案「上滑或点击」，会跳过 35 秒初始等待并每 5 秒下滑一次 | `live_texts` 里的「上滑或点击」对这类倒计时视频不成立 | 新增 `_has_reward_countdown`：顶部是「还需观看N秒领奖」时不按直播间处理（先等 35 秒，不下滑） |
+| `DailyLevelAdFlow` / `scripts/run_task.py::_apply_level_accelerate_wait_overrides` | 用同一批真实帧离线回放等级广告 pipeline：弹窗帧和「还需观看28秒领奖｜跳过」帧的首个命中都是 `AdSkipBrowseOffer`（点顶部「跳过」，会弹退出确认） | `LevelAdAccelerateWait` 的正则不认「还需观看N秒领奖」；pipeline 里没有「继续播放视频内容」节点 | 等待正则加 `还需观看\d+秒领奖`；新增 `LevelAdAccelerateDecline`（OCR「继续播放视频内容」，ROI `[100,600,520,500]`，Click，post_delay 30000，max_hit 3），插在各 next 列表的 `LevelAdAccelerateWait` 之前；新增 `LevelAdRewardGrantedSkip`（`AdSkipBrowseOffer` 的副本，只认「奖励已领取/发放…跳过」）排在它前面，10-04「恭喜提前获得奖励」弹窗仍按原样点顶部跳过退出。只在等级广告的临时 pipeline 生效，不改 `dev/resource` |
+
+**改动文件**：`qqreader/tasks/ad.py`、`qqreader/page/feature_keys.py`、`scripts/run_task.py`、`tests/test_ad_accelerate_offer.py`（新增，30 项）、`tests/fixtures/ad_accelerate_offer_ocr_frames.json`（新增，5 帧）、`CHANGELOG.md`。
+**验证**：
+- 样本：今天失败现场的 5 张真机截图（`runtime/screenshots/20261012/DailyAdFlow_20261012_*`），用本机 `dev/resource` 的 Maa OCR 离线识别（自定义控制器喂图）得到原始文字框，未手改。
+- 新测试先写：修复前 `DailyAdFlow` 部分 11 项中 9 项失败（另 2 项是「行为不变」的对照）；修复后 `tests/test_ad_accelerate_offer.py` 30 项全部通过。等级广告部分的测试是实现后补的，修复前的走向见上表的离线回放。
+- 全量 `py -3.10 -m pytest`：671 passed、3 failed、2 skipped。3 项失败在基线提交 `219d431` 上同样失败（`test_ad_round_regressions` ×2、`test_qqr27_ad_flow` ×1，期望 40 秒初始等待，代码是 35 秒）。
+- **未实机验证**：没有跑任何任务。
+**未覆盖 / 遗留**：
+- 点「继续播放视频内容」后弹窗是否立即消失、30 秒后顶部变成什么文案（推测是 10-04 同款 SDK 的「奖励已领取｜跳过」，已有出口处理）都没有实机帧，只由单元测试覆盖。
+- 等级广告今天的失败（`mfa_20261012_235125_daa0d570`，exit 2）没有证据是这个弹窗引起的，本次只按离线回放补了同款处理，未实机触发。
+- 已经误点进第三方详情页的状态（17:57 那帧）没有单独处理：修复后不会再走到；等级广告在该帧上会等待。
+- 交接检查把残留广告的「还需观看27秒领奖｜跳过」当开屏点「跳过」再「坚持退出」，能清场，未改。
+- 本分支由 `dcac7bf`（与本地 `master` 相同）快进到主目录在用的 `codex/reading-game-log-fix-20261004`（`219d431`）后再改，不是基于 `master`。Linear 连接失败，未查到对应 Issue 编号。
+**分支**：`claude/new-ad-format-extended-wait-bfc693`；未推送、未合并。
+**回滚**：`git log --oneline -S "获得加速机会」弹窗：点「继续播放视频内容" -- CHANGELOG.md` 定位后 `git revert <hash>`。
+
+---
+
 ## 2026-10-12 · 启动 MFAAvalonia 前写入「新手教程已完成」，新 GUI 不再每次弹教程
 
 **触发**：用户反馈每次打开新 GUI（MFAAvalonia）都会弹出新手教程，要求关闭并测试。
