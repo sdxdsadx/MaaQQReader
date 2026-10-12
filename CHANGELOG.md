@@ -21,6 +21,23 @@
 
 ---
 
+## 2026-10-11 · AGENTS.md：写入 QQReader 项目约定，限定只在本目录修改
+
+**触发**：用户要求把 QQReader 的记忆合并进项目文件夹并写入 AGENTS.md，同时规定每次修改只在 `G:\project_X` 内进行。
+
+| 任务/模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| AGENTS.md「Project overview」 | 没有写明「每次修改只在本目录进行」 | 约定只在对话和记忆里，没有写进仓库规则 | 新增一条：所有 agent 每次修改只在 `G:\project_X` 内进行；目录外的文件（包括 `Documents\Codex`、其他项目和全局配置）不改 |
+| AGENTS.md「Project overview」Linear 一行 | 没有写明问题单不用 GitHub Issues | 同上 | 补充「问题单只用 Linear，不用 GitHub Issues」 |
+
+**改动文件**：`AGENTS.md`；`CHANGELOG.md`
+**验证**：未跑测试，原因：仅文档。AGENTS.md 的 diff 只有 1 行新增、1 行改动（已核对）；两个文件保持 CRLF。
+**未覆盖 / 遗留**：无。实机：不适用。
+**分支**：未提交。工作区仍在 `codex/reading-game-log-fix-20261004`（HEAD ade4c81），与等级广告修复一起等待用户决定提交。
+**回滚**：删除 AGENTS.md 中新增的那一条，把 Linear 那一行改回原文，并删除本条 CHANGELOG。
+
+---
+
 ## 2026-10-11 · 等级页积分广告：浏览加速只等待，不点顶部「跳过」
 
 **触发**：每日完整运行 `daily_20261011_011921_3cef26ce`（6/6 成功；06 DailyLevelAdFlow 本轮成功，但没有遇到浏览加速页，见下方验证）。前两次失败的证据：`runtime/records/daily_flows/daily_20261010_213243_c06840c8.json` 的 05 DailyLevelAdFlow（FAILED，exit 2）；`daily_20261011_005954_9f1bf254.json` 的 01 DailyLevelAdFlow-1（FAILED，exit 2，2m12s）。maafw 日志 `runtime/logs/maafw.log` 中 2026-10-10 17:23–17:25（本机 UTC+2）为同一失败现场。

@@ -7,6 +7,7 @@ QQReader：Windows 本地运行的 QQ 阅读每日任务自动化（MaaFramework
 ## Project overview
 
 - 唯一维护目录：`G:\project_X`。`Documents\Codex` 下的旧脚本已归档到 `docs/legacy/`，不要运行旧入口。
+- 所有 agent 每次修改只在 `G:\project_X` 内进行：新增、改内容、删除都限于本目录；目录外的文件（包括 `Documents\Codex`、其他项目和全局配置）不改。
 - 旧工程 `_backup_old_project_20260909_200716/` 只作参考，不在其中修改；但它**仍是运行依赖**：听书任务 `DailyAudiobookFlow` 目前通过其中的 `tools\run_maa_ad.py` 调用旧流程（2026-09-27 试跑日志确认），不要移动、重命名或删除它。
 - 代码入口：
   - `qqreader/`：核心包（页面状态机、任务契约、恢复、验证码守卫）
@@ -16,7 +17,7 @@ QQReader：Windows 本地运行的 QQ 阅读每日任务自动化（MaaFramework
   - `scripts/run_task.py`：命令行单任务入口，含 pipeline 运行时覆盖
   - `tests/`：单元测试
 - 本机数据：配置在 `configs/qqreader.local.json`；任务次序和次数在 `runtime/gui_tasks.json`；日志和截图在 `runtime/`。
-- Linear 项目 MAAQQReader，Issue 编号 `QQR-xx`。
+- Linear 项目 MAAQQReader，Issue 编号 `QQR-xx`。问题单只用 Linear，不用 GitHub Issues。
 
 ## Dev environment
 
