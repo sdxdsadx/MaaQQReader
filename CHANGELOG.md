@@ -21,6 +21,30 @@
 
 ---
 
+## 2026-10-11 · 等级页积分广告：浏览加速只等待，不点顶部「跳过」
+
+**触发**：每日完整运行 `daily_20261011_011921_3cef26ce`（6/6 成功；06 DailyLevelAdFlow 本轮成功，但没有遇到浏览加速页，见下方验证）。前两次失败的证据：`runtime/records/daily_flows/daily_20261010_213243_c06840c8.json` 的 05 DailyLevelAdFlow（FAILED，exit 2）；`daily_20261011_005954_9f1bf254.json` 的 01 DailyLevelAdFlow-1（FAILED，exit 2，2m12s）。maafw 日志 `runtime/logs/maafw.log` 中 2026-10-10 17:23–17:25（本机 UTC+2）为同一失败现场。
+
+| 任务/模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| DailyLevelAdFlow `LevelClickPointsAd` 及含 `AdSkipBrowseOffer` 的广告 next 列表 | 看小视频进入「去体验9秒可立即领奖｜跳过」，点顶部「跳过」→「确定要退出吗？」→ 挽留弹窗「继续观看」3 次后仍回到弹窗 → 「坚持退出」放弃奖励；`LevelVerifyPointsScroll` 5 次后 20.8 秒超时失败 | 顶部「跳过」在浏览加速页上会退出广告，而加速约 9–15 秒后会自动放弃并在视频内继续播放（「9s后自动放弃继续播放视频内」），「27s｜跳过」倒计时走完即发奖；原 next 中 `AdSkipBrowseOffer` 先于一切等待命中。离线用 10-10 实机 OCR 框（8 帧）重放：原 pipeline 有 7 帧先命中 `AdSkipBrowseOffer`（5 个浏览加速或跳过倒计时帧、1 个挽留弹窗帧、1 个退出确认帧）；新 pipeline 分别命中 `LevelAdAccelerateWait`（5 帧）、`LevelAdRetentionContinue`（1 帧）、`LevelAdRetentionGiveUp`（1 帧）；倒计时帧仍为 `AdCountdown` | `scripts/run_task.py` 新增 `_apply_level_accelerate_wait_overrides`，只在 `DailyLevelAdFlow` 的临时 pipeline 生效：新增 `LevelAdAccelerateWait`（OCR 命中 `去体验N秒｜去浏览N秒｜Ns后自动放弃｜可提前N秒领奖｜Ns｜跳过`，`DoNothing`，post_delay 1.5 秒，max_hit 120），插在含 `AdSkipBrowseOffer` 的 next 列表中该节点之前；验证码与挽留弹窗节点提到最前。不改 `dev/resource` 源文件，不改 `DailyAdFlow`。 |
+
+**改动文件**：`scripts/run_task.py`；`tests/test_level_points_accelerate_wait.py`（新增）；`tests/fixtures/level_points_accelerate_ocr_frames.json`（新增，8 帧真实 OCR 框）；`CHANGELOG.md`
+**验证**：
+- 单元测试：`tests/test_level_points_accelerate_wait.py` 40 项（真实 pipeline + 实机 OCR 框）；`test_qqr54_level_ad_retention.py`、`test_level_ad_runtime_overrides.py`、`test_ad_failures_20261004.py` 等等级广告相关用例全部通过。
+- 全量离线 pytest（Linux 容器，未装 tkinter）：507 passed，10 failed，4 个收集错误。失败集合与改动前相同（`test_ad_round_regressions`、`test_issue13_legacy_timeout`、`test_issue15_reward_nav`、`test_legacy_resource_isolation`、`test_qqr27_ad_flow`），4 个收集错误为 GUI 模块缺 tkinter。Windows 侧未跑 pytest（需要终端），请用 `调试QQReader.cmd test` 复核。
+- 实机（修复前的原代码）：完整轮 `daily_20261011_011921_3cef26ce` 6/6 SUCCEEDED：01、02 DailyReadingFlow，03 DailyGameFlow，04 DailyAdFlow（12/12，19:02:07–19:13:11 UTC），05 DailyAudiobookFlow（35 分钟，19:13:22–19:49:05 UTC），06 DailyLevelAdFlow（19:49:16–19:50:59 UTC，1 分 42 秒，「奖励已发放」「今日已完成」）。06 本轮看的是「观看N秒，可获得奖励」视频（倒计时 28 → 2 秒），之后显示「暂无更多内容，奖励已发放」，没有出现「去体验N秒｜跳过」，所以浏览加速分支没有在实机触发。
+- 修复后离线路由对比：同一轮 06 的 10 帧广告 OCR（`maafw.log` 21:49:16–21:51:00 UTC+2）上，原 pipeline 与新 pipeline 对 271 个含 next 列表的节点，首个命中节点 0 处差异（临时脚本，未入库）。
+- 修复后的实机验证：待遇到浏览加速广告时确认（`LevelAdAccelerateWait` 命中、不点顶部「跳过」、奖励发放）。
+**未覆盖 / 遗留**：
+- 浏览加速页的「跳过」在倒计时结束后变为裸「跳过」，若与奖励弹窗同帧出现仍可能被点到；实机验证会观察这一点。
+- 积分行「今日已完成」的 ROI（520,500,180,300）是否与放大后的页面位置一致，需要以实机结果确认。
+- 退出确认框（只有「坚持退出」，背景残留「去体验N秒｜跳过」）原先先命中 `AdSkipBrowseOffer`，现在直接命中 `LevelAdRetentionGiveUp` 并点「坚持退出」放弃本条广告。正常流程不应再出现这个框，因为不再点跳过。
+- 赠币广告 `LevelClickCoinAd` 的 next 列表不含 `AdSkipBrowseOffer`，本次不改其行为。
+**分支**：未提交。改动在 `codex/reading-game-log-fix-20261004` 的工作区（HEAD ade4c81）；若提交，建议新建 `claude/level-points-accelerate-20261011`。
+**回滚**：`git revert <提交 hash>`；或删除 `_apply_level_accelerate_wait_overrides` 的调用行
+---
+
 ## 2026-10-06 · 接入 MFAAvalonia 作为日常 GUI
 
 **触发**：用户要求按 MaaFramework 官方通用 GUI 第一个 MFAAvalonia 重构 GUI（设计见 `docs/superpowers/` 下 MFAAvalonia 接入设计与实施计划）。本条随后续任务继续补充。

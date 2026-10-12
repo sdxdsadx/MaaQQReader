@@ -290,6 +290,8 @@ def _apply_level_ad_runtime_overrides(data: Dict[str, Any]) -> None:
     _apply_level_ad_page_recovery_overrides(data)
     _apply_level_home_recovery_overrides(data)
     _apply_level_promo_recovery_overrides(data)
+    # 浏览加速等待必须排在上面所有 next 重写之后，否则会被覆盖掉。
+    _apply_level_accelerate_wait_overrides(data)
 
 
 def _apply_level_promo_recovery_overrides(data: Dict[str, Any]) -> None:
@@ -561,6 +563,58 @@ def _apply_level_ad_retention_overrides(data: Dict[str, Any]) -> None:
             if nexts.index("AdCountdown") > nexts.index("AdBrowseOfferModal"):
                 nexts.remove("AdCountdown")
                 nexts.insert(nexts.index("AdBrowseOfferModal"), "AdCountdown")
+
+
+#: 等级页积分广告的浏览加速 / 倒计时状态（2026-10-10 17:24 实机失败现场）：
+#: 「去体验9秒可立即领奖｜跳过」「去浏览15秒」「9s后自动放弃继续播放视频内」「27s｜跳过」。
+#: 点顶部「跳过」会弹出「确定要退出吗？」，挽留弹窗连续 3 次「继续观看」仍回到弹窗，
+#: 最终「坚持退出」放弃奖励。加速会在约 9–15 秒后自动放弃并在视频内继续播放，倒计时走完即发奖，
+#: 所以这些状态只等待，不点顶部「跳过」。
+LEVEL_ACCELERATE_WAIT_NODE = "LevelAdAccelerateWait"
+LEVEL_ACCELERATE_WAIT_EXPECTED = (
+    "去体验\\d+秒|去浏览\\d+秒|\\d+s后自动放弃|可提前\\d+秒领奖|\\d+s\\s*\\|?\\s*跳过"
+)
+
+
+def _apply_level_accelerate_wait_overrides(data: Dict[str, Any]) -> None:
+    """等级页广告：浏览加速 / 倒计时状态只等待，不点顶部「跳过」。
+
+    只改写含 ``AdSkipBrowseOffer`` 的 next 列表：在它之前插入等待节点，并把验证码与
+    挽留弹窗提到最前（弹窗背景上仍可能残留「28s｜跳过」）。只在 ``DailyLevelAdFlow``
+    的临时 pipeline 中生效（由 ``_patch_legacy_pipeline`` 调用），不改 ``dev/resource``
+    源文件，也不影响每日广告 ``DailyAdFlow``。
+    """
+    data[LEVEL_ACCELERATE_WAIT_NODE] = {
+        "recognition": "OCR",
+        "expected": LEVEL_ACCELERATE_WAIT_EXPECTED,
+        "action": "DoNothing",
+        "post_delay": 1500,
+        "max_hit": 120,
+        "focus": "等级页广告为浏览加速或倒计时：不点顶部跳过，等待自动放弃加速并看满奖励",
+        "next": [
+            *LEVEL_CAPTCHA_NODES,
+            *LEVEL_RETENTION_NODES,
+            "AdThirdPartyLoginPage",
+            "AdRewardIssued",
+            "AdCompleted",
+            "AdCountdown",
+            LEVEL_ACCELERATE_WAIT_NODE,
+            "AdContinueWatching",
+            "AdBrowseOfferModal",
+            "AdReturnedAfterClose",
+            "AdScrollDownRepeat",
+        ],
+    }
+    guards = [*LEVEL_CAPTCHA_NODES, *LEVEL_RETENTION_NODES]
+    for node in data.values():
+        if not isinstance(node, dict) or not isinstance(node.get("next"), list):
+            continue
+        nexts = node["next"]
+        if "AdSkipBrowseOffer" not in nexts or LEVEL_ACCELERATE_WAIT_NODE in nexts:
+            continue
+        rest = [name for name in nexts if name not in guards]
+        nexts[:] = [*guards, *rest]
+        nexts.insert(nexts.index("AdSkipBrowseOffer"), LEVEL_ACCELERATE_WAIT_NODE)
 
 
 EXTERNAL_POPUP_DISMISS_NODE = "ExternalPopupDismiss"
