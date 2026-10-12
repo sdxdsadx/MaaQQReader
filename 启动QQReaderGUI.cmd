@@ -1,5 +1,5 @@
 @echo off
-chcp 65001 >nul
+
 rem ============================================================
 rem  QQReader GUI 启动器（日常使用）；排障/调试请用 调试QQReader.cmd
 rem  1) 定位 Python 3.10

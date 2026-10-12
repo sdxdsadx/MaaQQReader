@@ -21,6 +21,22 @@
 
 ---
 
+## 2026-10-11 · MFAAvalonia GUI 入口统一
+
+**触发**：用户要求 ProjectX 的 GUI 启动入口默认使用新 GUI。
+
+| 任务/模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| GUI 启动器 | 调试入口仍直接打开 Tkinter；主入口含长批处理不应使用的 `chcp 65001` | 两个入口未统一到 MFAAvalonia，且改码页可能使长 `.cmd` 标签定位错位 | 主入口默认 MFAAvalonia；调试 GUI 模式转调主入口并识别 MFAAvalonia 进程；移除 `chcp 65001`，保留 `classic` 旧 GUI 选项 |
+
+**改动文件**：`启动QQReaderGUI.cmd`、`调试QQReader.cmd`、`tests/test_mfa_agent_entry.py`。
+**验证**：相关 4 个测试文件通过；启动器 CRLF/编码/默认路由静态检查通过；配置 Python 3.10.11、MaaFw 5.12.3 可用。
+**未覆盖 / 遗留**：未执行 `.cmd`、未启动模拟器、未做 QQReader 实机或 GUI 窗口验收；仅验证了启动路径与依赖。
+**分支**：`codex/reading-game-log-fix-20261004`，已快进到 `6b11044`；本次启动器/测试改动未提交、未推送。
+**回滚**：只回滚上述三个文件的本次差异；分支快进回退需先确认保护方案，`stash@{0}` 保留作原工作区备份。
+
+---
+
 ## 2026-10-11 · AGENTS.md：写入 QQReader 项目约定，限定只在本目录修改
 
 **触发**：用户要求把 QQReader 的记忆合并进项目文件夹并写入 AGENTS.md，同时规定每次修改只在 `G:\project_X` 内进行。

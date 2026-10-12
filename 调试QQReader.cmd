@@ -320,7 +320,7 @@ chcp 936 >nul
 
 echo.
 echo [env] 环境就绪，打开 QQReader GUI ...
-%PYEXE% -m qqreader.gui --config "%CONFIG%"
+call "%ROOT%启动QQReaderGUI.cmd"
 set "RC=!errorlevel!"
 chcp 936 >nul
 if not "!RC!"=="0" (
@@ -407,7 +407,7 @@ if defined TASKRUN if not defined FORCE (
 chcp 936 >nul
 if defined GUIRUN (
   echo [stop] 关闭 QQReader GUI ^(PID=!GUIPID!^) ...
-  %PS% "Get-Process | Where-Object { $_.MainWindowTitle -like '*QQReader*' } | Stop-Process -Force" >nul 2>nul
+  %PS% "Get-Process | Where-Object { $_.MainWindowTitle -like '*QQReader*' -or $_.ProcessName -eq 'MFAAvalonia' } | Stop-Process -Force" >nul 2>nul
 ) else (
   echo [stop] GUI 未在运行。
 )
@@ -453,7 +453,7 @@ exit /b 0
 :detect_gui
 set "GUIRUN="
 set "GUIPID="
-for /f "usebackq delims=" %%i in (`%PS% "$g=Get-Process | Where-Object { $_.MainWindowTitle -like '*QQReader*' }; if($g){ $g.Id -join ',' } else { '' }"`) do set "GUIPID=%%i"
+for /f "usebackq delims=" %%i in (`%PS% "$g=Get-Process | Where-Object { $_.MainWindowTitle -like '*QQReader*' -or $_.ProcessName -eq 'MFAAvalonia' }; if($g){ $g.Id -join ',' } else { '' }"`) do set "GUIPID=%%i"
 chcp 936 >nul
 if defined GUIPID set "GUIRUN=1"
 exit /b 0

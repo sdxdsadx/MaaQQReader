@@ -78,8 +78,15 @@ def test_launcher_has_classic_branch():
     assert "classic" in text
     assert "MFAAvalonia.exe" in text
     assert "MaaFw==5.12.3" in text
-    assert "chcp 65001" in text
+    assert "chcp 65001" not in text
     assert "-m qqreader.gui" in text
+
+
+def test_debug_launcher_gui_mode_uses_mfa_entrypoint():
+    text = (REPO_ROOT / "调试QQReader.cmd").read_text(encoding="gbk")
+    assert 'call "%ROOT%启动QQReaderGUI.cmd"' in text
+    assert "ProcessName -eq 'MFAAvalonia'" in text
+    assert '%PYEXE% -m qqreader.gui --config "%CONFIG%"' not in text
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="需要 git")
