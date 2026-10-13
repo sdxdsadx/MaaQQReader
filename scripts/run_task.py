@@ -573,7 +573,15 @@ def _apply_level_ad_retention_overrides(data: Dict[str, Any]) -> None:
 LEVEL_ACCELERATE_WAIT_NODE = "LevelAdAccelerateWait"
 LEVEL_ACCELERATE_WAIT_EXPECTED = (
     "去体验\\d+秒|去浏览\\d+秒|\\d+s后自动放弃|可提前\\d+秒领奖|\\d+s\\s*\\|?\\s*跳过"
+    "|还需观看\\d+秒领奖"
 )
+#: 2026-10-12「获得加速机会」弹窗（「我要加速领奖」/「继续播放视频内容」，顶部
+#: 「还需观看27秒领奖｜跳过」）：弹窗挂着时倒计时不走。点底部小字留在视频里，
+#: 再等 30 秒把剩余的看完；不点「我要加速领奖」（跳第三方应用），也不点顶部「跳过」。
+LEVEL_ACCELERATE_DECLINE_NODE = "LevelAdAccelerateDecline"
+LEVEL_ACCELERATE_DECLINE_EXPECTED = "继续播放视频内容"
+LEVEL_ACCELERATE_DECLINE_WAIT_MS = 30000
+LEVEL_REWARD_GRANTED_SKIP_NODE = "LevelAdRewardGrantedSkip"
 
 
 def _apply_level_accelerate_wait_overrides(data: Dict[str, Any]) -> None:
@@ -605,16 +613,42 @@ def _apply_level_accelerate_wait_overrides(data: Dict[str, Any]) -> None:
             "AdScrollDownRepeat",
         ],
     }
+    data[LEVEL_ACCELERATE_DECLINE_NODE] = {
+        "recognition": "OCR",
+        "expected": LEVEL_ACCELERATE_DECLINE_EXPECTED,
+        "roi": [100, 600, 520, 500],
+        "action": "Click",
+        "post_delay": LEVEL_ACCELERATE_DECLINE_WAIT_MS,
+        "max_hit": 3,
+        "focus": "加速机会弹窗：点「继续播放视频内容」留在视频里，多等 30 秒看满奖励",
+        "next": list(data[LEVEL_ACCELERATE_WAIT_NODE]["next"]),
+    }
+    # 10-04「恭喜提前获得奖励」弹窗也有「继续播放视频内容」，但奖励已到手：仍按原来的
+    # 做法点顶部「奖励已领取｜跳过」退出（与 AdSkipBrowseOffer 同一位置、同一 next）。
+    skip = data.get("AdSkipBrowseOffer")
+    if isinstance(skip, dict):
+        data[LEVEL_REWARD_GRANTED_SKIP_NODE] = {
+            **skip,
+            "expected": "奖励已(?:领取|发放).*跳过",
+            "focus": "奖励已领取：点顶部跳过退出广告",
+            "next": list(skip.get("next") or []),
+        }
     guards = [*LEVEL_CAPTCHA_NODES, *LEVEL_RETENTION_NODES]
     for node in data.values():
         if not isinstance(node, dict) or not isinstance(node.get("next"), list):
             continue
         nexts = node["next"]
-        if "AdSkipBrowseOffer" not in nexts or LEVEL_ACCELERATE_WAIT_NODE in nexts:
-            continue
-        rest = [name for name in nexts if name not in guards]
-        nexts[:] = [*guards, *rest]
-        nexts.insert(nexts.index("AdSkipBrowseOffer"), LEVEL_ACCELERATE_WAIT_NODE)
+        if "AdSkipBrowseOffer" in nexts and LEVEL_ACCELERATE_WAIT_NODE not in nexts:
+            rest = [name for name in nexts if name not in guards]
+            nexts[:] = [*guards, *rest]
+            nexts.insert(nexts.index("AdSkipBrowseOffer"), LEVEL_ACCELERATE_WAIT_NODE)
+        # 弹窗上同时有「还需观看N秒领奖」，点击必须排在等待之前。
+        if LEVEL_ACCELERATE_WAIT_NODE in nexts and LEVEL_ACCELERATE_DECLINE_NODE not in nexts:
+            at = nexts.index(LEVEL_ACCELERATE_WAIT_NODE)
+            added = [LEVEL_ACCELERATE_DECLINE_NODE]
+            if LEVEL_REWARD_GRANTED_SKIP_NODE in data:
+                added.insert(0, LEVEL_REWARD_GRANTED_SKIP_NODE)
+            nexts[at:at] = added
 
 
 EXTERNAL_POPUP_DISMISS_NODE = "ExternalPopupDismiss"
