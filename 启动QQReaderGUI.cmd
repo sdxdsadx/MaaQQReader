@@ -12,6 +12,8 @@ rem ============================================================
 setlocal EnableExtensions EnableDelayedExpansion
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
+rem Use captcha.solver from local config; discard inherited one-off overrides.
+set "QQREADER_CAPTCHA_SOLVER="
 set "ROOT=%~dp0"
 cd /d "%ROOT%"
 

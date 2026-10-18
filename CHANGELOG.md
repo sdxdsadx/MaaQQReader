@@ -21,6 +21,22 @@
 
 ---
 
+## 2026-10-18 · 恢复滑块自动验证：启动 GUI 时清除继承的 manual 覆盖
+
+**触发**：用户要求恢复被切为人工验证的滑块模块；今天 `gui_DailyAdFlow_20261018_113522.log`、`gui_DailyAdFlow_20261018_121713.log` 均以「未配置自动求解器，等待人工处理验证码」结束。
+
+| 任务/模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| GUI 启动环境 / 广告验证码守卫 | 本机配置 `captcha.solver=slide`，运行却使用人工守卫 | 现场 MFAAvalonia PID 86252 及 Agent PID 19516 均继承 `QQREADER_CAPTCHA_SOLVER=manual`；配置加载器按约定用环境变量覆盖文件。用户和系统注册表均未设置该变量，属于进程链残留 | `启动QQReaderGUI.cmd` 初始化时清除该变量，GUI 与子进程按本机配置选用原有自动滑块求解与求解后复核；不改求解算法、CLI 的环境覆盖机制或人工兜底 |
+
+**改动文件**：`启动QQReaderGUI.cmd`、`tests/test_mfa_agent_entry.py`、`CHANGELOG.md`。
+**验证**：新增回归先执行真实启动初始化批处理，复现 `manual ManualCaptchaGuard`；修复后验证实际广告任务装配为 `slide VerifyingCaptchaGuard`。相关测试 47 passed、1 skipped；加强任务装配断言后入口测试 11 passed。全量 672 passed、4 failed、1 skipped（13.97s）：`test_ad_round_regressions` 两项及 `test_qqr27_ad_flow` 一项为已有 40 秒断言与 35 秒实现不一致；`test_issue15_reward_nav` 一项缺少开工时已删除的 `runtime/screenshots/ad_watch/captcha_now.png`。`git diff --check` 通过。空闲旧 GUI 正常关闭后经正式启动器重启；读取新 GUI PID 10496、Agent PID 47192 的实际环境，确认覆盖变量均不存在。
+**未覆盖 / 遗留**：未运行广告或真实滑块求解；配置与入口已恢复不代表验证码通过。保留原截图删除与未跟踪快捷方式，不提交。未修改全局环境。
+**分支**：`codex/restore-slide-captcha-20261018`；仅本地提交，不推送、不合并。
+**回滚**：用 `git log --oneline -S "恢复滑块自动验证：启动 GUI 时清除继承的 manual 覆盖" -- CHANGELOG.md` 定位后 `git revert <hash>`。
+
+---
+
 ## 2026-10-12 · 广告「获得加速机会」弹窗：点「继续播放视频内容」，再多等 30 秒
 
 **触发**：用户贴出新广告形式截图（「获得加速机会！去看9秒可直接拿奖励 / 我要加速领奖 / 继续播放视频内容」，顶部「还需观看28秒领奖｜跳过」），要求点下方文字继续看视频，并在原等待基础上延长 30 秒。对应今天三次 `DailyAdFlow` 失败：`mfa_20261012_234639_db3a34bc`、`mfa_20261012_235405_fefbb57d`、`mfa_20261012_235812_fc36744e`（`runtime/records/DailyAdFlow_20261012_175124_078016.json`、`…_175726_088040.json`、`…_180749_747125.json`，均为 `ad_exit_unconfirmed`）。

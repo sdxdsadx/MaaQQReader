@@ -230,3 +230,37 @@ def test_unexpected_exception_returns_failure(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "[QQReader] 动作异常" in out
     assert "RuntimeError: boom" in out
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="Windows launcher")
+def test_launcher_clears_inherited_manual_captcha_override(tmp_path):
+    import os
+    import sys
+    import json
+
+    config = json.loads((REPO_ROOT / "configs/qqreader.example.json").read_text(encoding="utf-8"))
+    config["captcha"]["solver"] = "slide"
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    # Execute the real launcher initialization without starting the emulator/GUI.
+    prefix = LAUNCHER.read_text(encoding="utf-8").split('set "ROOT=%~dp0"', 1)[0]
+    code = (
+        "from qqreader.config import load_config; "
+        "from scripts.run_task import _captcha_guard_from_config; "
+        "from qqreader.tasks.ad import build_ad_definition; "
+        "from qqreader.page.feature_keys import DEFAULT_FEATURE_KEYS; "
+        f"c=load_config({str(config_path.as_posix())!r}); "
+        "g=build_ad_definition(DEFAULT_FEATURE_KEYS,None,None,None,None,"
+        "captcha_guard=_captcha_guard_from_config(c)).captcha_guard; "
+        "print(c.captcha.solver, type(g).__name__)"
+    )
+    env = dict(os.environ, QQREADER_CAPTCHA_SOLVER="manual")
+    batch = tmp_path / "launcher-init.cmd"
+    batch.write_text(prefix + f'\n"{sys.executable}" -c "{code}"\n', encoding="utf-8")
+    result = subprocess.run(
+        ["cmd.exe", "/d", "/c", str(batch)],
+        cwd=REPO_ROOT, env=env, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "slide VerifyingCaptchaGuard" in result.stdout
