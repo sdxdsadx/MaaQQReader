@@ -1,3 +1,8 @@
+import json
+from pathlib import Path
+
+import pytest
+
 from qqreader.tasks.reading_reward import (
     parse_coin_total,
     reading_claim_buttons,
@@ -148,3 +153,138 @@ def test_claim_completes_when_logged_card_title_is_misread(monkeypatch, tmp_path
     assert client.refreshes == 2
     assert client.clicks
     assert result.after_coins == 50
+
+
+# ---- 进入奖励页：点击入口后页面加载中不能按返回（2026-10-06 实机 mfa_20261006_205809_33602f6e） ----
+# 合并 codex/reading-game-log-fix-20261004 后，_open_reward_page 改走统一导航
+# goto_reward_page：未知页（加载中）只等待重拍、不盲返；入口优先点时长卡右侧按钮。
+
+_OPEN_FRAMES = json.loads(
+    (Path(__file__).parent / "fixtures" / "reading_reward_open_frames.json").read_text(
+        encoding="utf-8"
+    )
+)
+
+
+def _frame(entry):
+    return tuple((text, tuple(box)) for text, box in entry["boxes"])
+
+
+SHELF = _frame(_OPEN_FRAMES["shelf"])
+LOADING = tuple(_frame(item) for item in _OPEN_FRAMES["loading"])
+REWARD = _frame(_OPEN_FRAMES["reward"])
+# 书架时长卡右侧按钮「领360赠币」(541,166,100,28) 的中心。
+ENTRY_CENTER = (541 + 100 // 2, 166 + 28 // 2)
+
+
+class _FrameClient:
+    """按顺序返回真实 OCR 帧；帧用完后重复最后一帧。记录点击、按键和截图序号。"""
+
+    def __init__(self, frames):
+        self.frames = list(frames)
+        self.index = 0
+        self.events = []
+        self.current = None
+
+    def start_app(self, _package):
+        return True
+
+    def screencap(self):
+        self.current = self.frames[min(self.index, len(self.frames) - 1)]
+        self.index += 1
+        self.events.append(("shot",))
+        return _Shot()
+
+    def recognize(self, *_args):
+        boxes = self.current
+        return type("R", (), {"text_boxes": lambda _self: boxes})()
+
+    def click_key(self, key):
+        self.events.append(("key", key))
+
+    def click(self, x, y):
+        self.events.append(("click", x, y))
+        return True
+
+    def swipe(self, *_args):
+        return True
+
+    def clicks(self):
+        return [event[1:] for event in self.events if event[0] == "click"]
+
+    def backs(self):
+        return [event for event in self.events if event == ("key", 4)]
+
+
+@pytest.fixture
+def no_sleep(monkeypatch):
+    import qqreader.tasks.reading_reward as module
+
+    slept = []
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: slept.append(seconds))
+    return slept
+
+
+def test_open_reward_page_waits_while_page_loading(no_sleep):
+    from qqreader.tasks.reading_reward import _open_reward_page
+
+    client = _FrameClient([SHELF, LOADING[0], LOADING[1], LOADING[2], LOADING[0], REWARD])
+
+    boxes = _open_reward_page(client)
+
+    assert boxes == REWARD
+    assert client.clicks() == [ENTRY_CENTER]
+    assert client.backs() == []
+
+
+def test_open_reward_page_reclicks_when_still_on_shelf(no_sleep):
+    from qqreader.tasks.reading_reward import _open_reward_page
+
+    # 点击后书架一直在：1.5/3.0/4.5 秒的书架帧不算“点击没生效”（页面可能还在切换），
+    # 6.0 秒仍是书架才重点。
+    client = _FrameClient([SHELF, SHELF, SHELF, SHELF, SHELF, LOADING[0], REWARD])
+
+    boxes = _open_reward_page(client)
+
+    assert boxes == REWARD
+    assert client.clicks() == [ENTRY_CENTER, ENTRY_CENTER]
+    assert client.backs() == []
+
+
+def test_open_reward_page_never_backs_on_loading_frames(no_sleep):
+    import qqreader.tasks.reading_reward as module
+
+    # 点击后一直是加载中帧：统一导航只等待，不按返回取消加载；预算用完才报错。
+    client = _FrameClient([SHELF, *LOADING])
+
+    with pytest.raises(RuntimeError, match="无法从当前页面进入阅读奖励页"):
+        module._open_reward_page(client)
+
+    assert client.backs() == []
+    assert client.clicks() == [ENTRY_CENTER]
+
+
+def test_open_reward_page_shelf_seen_briefly_then_loads_clicks_once(no_sleep):
+    from qqreader.tasks.reading_reward import _open_reward_page
+
+    # 点击后第一次轮询（约 1.5 秒）书架还在，随后开始加载：不能重点，否则会打开两层奖励页。
+    client = _FrameClient([SHELF, SHELF, LOADING[0], LOADING[1], REWARD])
+
+    boxes = _open_reward_page(client)
+
+    assert boxes == REWARD
+    assert client.clicks() == [ENTRY_CENTER]
+    assert client.backs() == []
+
+
+def test_open_reward_page_waits_unknown_start_without_back(no_sleep):
+    from qqreader.tasks.reading_reward import _open_reward_page
+
+    # 起点先是 6 帧加载中（未知页），随后出现书架：不盲返，等到书架后点一次入口。
+    client = _FrameClient([*([LOADING[0]] * 6), SHELF, REWARD])
+
+    boxes = _open_reward_page(client)
+
+    assert boxes == REWARD
+    assert client.clicks() == [ENTRY_CENTER]
+    assert client.backs() == []

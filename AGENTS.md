@@ -7,6 +7,7 @@ QQReader：Windows 本地运行的 QQ 阅读每日任务自动化（MaaFramework
 ## Project overview
 
 - 唯一维护目录：`G:\project_X`。`Documents\Codex` 下的旧脚本已归档到 `docs/legacy/`，不要运行旧入口。
+- 所有 agent 每次修改只在 `G:\project_X` 内进行：新增、改内容、删除都限于本目录；目录外的文件（包括 `Documents\Codex`、其他项目和全局配置）不改。
 - 旧工程 `_backup_old_project_20260909_200716/` 只作参考，不在其中修改；但它**仍是运行依赖**：听书任务 `DailyAudiobookFlow` 目前通过其中的 `tools\run_maa_ad.py` 调用旧流程（2026-09-27 试跑日志确认），不要移动、重命名或删除它。
 - 代码入口：
   - `qqreader/`：核心包（页面状态机、任务契约、恢复、验证码守卫）
@@ -16,7 +17,7 @@ QQReader：Windows 本地运行的 QQ 阅读每日任务自动化（MaaFramework
   - `scripts/run_task.py`：命令行单任务入口，含 pipeline 运行时覆盖
   - `tests/`：单元测试
 - 本机数据：配置在 `configs/qqreader.local.json`；任务次序和次数在 `runtime/gui_tasks.json`；日志和截图在 `runtime/`。
-- Linear 项目 MAAQQReader，Issue 编号 `QQR-xx`。
+- Linear 项目 MAAQQReader，Issue 编号 `QQR-xx`。问题单只用 Linear，不用 GitHub Issues。
 
 ## Dev environment
 
@@ -27,12 +28,14 @@ QQReader：Windows 本地运行的 QQ 阅读每日任务自动化（MaaFramework
   - `调试QQReader.cmd`：冷启动、体检、识别检查、单任务、测试、冷停止
 - `调试QQReader.cmd` 必须保持 **GBK** 编码，调用外部程序后要重新执行 `chcp 936`。其余源码和配置一律 UTF-8。
 - 启动 GUI 必须用 `启动QQReaderGUI.cmd`（它会定位 Python、查询 MuMu 的 ADB 端口、写入本机配置、设置 PYTHONPATH）。直接双击 `dist\QQReaderGUI.exe` 不会加载本机配置，运行时会提示“请先加载本机配置文件”。
+- `启动QQReaderGUI.cmd` 默认打开 **MFAAvalonia**（MaaFramework 官方通用 GUI，v2.16.2）：程序文件需自行下载 win-x64 包解压到 `mfa\` 下（gitignore，只跟踪 `mfa/interface.json`、`mfa/resource/`、`mfa/agent/`），Agent 运行需要 `py -3.10 -m pip install "MaaFw==5.12.3"`。`启动QQReaderGUI.cmd classic` 打开旧 Tkinter GUI（动态计划、截取封面、一键启动模拟器等功能仍只有旧 GUI 有）。
+- `mfa/interface.json` 与 `mfa/resource/pipeline/qqreader.json` 是由 `qqreader/mfa/interface.py` 从任务目录（`qqreader/gui/task_catalog.py`）生成的，不要手改：改了 `task_catalog.py` 后必须跑 `py -3.10 scripts/build_mfa_interface.py` 重新生成，否则 `tests/test_mfa_interface.py`（用 `--check` 比对）会失败。
 - 打包 GUI：`scripts\build-gui-exe.cmd`，产物为 `dist/QQReaderGUI.exe`。GUI 会加载当前源码，改了源码不一定要重新打包；改了 GUI 本身才需要重建。
 
 ## Testing instructions
 
 - 全部测试：`py -3.10 -m pytest`。改动哪块就先跑对应测试文件，提交前再跑全量。
-- 冒烟试跑（实机，约 7 分钟）：GUI 侧栏「选择1分钟试跑」（每日自动阅读 → 每日游戏 → 每日听书，各 1 分钟）→「直接运行已选」。三项都应显示“成功”，汇总记录在 `runtime/records/daily_flows/`。改动任务流程后、推送前跑一次。
+- 冒烟试跑（实机，约 7 分钟）：MFAAvalonia 里选预设「1 分钟试跑」（每日自动阅读 → 每日游戏 → 每日听书，各 1 分钟；注意预设不能改重复次数，自动阅读默认仍是 2 次，可手动改成 1 或接受跑 2 次）→ 运行。三项都应显示“成功”，汇总记录在 `runtime/records/daily_flows/mfa_*.json`。旧 Tkinter GUI（`classic`）同样有「选择1分钟试跑」→「直接运行已选」。改动任务流程后、推送前跑一次。
 - 只改文档（`*.md`）时可以不跑测试，但要在交付里说明“未跑测试，原因：仅文档”。
 - 缺陷修复要补回归测试。识别相关的测试用真实截图和真实 OCR，不要只在伪造模板或假对象上通过。
 - 实机验证用 GUI：点「全不选」，只勾选要验证的任务，再点「直接运行已选」或「单独运行此任务」。已经验证成功的任务不要重复跑。
@@ -48,6 +51,18 @@ QQReader：Windows 本地运行的 QQ 阅读每日任务自动化（MaaFramework
 - 任务从公共起点自己进入入口，例如广告任务从主页进入奖励页。
 - 成功只认该任务的 `success_condition`。例如广告必须看到广告卡 `12/12` 或该卡的"明日再来"；"已返回奖励页""没报错"都不算。
 - 不要为修复单个任务而改 Gameflow 调度核心或备份目录。
+
+### 滑动验证码（滑块）启动逻辑：禁止修改
+
+任何 agent（Claude、Codex、Hermes 及流水线里的规划/实现/验收员）都不得修改滑动验证码的启动逻辑和相关文件，包括新增、删除、重命名、改内容，也不能借"顺手修复""让测试通过"之名修改：
+
+- `qqreader/captcha/` 下全部文件（`__init__.py`、`factory.py`、`guard.py`、`slide.py`）
+- `scripts/_captcha_guard.py`、`scripts/_captcha_solve_now.py`、`scripts/_patch_solver.py`、`scripts/live_captcha_auto.py`、`scripts/live_captcha_solve.py`、`scripts/live_captcha_solve2.py`
+- `scripts/run_task.py` 和 `qqreader/tasks/defaults.py` 里决定验证码守卫/求解器如何构造和启用的代码（`--captcha-mode` 参数、`_captcha_guard_from_config` 及其调用处）
+- 配置文件里的 `captcha` 段（例如 `captcha.solver`）
+- 验证码相关测试 `tests/test_captcha_blocking.py`、`tests/test_qqr29_captcha.py`
+
+如果任务看起来必须改到上面任何一处，就停下来，在报告里写明原因和打算怎么改，等用户明确同意；验收员发现改动涉及这些文件，直接判 `VERDICT: FAIL`。只读阅读、引用这些文件不受限制。
 
 ## CHANGELOG
 

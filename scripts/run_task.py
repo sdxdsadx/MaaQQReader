@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,7 @@ from qqreader.maa.device import MaaDeviceController
 from qqreader.maa.factory import build_maa_client
 from qqreader.maa.locator import MaaFeatureLocator
 from qqreader.maa.observer import MaaPageObserver
+from qqreader.maa.probes import DeviceProbe, SubprocessShellRunner
 from qqreader.page.feature_keys import DEFAULT_FEATURE_KEYS
 from qqreader.page.profiles import build_default_state_definitions
 from qqreader.page.recognizer import PageStateRecognizer
@@ -178,15 +180,26 @@ def _apply_level_ad_runtime_overrides(data: Dict[str, Any]) -> None:
     if isinstance(level_ready, dict):
         level_ready["next"] = ["LevelTopReady", "LevelScrollToTop"]
 
-    # 返回广告后要按来源区分两张等级卡。原链先用宽泛的
-    # LevelAfterCoinAd 命中“用户等级”，导致积分广告结束后再次进入
-    # LevelFindPointsAd，最后滑到底触发 max_hit=8。
+    # 两类广告的落地页包含相同等级文案，不能靠 OCR 候选顺序猜来源。
+    # 入口已有 LevelAfterAd 动态锚点；恢复引用该锚点，不硬编码赠币分支。
     coin_return = data.get("LevelAfterCoinAd")
     if isinstance(coin_return, dict):
-        coin_return["expected"] = "看小视频.*积分"
+        coin_return["expected"] = "看小视频.*积分|^当前等级$|^等级福利$"
+        if isinstance(coin_return.get("next"), list):
+            coin_return["next"] = [*LEVEL_CAPTCHA_NODES,
+                                   *(n for n in coin_return["next"] if n not in LEVEL_CAPTCHA_NODES)]
     stable = data.get("AdReturnStable")
+    # 新版等级页返回顶部仅显示「当前等级 / 等级福利」，没有旧标题。
+    # 返回确认与任务完成分开：这些标记只恢复原广告来源的后续核对。
+    for name in ("AdReturnedAfterClose", "AdReturnStable"):
+        returned = data.get(name)
+        if isinstance(returned, dict) and isinstance(returned.get("expected"), str):
+            for marker in ("^当前等级$", "^等级福利$"):
+                if marker not in returned["expected"].split("|"):
+                    returned["expected"] += "|" + marker
     if isinstance(stable, dict) and isinstance(stable.get("next"), list):
-        _insert_before(stable["next"], "LevelAfterPointsAd", "AdDailyComplete")
+        stable["next"] = [*LEVEL_CAPTCHA_NODES,
+                          {"name": "LevelAfterAd", "anchor": True}]
     points_return = data.get("LevelAfterPointsAd")
     if isinstance(points_return, dict):
         # 返回等级页仅证明广告关闭，仍须看见积分任务行的“今日已完成”。
@@ -194,16 +207,18 @@ def _apply_level_ad_runtime_overrides(data: Dict[str, Any]) -> None:
         # 「跳过」放弃奖励后返回，积分行仍是「看小视频」。此时换一条广告
         # 重试（LevelClickPointsAdAgain 最多 2 次），而不是直接判失败。
         points_return["next"] = [
+            *LEVEL_CAPTCHA_NODES,
             "LevelPointsSectionFound", "LevelClickPointsAdAgain", "LevelVerifyPointsScroll",
         ]
     data["LevelVerifyPointsScroll"] = {
         "action": "Swipe",
-        "begin": [360, 420],
-        "end": [360, 1120],
+        "begin": [360, 1080],
+        "end": [360, 400],
         "duration": 500,
         "post_delay": 700,
         "max_hit": 5,
         "next": [
+            *LEVEL_CAPTCHA_NODES,
             "LevelPointsSectionFound", "LevelClickPointsAdAgain", "LevelVerifyPointsScroll",
         ],
     }
@@ -272,6 +287,125 @@ def _apply_level_ad_runtime_overrides(data: Dict[str, Any]) -> None:
     }
     # 必须最后执行：上面会整体重建 AdStaticDownloadClose 等节点。
     _apply_level_ad_retention_overrides(data)
+    _apply_level_ad_page_recovery_overrides(data)
+    _apply_level_home_recovery_overrides(data)
+    _apply_level_promo_recovery_overrides(data)
+    # 浏览加速等待必须排在上面所有 next 重写之后，否则会被覆盖掉。
+    _apply_level_accelerate_wait_overrides(data)
+    _apply_level_browse_accelerate_overrides(data)
+    # 最后执行：弹窗节点要插到上面生成的全部广告 next 列表里。
+    _apply_level_no_video_overrides(data)
+
+
+def _apply_level_promo_recovery_overrides(data: Dict[str, Any]) -> None:
+    """只关闭已确认的月票活动遮罩，不把基因图标的 X 当关闭按钮。"""
+    if not isinstance(data.get("LevelMyPageReady"), dict):
+        return
+    data["LevelPromoVisible"] = {
+        "recognition": "OCR", "expected": "^(双倍月票开启|秋日豪礼开抢)$",
+        "action": "DoNothing", "max_hit": 3,
+        "focus": "确认月票活动遮罩后再找关闭按钮",
+        "next": [*LEVEL_CAPTCHA_NODES, "LevelPromoClose"],
+    }
+    data["LevelPromoClose"] = {
+        "recognition": "OCR", "expected": "^[Xx×]$",
+        "roi": [300, 870, 120, 170], "action": "Click",
+        "post_delay": 1200, "max_hit": 3,
+        "focus": "关闭已确认的月票活动遮罩底部 X",
+        "next": [*LEVEL_CAPTCHA_NODES, "LevelPageReady", "LevelMyPageReady"],
+    }
+    for name in ("DailyLevelAdFlow", "LevelMyPageReady", "LevelClickLevelIcon",
+                 "LevelClickLevelIconAgain", "LevelAdMyPageReturn", "LevelAdReenterFromMy"):
+        node = data.get(name)
+        if isinstance(node, dict) and isinstance(node.get("next"), list):
+            node["next"] = [*LEVEL_CAPTCHA_NODES, "LevelPromoVisible",
+                            *(n for n in node["next"] if n not in
+                              (*LEVEL_CAPTCHA_NODES, "LevelPromoVisible"))]
+
+
+def _apply_level_home_recovery_overrides(data: Dict[str, Any]) -> None:
+    """升级提示遮挡我的入口时先取消；点击未转场只做有界重试。"""
+    tab = data.get("LevelClickMyTab")
+    if not isinstance(tab, dict):
+        return
+    retry_next = [*LEVEL_CAPTCHA_NODES, "LevelUpgradeVisible", "LevelMyPageReady",
+                  "LevelClickMyTabAgain"]
+    data["LevelUpgradeVisible"] = {
+        "recognition": "OCR", "expected": "安装新版本|已下载新版本|是否安装",
+        "action": "DoNothing", "max_hit": 2,
+        "focus": "先确认升级弹窗，不点背景我的入口",
+        "next": [*LEVEL_CAPTCHA_NODES, "LevelUpgradeCancel"],
+    }
+    data["LevelUpgradeCancel"] = {
+        "recognition": "OCR", "expected": "^取消$",
+        "roi": [360, 1200, 360, 80], "action": "Click",
+        "post_delay": 1200, "max_hit": 2,
+        "focus": "取消已确认的升级弹窗",
+        "next": [*LEVEL_CAPTCHA_NODES, "LevelMyPageReady", "LevelClickMyTab"],
+    }
+    again = {k: v for k, v in tab.items() if k != "next"}
+    again.update({"max_hit": 2, "next": list(retry_next),
+                  "focus": "我的入口未转场，重拍后重新点击"})
+    data["LevelClickMyTabAgain"] = again
+    tab["next"] = list(retry_next)
+    for name in ("DailyLevelAdFlow", "LevelBackUntilHome"):
+        node = data.get(name)
+        if isinstance(node, dict) and isinstance(node.get("next"), list):
+            node["next"] = [*LEVEL_CAPTCHA_NODES, "LevelUpgradeVisible",
+                            *(n for n in node["next"] if n not in
+                              (*LEVEL_CAPTCHA_NODES, "LevelUpgradeVisible"))]
+
+
+def _apply_level_ad_page_recovery_overrides(data: Dict[str, Any]) -> None:
+    """广告加载未知时等待；落回“我的”页时重进等级，不再空滑 240 次。"""
+    scroll = data.get("AdScrollDownRepeat")
+    if not isinstance(scroll, dict) or not isinstance(scroll.get("next"), list):
+        return
+    # 原节点为 DirectHit，连只有状态栏的加载帧和“我的”页也会执行滑动。
+    scroll.update({
+        "recognition": "OCR",
+        "expected": "广告|直播中|进入直播间|上滑浏览|上滑或点击|跳转.*(?:详情页|第三方)|观看\\d+秒",
+    })
+    data["LevelAdMyPageReturn"] = {
+        "recognition": "OCR",
+        "expected": "^(阅读故事|浏览历史|帮助与反馈)$",
+        "action": "DoNothing",
+        "max_hit": 3,
+        "focus": "确认广告已落回我的页，重新进入等级页",
+        "next": [*LEVEL_CAPTCHA_NODES, "LevelAdReenterFromMy"],
+    }
+    data["LevelAdReenterFromMy"] = {
+        "recognition": "OCR",
+        "expected": "^等级$",
+        "action": "Click",
+        "post_delay": 2500,
+        "max_hit": 3,
+        "focus": "点击当前截图中的等级入口并重新确认等级页",
+        "next": [*LEVEL_CAPTCHA_NODES, "LevelPageReady", "LevelAdMyPageReturn"],
+    }
+    data["LevelAdUnknownWait"] = {
+        "action": "DoNothing",
+        "post_delay": 1000,
+        "max_hit": 20,
+        "focus": "未确认广告或落地页，等待重拍，不点击不滑动",
+        "next": list(scroll["next"]),
+    }
+    # 仅补在原来无条件滑动的分支处，恢复前优先检查已有验证码节点。
+    for node in data.values():
+        if not isinstance(node, dict) or not isinstance(node.get("next"), list):
+            continue
+        nexts = node["next"]
+        if "AdScrollDownRepeat" in nexts:
+            nexts[:] = [*LEVEL_CAPTCHA_NODES,
+                        *(name for name in nexts if name not in LEVEL_CAPTCHA_NODES)]
+            _insert_before(nexts, "LevelAdMyPageReturn", "AdScrollDownRepeat")
+            # 已返回的已知页面必须先于 DirectHit 等待；否则后面的返回
+            # 候选永久无法判断，等待预算耗尽才暴露原本已成功的转场。
+            if "AdReturnedAfterClose" in nexts:
+                nexts.remove("AdReturnedAfterClose")
+            nexts.insert(nexts.index("AdScrollDownRepeat"), "AdReturnedAfterClose")
+            if "LevelAdUnknownWait" not in nexts:
+                nexts.insert(nexts.index("AdScrollDownRepeat") + 1, "LevelAdUnknownWait")
 
 
 LEVEL_POPUP_CLOSE_NODES = ("LevelTeenModeDismiss",)
@@ -332,7 +466,9 @@ def _apply_level_ad_launch_retry_overrides(data: Dict[str, Any]) -> None:
         click = data.get(click_name)
         if not isinstance(click, dict) or not isinstance(click.get("next"), list):
             continue
-        base_next = [n for n in click["next"] if n not in (wait_name, again_name)]
+        base_next = [n for n in click["next"] if n not in (
+            wait_name, again_name, "LevelAdMyPageReturn", "LevelAdUnknownWait",
+        )]
         _insert_before(base_next, wait_name, "AdScrollDownRepeat")
         click["next"] = base_next
         wait_next = [n for n in base_next if n != wait_name]
@@ -430,6 +566,220 @@ def _apply_level_ad_retention_overrides(data: Dict[str, Any]) -> None:
             if nexts.index("AdCountdown") > nexts.index("AdBrowseOfferModal"):
                 nexts.remove("AdCountdown")
                 nexts.insert(nexts.index("AdBrowseOfferModal"), "AdCountdown")
+
+
+#: 等级页积分广告的浏览加速 / 倒计时状态（2026-10-10 17:24 实机失败现场）：
+#: 「去体验9秒可立即领奖｜跳过」「去浏览15秒」「9s后自动放弃继续播放视频内」「27s｜跳过」。
+#: 点顶部「跳过」会弹出「确定要退出吗？」，挽留弹窗连续 3 次「继续观看」仍回到弹窗，
+#: 最终「坚持退出」放弃奖励。加速会在约 9–15 秒后自动放弃并在视频内继续播放，倒计时走完即发奖，
+#: 所以这些状态只等待，不点顶部「跳过」。
+LEVEL_ACCELERATE_WAIT_NODE = "LevelAdAccelerateWait"
+LEVEL_ACCELERATE_WAIT_EXPECTED = (
+    "去体验\\d+秒|去浏览\\d+秒|\\d+s后自动放弃|可提前\\d+秒领奖|\\d+s\\s*\\|?\\s*跳过"
+    "|还需观看\\d+秒领奖"
+)
+#: 2026-10-12「获得加速机会」弹窗（「我要加速领奖」/「继续播放视频内容」，顶部
+#: 「还需观看27秒领奖｜跳过」）：弹窗挂着时倒计时不走。点底部小字留在视频里，
+#: 再等 30 秒把剩余的看完；不点「我要加速领奖」（跳第三方应用），也不点顶部「跳过」。
+LEVEL_ACCELERATE_DECLINE_NODE = "LevelAdAccelerateDecline"
+LEVEL_ACCELERATE_DECLINE_EXPECTED = "继续播放视频内容"
+LEVEL_ACCELERATE_DECLINE_WAIT_MS = 30000
+LEVEL_REWARD_GRANTED_SKIP_NODE = "LevelAdRewardGrantedSkip"
+
+
+def _apply_level_accelerate_wait_overrides(data: Dict[str, Any]) -> None:
+    """等级页广告：浏览加速 / 倒计时状态只等待，不点顶部「跳过」。
+
+    只改写含 ``AdSkipBrowseOffer`` 的 next 列表：在它之前插入等待节点，并把验证码与
+    挽留弹窗提到最前（弹窗背景上仍可能残留「28s｜跳过」）。只在 ``DailyLevelAdFlow``
+    的临时 pipeline 中生效（由 ``_patch_legacy_pipeline`` 调用），不改 ``dev/resource``
+    源文件，也不影响每日广告 ``DailyAdFlow``。
+    """
+    data[LEVEL_ACCELERATE_WAIT_NODE] = {
+        "recognition": "OCR",
+        "expected": LEVEL_ACCELERATE_WAIT_EXPECTED,
+        "action": "DoNothing",
+        "post_delay": 1500,
+        "max_hit": 120,
+        "focus": "等级页广告为浏览加速或倒计时：不点顶部跳过，等待自动放弃加速并看满奖励",
+        "next": [
+            *LEVEL_CAPTCHA_NODES,
+            *LEVEL_RETENTION_NODES,
+            "AdThirdPartyLoginPage",
+            "AdRewardIssued",
+            "AdCompleted",
+            "AdCountdown",
+            LEVEL_ACCELERATE_WAIT_NODE,
+            "AdContinueWatching",
+            "AdBrowseOfferModal",
+            "AdReturnedAfterClose",
+            "AdScrollDownRepeat",
+        ],
+    }
+    data[LEVEL_ACCELERATE_DECLINE_NODE] = {
+        "recognition": "OCR",
+        "expected": LEVEL_ACCELERATE_DECLINE_EXPECTED,
+        "roi": [100, 600, 520, 500],
+        "action": "Click",
+        "post_delay": LEVEL_ACCELERATE_DECLINE_WAIT_MS,
+        "max_hit": 3,
+        "focus": "加速机会弹窗：点「继续播放视频内容」留在视频里，多等 30 秒看满奖励",
+        "next": list(data[LEVEL_ACCELERATE_WAIT_NODE]["next"]),
+    }
+    # 10-04「恭喜提前获得奖励」弹窗也有「继续播放视频内容」，但奖励已到手：仍按原来的
+    # 做法点顶部「奖励已领取｜跳过」退出（与 AdSkipBrowseOffer 同一位置、同一 next）。
+    skip = data.get("AdSkipBrowseOffer")
+    if isinstance(skip, dict):
+        data[LEVEL_REWARD_GRANTED_SKIP_NODE] = {
+            **skip,
+            "expected": "奖励已(?:领取|发放).*跳过",
+            "focus": "奖励已领取：点顶部跳过退出广告",
+            "next": list(skip.get("next") or []),
+        }
+    guards = [*LEVEL_CAPTCHA_NODES, *LEVEL_RETENTION_NODES]
+    for node in data.values():
+        if not isinstance(node, dict) or not isinstance(node.get("next"), list):
+            continue
+        nexts = node["next"]
+        if "AdSkipBrowseOffer" in nexts and LEVEL_ACCELERATE_WAIT_NODE not in nexts:
+            rest = [name for name in nexts if name not in guards]
+            nexts[:] = [*guards, *rest]
+            nexts.insert(nexts.index("AdSkipBrowseOffer"), LEVEL_ACCELERATE_WAIT_NODE)
+        # 弹窗上同时有「还需观看N秒领奖」，点击必须排在等待之前。
+        if LEVEL_ACCELERATE_WAIT_NODE in nexts and LEVEL_ACCELERATE_DECLINE_NODE not in nexts:
+            at = nexts.index(LEVEL_ACCELERATE_WAIT_NODE)
+            added = [LEVEL_ACCELERATE_DECLINE_NODE]
+            if LEVEL_REWARD_GRANTED_SKIP_NODE in data:
+                added.insert(0, LEVEL_REWARD_GRANTED_SKIP_NODE)
+            nexts[at:at] = added
+
+
+#: 「去浏览15秒 / 我要加速 / 免看此广告」浏览弹层（10-08、10-13、10-16 实机）：没有
+#: 「Ns后自动放弃」，弹层期间视频暂停，``LevelAdAccelerateWait`` 原地等 120 次画面不变。
+#: 10-08 实机验证并经用户同意：点「我要加速」进 App 内落地页停 20 秒，只按返回，
+#: 顶部变「奖励已领取｜跳过」后由 ``LevelAdRewardGrantedSkip`` 点跳过。落地页内不点任何内容。
+#: 只认整框「我要加速」：10-12 弹窗的「我要加速领奖」会跳第三方应用；「去体验N秒 …
+#: Ns后自动放弃」版式会自己回到视频，仍由等待节点处理。
+LEVEL_BROWSE_ACCELERATE_NODE = "LevelBrowseAccelerate"
+LEVEL_BROWSE_LANDING_BACK_NODE = "LevelBrowseLandingBack"
+
+
+def _apply_level_browse_accelerate_overrides(data: Dict[str, Any]) -> None:
+    """等级页浏览弹层：点「我要加速」进落地页停留，返回后从「奖励已领取」退出。
+
+    插在每个含 ``LevelAdAccelerateWait`` 的 next 中它的前面（包括等待节点自己的
+    next，否则一旦进入等待循环就再也轮不到加速）。加速、返回都有次数上限，用完回到
+    原来的顶部「跳过」/ 放弃 + 换广告路径。
+    """
+    if LEVEL_ACCELERATE_WAIT_NODE not in data:
+        return
+    guards = [*LEVEL_CAPTCHA_NODES, *(n for n in LEVEL_RETENTION_NODES if n in data)]
+    granted = [LEVEL_REWARD_GRANTED_SKIP_NODE] if LEVEL_REWARD_GRANTED_SKIP_NODE in data else []
+    data[LEVEL_BROWSE_ACCELERATE_NODE] = {
+        "recognition": "OCR",
+        "expected": "^我要加速$",
+        "roi": [150, 650, 420, 160],
+        "action": "Click",
+        "post_delay": 20000,
+        "max_hit": 3,
+        "focus": "浏览弹层：点「我要加速」进入落地页，停留 20 秒，不点落地页内容",
+        "next": [*LEVEL_CAPTCHA_NODES, *granted, LEVEL_BROWSE_LANDING_BACK_NODE],
+    }
+    data[LEVEL_BROWSE_LANDING_BACK_NODE] = {
+        "action": "ClickKey",
+        "key": 4,
+        "post_delay": 2000,
+        "max_hit": 4,
+        "focus": "落地页已停留：按返回回到广告，确认奖励是否已领取",
+        "next": [
+            *guards,
+            *granted,
+            LEVEL_ACCELERATE_DECLINE_NODE,
+            LEVEL_BROWSE_ACCELERATE_NODE,
+            "AdRewardIssued",
+            "AdCompleted",
+            "AdCountdown",
+            "LevelAdMyPageReturn",
+            "AdReturnedAfterClose",
+            # 加速次数用完仍在弹层：回到原来的放弃 + 换广告路径，不再原地干等。
+            "AdSkipBrowseOffer",
+            LEVEL_ACCELERATE_WAIT_NODE,
+            LEVEL_BROWSE_LANDING_BACK_NODE,
+            "LevelAdUnknownWait",
+        ],
+    }
+    for name, node in data.items():
+        if name == LEVEL_BROWSE_LANDING_BACK_NODE or not isinstance(node, dict):
+            continue
+        nexts = node.get("next")
+        if not isinstance(nexts, list) or LEVEL_ACCELERATE_WAIT_NODE not in nexts:
+            continue
+        if LEVEL_BROWSE_ACCELERATE_NODE in nexts:
+            nexts.remove(LEVEL_BROWSE_ACCELERATE_NODE)
+        nexts.insert(nexts.index(LEVEL_ACCELERATE_WAIT_NODE), LEVEL_BROWSE_ACCELERATE_NODE)
+
+
+#: 「暂无可播视频，点击下方广告领取本次激励奖励」弹窗（10-14、10-19 赠币广告）：
+#: 背后仍有「用户等级」，被 ``LevelCoinAdNotStarted`` 当成广告没拉起；弹窗里淘宝广告卡的
+#: 「立即领取」又被 ``LevelClickCoinAdAgain`` 点中，跳到「正在跳转 / 下载淘宝」页。
+#: 计划外弹窗优先找关闭按钮：点弹窗底部 X，不点广告卡；关闭后按 ``LevelAfterAd`` 锚点
+#: 回到原广告的后续核对（赠币 → 继续积分广告；积分 → 核对今日已完成 / 换广告重试）。
+LEVEL_NO_VIDEO_DIALOG_NODE = "LevelAdNoVideoDialog"
+LEVEL_NO_VIDEO_CLOSE_NODE = "LevelAdNoVideoClose"
+#: 等级页赠币 / 积分入口按钮所在的右侧按钮列（实机 x≈577）；弹窗广告卡按钮在 x≈292。
+LEVEL_ENTRY_BUTTON_ROI = [460, 120, 260, 1100]
+#: 点击广告入口之后、广告页面上的这些节点所在的 next 列表都可能遇到这个弹窗。
+LEVEL_NO_VIDEO_HOST_MARKERS = (
+    "LevelCoinAdNotStarted",
+    "LevelPointsAdNotStarted",
+    "AdScrollDownRepeat",
+    "LevelAdUnknownWait",
+    LEVEL_ACCELERATE_WAIT_NODE,
+)
+
+
+def _apply_level_no_video_overrides(data: Dict[str, Any]) -> None:
+    """等级页广告「暂无可播视频」弹窗：点底部 X 关闭，不点弹窗里的广告卡。"""
+    after_ad = {"name": "LevelAfterAd", "anchor": True}
+    data[LEVEL_NO_VIDEO_DIALOG_NODE] = {
+        "recognition": "OCR",
+        "expected": "暂无可播视频",
+        "action": "DoNothing",
+        "post_delay": 800,
+        "max_hit": 6,
+        "focus": "广告暂无可播视频弹窗：找底部关闭 X，不点弹窗里的广告",
+        "next": [*LEVEL_CAPTCHA_NODES, LEVEL_NO_VIDEO_CLOSE_NODE,
+                 LEVEL_NO_VIDEO_DIALOG_NODE, after_ad],
+    }
+    data[LEVEL_NO_VIDEO_CLOSE_NODE] = {
+        "recognition": "OCR",
+        "expected": "^[Xx×✕]$",
+        "roi": [260, 940, 200, 140],
+        "action": "Click",
+        "post_delay": 1500,
+        "max_hit": 4,
+        "focus": "关闭暂无可播视频弹窗，回到等级页按原广告来源继续",
+        "next": [*LEVEL_CAPTCHA_NODES, LEVEL_NO_VIDEO_DIALOG_NODE, after_ad],
+    }
+    for name in ("LevelClickCoinAd", "LevelClickCoinAdAgain",
+                 "LevelClickPointsAd", "LevelClickPointsAdAgain"):
+        node = data.get(name)
+        if isinstance(node, dict) and node.get("recognition") == "OCR":
+            node["roi"] = list(LEVEL_ENTRY_BUTTON_ROI)
+    for name, node in data.items():
+        if name in (LEVEL_NO_VIDEO_DIALOG_NODE, LEVEL_NO_VIDEO_CLOSE_NODE):
+            continue
+        nexts = node.get("next") if isinstance(node, dict) else None
+        if not isinstance(nexts, list):
+            continue
+        if not any(marker in nexts for marker in LEVEL_NO_VIDEO_HOST_MARKERS):
+            continue
+        if LEVEL_NO_VIDEO_DIALOG_NODE in nexts:
+            nexts.remove(LEVEL_NO_VIDEO_DIALOG_NODE)
+        # 验证码、挽留弹窗仍最先判断；本弹窗紧随其后，先于“仍在等级页”的等待和重新点击。
+        guards = (*LEVEL_CAPTCHA_NODES, *LEVEL_RETENTION_NODES)
+        at = max((nexts.index(n) + 1 for n in guards if n in nexts), default=0)
+        nexts.insert(at, LEVEL_NO_VIDEO_DIALOG_NODE)
 
 
 EXTERNAL_POPUP_DISMISS_NODE = "ExternalPopupDismiss"
@@ -559,6 +909,30 @@ def _run_legacy_task(
     minutes: Optional[float],
     selection: Optional[BookSelection] = None,
 ) -> int:
+    # GUI 用 taskkill 整树强停，Python finally 不会执行。覆盖只写本次私有
+    # bundle，源 pipeline、OCR 模型和听书封面无需依赖退出清理来恢复。
+    work_root = Path(config.machine.log_dir).resolve().parent / "legacy_resources"
+    try:
+        work_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="legacy-", dir=work_root) as run_dir:
+            run_path = Path(run_dir).resolve()
+            if not run_path.is_relative_to(work_root):
+                raise OSError("临时资源目录不在本次运行目录内")
+            resource_dir = run_path / "resource"
+            shutil.copytree(Path(config.machine.maa_resource_dir), resource_dir)
+            return _run_legacy_task_in_resource(task, config, minutes, selection, resource_dir)
+    except OSError as exc:
+        print(f"[legacy] 准备或清理本次运行资源失败: {exc}", flush=True)
+        return 3
+
+
+def _run_legacy_task_in_resource(
+    task: str,
+    config: Any,
+    minutes: Optional[float],
+    selection: Optional[BookSelection],
+    resource_dir: Path,
+) -> int:
     repo_root = Path(__file__).resolve().parents[1]
     runner = _find_legacy_runner(repo_root)
     if runner is None:
@@ -570,7 +944,6 @@ def _run_legacy_task(
     entry = LEGACY_ENTRY.get(task, task)
     node = LEGACY_TIMING_NODE.get(task)
     original = None
-    resource_dir = Path(config.machine.maa_resource_dir)
     from qqreader.maa.adb import ensure_maa_ready
 
     ready, detail = ensure_maa_ready(
@@ -750,10 +1123,17 @@ def _build_runtime(client: Any, *, verbose: bool):
         keys,
         rois={"game_ocr_online_play": (0, 800, 720, 1280)},
     )
+    runtime_config = getattr(client, "config", None)
+    foreground_probe = None
+    if runtime_config is not None and runtime_config.adb_path:
+        foreground_probe = DeviceProbe(
+            SubprocessShellRunner(runtime_config.adb_path, runtime_config.adb_address)
+        )
     observer = DeviceScreencapGuard(
         LoggingObserver(
             MaaPageObserver(
-                client, catalog, target_package=keys.qq_reader_package
+                client, catalog, target_package=keys.qq_reader_package,
+                foreground_probe=foreground_probe,
             ),
             verbose=verbose,
         ),

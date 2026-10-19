@@ -103,6 +103,14 @@ def _locate_visible_corner_close(client: "MaaClient") -> Optional[Action]:
         for marker in ("安全验证", "拖动下方滑块", "完成拼图")
     ):
         return Action.wait(1.0)
+    # 10-04 实机：奖励弹窗没有 X，真正出口是顶部“奖励已领取｜跳过”。
+    # 中间“返回继续体验”会留在广告或跳第三方，不能当退出按钮。
+    for text, (x, y, width, height) in result.text_boxes():
+        label = text.replace(" ", "")
+        cx, cy = x + width // 2, y + height // 2
+        if (re.fullmatch(r"(?:奖励已(?:领取|发放)|去体验\d+秒可立即领奖)[|｜·]*跳过", label)
+                and x >= shot.width - 300 and 0 <= cy <= 120):
+            return Action.tap_point(cx, cy)
     point = _image_corner_x(shot.data)
     if point is not None:
         return Action.tap_point(*point)
@@ -261,6 +269,13 @@ class AdTaskAdapter(PlannedTaskAdapter):
         completed_key: str = feature_key(
             DEFAULT_FEATURE_KEYS, DEFAULT_FEATURE_KEYS.ad_ocr_completed
         ),
+        continue_video_key: str = feature_key(
+            DEFAULT_FEATURE_KEYS, DEFAULT_FEATURE_KEYS.ad_ocr_continue_video
+        ),
+        continue_video_text: str = DEFAULT_FEATURE_KEYS.ad_ocr_continue_video,
+        accelerate_offer_texts: tuple = ("加速机会", "加速领奖", "可直接拿奖励"),
+        accelerate_offer_button_text: str = "我要加速领奖",
+        accelerate_offer_extra_wait_seconds: float = 30.0,
         watch_text: str = DEFAULT_FEATURE_KEYS.reward_ocr_watch,
         watch_alt_text: str = DEFAULT_FEATURE_KEYS.reward_ocr_watch_alt,
         banner_text: str = DEFAULT_FEATURE_KEYS.reward_ocr_ad_banner,
@@ -313,6 +328,13 @@ class AdTaskAdapter(PlannedTaskAdapter):
         self._force_exit_key = force_exit_key
         self._accelerate_key = accelerate_key
         self._completed_key = completed_key
+        self._continue_video_key = continue_video_key
+        self._continue_video_text = continue_video_text
+        self._accelerate_offer_texts = tuple(accelerate_offer_texts)
+        self._accelerate_offer_button_text = accelerate_offer_button_text
+        self._accelerate_offer_extra_wait_seconds = float(
+            accelerate_offer_extra_wait_seconds
+        )
         self._watch_text = watch_text
         self._watch_alt_text = watch_alt_text
         self._banner_text = banner_text
@@ -479,6 +501,7 @@ class AdTaskAdapter(PlannedTaskAdapter):
                 ad_offerwall_exit_rounds=0,
                 ad_offerwall_countdown_seen=False,
                 ad_rating_close_sent=False,
+                ad_accelerate_offer_wait_pending=False,
             )
             if self._navigation_client is not None:
                 # 延迟导入避免 reward.nav → maa.__init__ → factory → tasks
@@ -548,7 +571,12 @@ class AdTaskAdapter(PlannedTaskAdapter):
                 context.update_data(ad_entry_scrolls=attempts + 1)
                 return self._execute(self._scroll_action, context)
         elif state is PageState.AD_PLAYING:
-            is_live = any(
+            offer_step = self._handle_accelerate_offer(context)
+            if offer_step is not None:
+                return offer_step
+            # 「还需观看N秒领奖｜跳过」是普通倒计时视频；它底部的「上滑或点击」
+            # 写明会跳详情页或第三方应用，不能当直播间去下滑。
+            is_live = not self._has_reward_countdown(context) and any(
                 self._has_text(context, item) for item in self._live_texts
             )
             is_offerwall = self._is_offerwall(context)
@@ -559,7 +587,14 @@ class AdTaskAdapter(PlannedTaskAdapter):
                 return self._execute(
                     Action.wait(self._initial_wait_seconds), context
                 )
-            if self._has_text(context, self._claim_exit_text):
+            # 浏览型退出弹窗同时有「去领取奖励」和「坚持退出」。前者会
+            # 返回加速/第三方体验，不能当关闭；先处理明确的退出按钮。
+            if self._has_text(context, self._force_exit_text):
+                return self._execute(
+                    Action.tap_feature(self._force_exit_key), context
+                )
+            if (self._has_text(context, self._claim_exit_text)
+                    and not self._has_text(context, "去体验")):
                 return self._execute(
                     Action.tap_feature(self._claim_exit_key), context
                 )
@@ -584,10 +619,6 @@ class AdTaskAdapter(PlannedTaskAdapter):
                     )
                 return self._execute(
                     Action.tap_feature(self._continue_key), context
-                )
-            if self._has_text(context, self._force_exit_text):
-                return self._execute(
-                    Action.tap_feature(self._force_exit_key), context
                 )
             # 广告完成倒计时后，关闭图标可能只有圆圈 X，没有“关闭”文字。
             # 从新截图定位左右上角的 X；右上角静音图标不能误当关闭。
@@ -651,6 +682,47 @@ class AdTaskAdapter(PlannedTaskAdapter):
                     ad_exit_sent_at=context.now,
                 )
         return step
+
+    def _handle_accelerate_offer(self, context: TaskContext) -> Optional[StepResult]:
+        """「获得加速机会」弹窗：点「继续播放视频内容」，弹窗消失后多等 30 秒。
+
+        2026-10-12 实机：「我要加速领奖」含旧文案「我要加速」，被点后跳到第三方
+        应用详情页，三次 ``ad_exit_unconfirmed``。弹窗挂着时倒计时不走（停在 27 秒），
+        所以点掉后要在原等待时长上再加 30 秒把剩余的看完。
+        """
+        # 退出确认框叠在弹窗上时（10-04「确定要退出吗」），先走原有的退出处理。
+        has_exit_modal = any(
+            self._has_text(context, label)
+            for label in (self._force_exit_text, self._abandon_reward_text)
+        )
+        is_offer = not has_exit_modal and any(
+            self._has_text(context, item) for item in self._accelerate_offer_texts
+        )
+        if is_offer and self._has_text(context, self._continue_video_text):
+            context.update_data(ad_accelerate_offer_wait_pending=True)
+            return self._execute(
+                Action.tap_feature(self._continue_video_key), context
+            )
+        if is_offer and self._has_text(context, self._accelerate_offer_button_text):
+            # 底部小字没被 OCR 读到：等下一帧，不能退回去点加速按钮。
+            return self._execute(Action.wait(2.0), context)
+        if not context.get("ad_accelerate_offer_wait_pending"):
+            return None
+        # 重新截图后弹窗已不在，才开始计时。
+        seconds = self._accelerate_offer_extra_wait_seconds
+        if not context.get("ad_initial_wait_done"):
+            seconds += self._initial_wait_seconds
+        context.update_data(
+            ad_accelerate_offer_wait_pending=False, ad_initial_wait_done=True
+        )
+        return self._execute(Action.wait(seconds), context)
+
+    @staticmethod
+    def _has_reward_countdown(context: TaskContext) -> bool:
+        return any(
+            re.search(r"还需观看\s*\d+\s*秒领奖", text)
+            for text in context.observation.ocr_texts
+        )
 
     def _handle_live_ad(self, context: TaskContext) -> StepResult:
         """直播间/浏览类广告：每 5 秒下滑一次，达到最大次数后退出。"""
@@ -801,6 +873,8 @@ def build_ad_definition(
         force_exit_key=feature_key(keys, keys.ad_ocr_force_exit),
         accelerate_key=feature_key(keys, keys.ad_ocr_accelerate),
         completed_key=feature_key(keys, keys.ad_ocr_completed),
+        continue_video_key=feature_key(keys, keys.ad_ocr_continue_video),
+        continue_video_text=keys.ad_ocr_continue_video,
         watch_text=keys.reward_ocr_watch,
         watch_alt_text=keys.reward_ocr_watch_alt,
         banner_text=keys.reward_ocr_ad_banner,

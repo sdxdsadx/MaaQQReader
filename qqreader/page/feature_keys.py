@@ -66,6 +66,9 @@ class FeatureKeys:
     ad_ocr_offer_alt: str = "跳转详情页或第三方应用"
     #: 广告播放中要求点击「我要加速」才能继续观看。
     ad_ocr_accelerate: str = "我要加速|去加速|点击加速|加速观看"
+    #: 「获得加速机会」弹窗底部的小字（也可能是「10s后自动放弃继续播放视频内容」）：
+    #: 点它留在视频里；同弹窗的「我要加速领奖」会跳第三方应用。
+    ad_ocr_continue_video: str = "继续播放视频内容"
     #: 广告完成弹窗文案；旧 pipeline 会点左上角关闭。
     ad_ocr_completed: str = "恭喜获得奖励|恭喜完成任务"
     ad_result_close: str = "ad.result_close"         # 固定图标：结果页关闭

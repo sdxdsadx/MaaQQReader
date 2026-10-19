@@ -20,6 +20,14 @@
   2) ``_find_gap_x`` 的 Otsu/Canny 两级都落空时，回退「滑块右缘 + 固定
      偏移」估算缺口（历史活体实证成功距离 294/338px，轨道右端≈642），
      偏移与距离上下限参数化便于新变体再校准。
+* adb 端点取自**运行时**（Maa 客户端 config → 注入参数 → 仓库根目录下的本机
+  配置），不再写死相对路径 ``configs/qqreader.local.json``：工作目录不是仓库
+  根目录（worktree、快捷方式、打包 exe）时旧写法会抛 ``ConfigError``，把
+  「验证码阻塞」变成「未预期异常 → 任务失败」（2026-10-01 实机 17:33）。
+* 滑动输入下发失败（adb 不可用 / sendevent 写入失败 / 无触点设备）时向上抛
+  :class:`SlideInputUnavailable`，由 :meth:`SlideCaptchaSolver.solve` 转成
+  ``solved=False`` 并写明原因 —— 任务因此进入 ``BLOCKED_BY_CAPTCHA`` 等待人工，
+  而不是崩溃成 ``FAILED``。
 """
 
 from __future__ import annotations
@@ -65,6 +73,52 @@ _TRACK_SEARCH_HALF_BAND = 60
 _GAP_FALLBACK_OFFSET_RATIO = 2.18
 _GAP_FALLBACK_MIN_DISTANCE = 120
 _GAP_FALLBACK_MAX_DISTANCE_RATIO = 0.90
+
+#: 仓库根目录（``<repo>/qqreader/captcha/slide.py``）。用于在工作目录之外运行时
+#: 仍能定位本机配置；旧写法写死相对路径，cwd 一变就抛 ``ConfigError``。
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_LOCAL_CONFIG_PATH = _REPO_ROOT / "configs" / "qqreader.local.json"
+
+
+class SlideInputUnavailable(RuntimeError):
+    """滑动输入无法下发：adb 端点缺失、sendevent 注入失败或设备 swipe 失败。
+
+    求解器**不把链路故障升级成任务异常**：抛这个异常由 ``solve`` 转成
+    ``solved=False``，任务记为验证码阻塞等待人工。
+    """
+
+
+def _adb_endpoint_from_device(device: Any) -> Tuple[Optional[str], Optional[str]]:
+    """从设备控制器背后的 Maa 客户端读运行时的 adb 可执行文件与设备地址。
+
+    只有真实链路（``MaaDeviceController`` 持有 ``MaaClient``）才拿得到；假设备
+    对象（测试、独立脚本）返回 ``(None, None)``，由调用方继续回退。
+    """
+    client = getattr(device, "_client", None)
+    if client is None:
+        return None, None
+    config = getattr(client, "config", None) or getattr(client, "_config", None)
+    path = getattr(config, "adb_path", None)
+    address = getattr(config, "adb_address", None)
+    if path and address:
+        return str(path), str(address)
+    return None, None
+
+
+def _adb_endpoint_from_local_config() -> Tuple[Optional[str], Optional[str]]:
+    """按仓库根目录读本机配置的 adb 端点（读不到返回空，绝不抛错）。"""
+    from ..config import load_config  # 局部导入：避免循环，也便于测试替换
+
+    try:
+        config = load_config(str(_LOCAL_CONFIG_PATH))
+    except Exception:  # noqa: BLE001 - 配置缺失/损坏只降级，不阻断验证码处理
+        return None, None
+    machine = getattr(config, "machine", None)
+    path = getattr(machine, "adb_path", None)
+    address = getattr(machine, "adb_address", None)
+    if path and address:
+        return str(path), str(address)
+    return None, None
 
 
 @dataclass(frozen=True)
@@ -449,6 +503,8 @@ class SlideCaptchaSolver:
         refresh_point: Tuple[int, int] = (125, 897),
         settle_seconds: float = 0.8,
         clock: Optional["Clock"] = None,
+        adb_path: Optional[str] = None,
+        adb_address: Optional[str] = None,
     ) -> None:
         self._observer = observer
         self._device = device
@@ -466,6 +522,10 @@ class SlideCaptchaSolver:
         self._refresh_point = refresh_point
         self._settle_seconds = settle_seconds  # 截图前及滑动后等待页面稳定
         self._clock: "Clock" = clock if clock is not None else RealClock()
+        # 显式注入的 adb 端点优先（独立脚本/测试）；为空时按运行时链路解析。
+        self._adb_path = adb_path
+        self._adb_address = adb_address
+        self._last_input_error = ""
 
     def _capture(self, context: "TaskContext") -> Optional[bytes]:
         observation = self._observer.observe(context)
@@ -526,22 +586,65 @@ class SlideCaptchaSolver:
         pts.append((-over, random.randint(25, 50)))
         return pts
 
+    def _resolve_adb_endpoint(self) -> Tuple[Optional[str], Optional[str]]:
+        """按「注入参数 → 运行时 Maa 客户端 → 仓库根目录本机配置」取 adb 端点。
+
+        运行时链路优先，保证用的是本次运行真正在用的设备地址（GUI 可在界面
+        选择模拟器地址）；全都取不到时返回空，由调用方降级，绝不抛异常。
+        """
+        if self._adb_path and self._adb_address:
+            return str(self._adb_path), str(self._adb_address)
+        path, address = _adb_endpoint_from_device(self._device)
+        if path and address:
+            return path, address
+        return _adb_endpoint_from_local_config()
+
+    def _fallback_swipe(self, sx: int, sy: int, track: list, reason: str) -> None:
+        """adb 注入不可用时退化为设备 swipe；再失败才算输入不可用。"""
+        total = sum(d for d, _ in track)
+        try:
+            self._device.swipe(sx, sy, sx + total, sy, self._swipe_duration_ms)
+        except Exception as exc:  # noqa: BLE001 - 统一转成可读的求解失败
+            self._last_input_error = f"{reason}；设备 swipe 也失败: {exc}"
+            raise SlideInputUnavailable(self._last_input_error) from exc
+        self._last_input_error = reason
+
     def _sendevent_track(self, sx: int, sy: int, track: list, dy: int) -> None:
-        from ..config import load_config  # 局部导入避免循环
+        adb, dev = self._resolve_adb_endpoint()
+        if not adb or not dev:
+            self._fallback_swipe(
+                sx, sy, track,
+                "取不到 adb 端点（Maa 客户端与本机配置都没有可用地址）",
+            )
+            return
+        try:
+            if self._inject_sendevent_track(adb, dev, sx, sy, track):
+                return
+        except SlideInputUnavailable:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 注入链路任何故障都只降级
+            self._fallback_swipe(sx, sy, track, f"sendevent 注入失败: {exc}")
+            return
+        # 没有可注入的触点设备：退化为设备 swipe（可能被行为检测拒绝）。
+        self._fallback_swipe(sx, sy, track, "未找到可注入的触点设备")
 
-        config = load_config("configs/qqreader.local.json")
-        adb = config.machine.adb_path
-        dev = config.machine.adb_address
-
+    def _inject_sendevent_track(
+        self, adb: str, dev: str, sx: int, sy: int, track: list
+    ) -> bool:
+        """把拟人轨迹写成 sendevent 原始触摸流；返回 False 表示无触点设备。"""
         import subprocess
 
-        r = subprocess.run(
-            [adb, "-s", dev, "shell", "getevent", "-pl"],
-            capture_output=True, text=True, timeout=20,
-        )
+        try:
+            probe = subprocess.run(
+                [adb, "-s", dev, "shell", "getevent", "-pl"],
+                capture_output=True, text=True, timeout=20,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        stdout = probe.stdout or ""
         tdev = None
         cur = None
-        for line in r.stdout.splitlines():
+        for line in stdout.splitlines():
             m = re.search(r"add device \d+: (/dev/input/event\d+)", line)
             if m:
                 cur = m.group(1)
@@ -549,14 +652,11 @@ class SlideCaptchaSolver:
                 tdev = cur
                 break
         if not tdev:
-            # 无触屏设备：退化为设备 swipe（可能被行为检测拒绝）
-            self._device.swipe(sx, sy, sx + sum(d for d, _ in track), sy,
-                               self._swipe_duration_ms)
-            return
+            return False
 
-        def send(events):
+        def send(events) -> None:
             script = "".join(f"sendevent {tdev} {t} {c} {v}; " for t, c, v in events)
-            last_error = None
+            last_error: Optional[Exception] = None
             for _ in range(2):
                 try:
                     result = subprocess.run(
@@ -571,7 +671,9 @@ class SlideCaptchaSolver:
                     )
                 except Exception as exc:  # 单批写入异常同样只重试一次
                     last_error = exc
-            raise RuntimeError("sendevent 批量事件写入失败") from last_error
+            raise SlideInputUnavailable(
+                "sendevent 批量事件写入失败"
+            ) from last_error
 
         x = sx
         y = sy
@@ -584,6 +686,7 @@ class SlideCaptchaSolver:
             time.sleep(dt / 1000.0)
         time.sleep(random.uniform(0.08, 0.2))
         send([(3, 57, -1), (1, 330, 0), (0, 0, 0)])
+        return True
 
     def _observe_texts(self, context: "TaskContext") -> Tuple[str, ...]:
         """重新观测当前帧并返回 OCR 文案（observe 已更新 context.observation）。"""
@@ -645,9 +748,21 @@ class SlideCaptchaSolver:
                 sx, sy = detection.slider_center
                 gap_x = sx + detection.distance
                 # 每轮用新帧的距离，失败后不得沿旧坐标盲滑。
-                self._humanize_swipe(
-                    sx, sy, sx + detection.distance, sy, detection.distance
-                )
+                # 输入链路故障只作「本轮/本次求解失败」，绝不升级成任务异常：
+                # 崩溃会把「验证码阻塞」误报成「任务失败」，也与 AGENTS.md
+                # 的验证码语义冲突。
+                try:
+                    self._humanize_swipe(
+                        sx, sy, sx + detection.distance, sy, detection.distance
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    details.append(
+                        f"第 {round_no} 轮无法下发滑动输入："
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    return SolveResult(
+                        False, "; ".join(details), data={"rounds": details}
+                    )
                 swipe_count += 1
                 self._clock.sleep(self._settle_seconds, context.token)
                 details.append(
@@ -693,8 +808,16 @@ class SlideCaptchaSolver:
                 )
                 self._clock.sleep(self._settle_seconds, context.token)
                 failed_in_row = 0
+        reason = (
+            f"滑动验证 {self._max_rounds} 轮后验证码仍然存在"
+            f"（实际滑动 {swipe_count} 次）"
+        )
+        if self._last_input_error:
+            # 精确注入不可用时滑的是匀速轨迹（大概率被行为检测拒绝），
+            # 把降级原因带进失败详情，避免排查时误判成「缺口没检测到」。
+            reason += f"；滑动输入已降级：{self._last_input_error}"
         return SolveResult(
             False,
-            f"滑动验证 {self._max_rounds} 轮后验证码仍然存在（实际滑动 {swipe_count} 次）",
+            reason,
             data={"rounds": details, "swipes": swipe_count},
         )

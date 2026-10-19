@@ -176,3 +176,84 @@ def test_upgrade_dialog_over_bookstore_taps_cancel_first(monkeypatch) -> None:
     monkeypatch.setattr(arm, "_client", _Client([dialog, BOOKSTORE]))
     assert arm.dismiss_blocking_dialogs() == 1
     assert taps == [(538, 1242)]  # 「取消」(510,1226,56,32)，不是页面上的 X
+
+
+def _loading_frame(name: str) -> List[Tuple[str, Box]]:
+    data = json.loads(
+        (Path(__file__).parent / "fixtures" / "autoread_loading_frames.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    return [(text, tuple(box)) for text, box in data[name]["boxes"]]
+
+
+def test_real_loading_shelf_waits_for_target_without_navigating(device) -> None:
+    """09-30：先出现导航和时长卡，书籍列表稍后才加载，不能立即拒绝。"""
+    install, taps, backs, logs = device
+    install([_loading_frame("loading"), _loading_frame("loading"), _loading_frame("loaded")])
+    why = arm.confirm_allowed_book_on_shelf()
+    assert "宇智波" in why
+    assert taps == []
+    assert backs == []
+    assert not any(line.startswith("现场记录") for line in logs)
+
+
+def test_loading_recheck_has_settle_wait(device, monkeypatch) -> None:
+    install, taps, backs, _logs = device
+    install([_loading_frame("loading"), _loading_frame("loaded")])
+    sleeps = []
+    monkeypatch.setattr(arm.time, "sleep", sleeps.append)
+    assert "宇智波" in arm.confirm_allowed_book_on_shelf()
+    assert sleeps and sum(sleeps) >= 2
+    assert taps == [] and backs == []
+
+
+def test_persistent_missing_target_uses_full_confirmation_budget(device) -> None:
+    install, taps, backs, _logs = device
+    install([SHELF_WITHOUT_TARGET])
+    with pytest.raises(arm.BookNotAllowed):
+        arm.confirm_allowed_book_on_shelf(attempts=4)
+    assert arm._client.index == 4
+    assert taps == [] and backs == []
+
+
+def test_captcha_during_loading_recheck_stops_without_navigation(device) -> None:
+    data = json.loads(
+        (Path(__file__).parent / "fixtures" / "daily_popup_ocr_frames.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    captcha = [(text, tuple(box)) for text, box in data["reward_captcha_with_x"]["boxes"]]
+    install, taps, backs, _logs = device
+    install([_loading_frame("loading"), captcha])
+    with pytest.raises(RuntimeError, match="验证码"):
+        arm.confirm_allowed_book_on_shelf()
+    assert taps == [] and backs == []
+
+
+def test_loading_recheck_captcha_exit_does_not_run_failure_cleanup(device, monkeypatch, tmp_path) -> None:
+    from types import SimpleNamespace
+
+    data = json.loads(
+        (Path(__file__).parent / "fixtures" / "daily_popup_ocr_frames.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    captcha = [(text, tuple(box)) for text, box in data["reward_captcha_with_x"]["boxes"]]
+    install, taps, backs, _logs = device
+    install([_loading_frame("loading"), captcha])
+    client = arm._client
+    monkeypatch.setattr(client, "connect", lambda: None, raising=False)
+    monkeypatch.setattr(client, "close", lambda: None, raising=False)
+    monkeypatch.setattr("qqreader.maa.factory.build_maa_client", lambda config: client)
+    monkeypatch.setattr(arm, "load_config", lambda path: SimpleNamespace(
+        machine=SimpleNamespace(adb_path="unused", adb_address="unused", screenshot_dir=tmp_path)
+    ))
+    cleanups = []
+    monkeypatch.setattr(arm, "return_to_capturable", lambda **kwargs: cleanups.append(1))
+    monkeypatch.setattr(arm, "return_to_shelf", lambda: None)
+    monkeypatch.setattr(arm, "launch_app", lambda: None)
+    monkeypatch.setattr(arm.sys, "argv", ["auto_read_30min.py", "--minutes", "1", "--skip-claim"])
+    assert arm.main() == 10
+    assert cleanups == [1]  # 仅启动时确认页面；验证码出现后不做返回清理。
+    assert taps == [] and backs == []

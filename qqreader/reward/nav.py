@@ -19,7 +19,7 @@ from ..page.blocking_popup import find_blocking_popup
 OcrBox = Tuple[str, Box]
 Sleep = Callable[[float], None]
 
-_CAPTCHA_MARKERS = ("安全验证", "拖动下方滑块", "拖动滑块", "滑动验证", "完成拼图")
+_CAPTCHA_MARKERS = ("安全验证", "请在下图依次点击", "拖动下方滑块", "拖动滑块", "滑动验证", "完成拼图")
 _REWARD_MARKERS = (
     "今日已获赠币",
     "今日还可领",
@@ -103,12 +103,14 @@ def find_row_button(
     labels: Sequence[str],
     *,
     row_gap: int = 45,
+    boxes: Optional[Sequence[OcrBox]] = None,
 ) -> Optional[OcrBox]:
     """重新截图，返回与 ``row_markers`` 同一行（纵向相差 ≤ ``row_gap``）的按钮框。
 
     奖励页多行都有「立即领取」，只认目标任务那一行；有验证码时返回 None。
     """
-    boxes = _ocr(client)
+    if boxes is None:
+        boxes = _ocr(client)
     if _contains_any(_joined(boxes), _CAPTCHA_MARKERS):
         return None
     rows = [box for text, box in boxes if _contains_any(text, row_markers)]
@@ -138,19 +140,36 @@ def goto_reward_page(
     *,
     max_steps: int = 12,
     settle_seconds: float = 1.5,
+    entry_retap_steps: int = 4,
     sleep: Sleep = time.sleep,
 ) -> bool:
     """从常见落地页导航到奖励页，成功返回 ``True``。
 
     分支顺序为：验证码阻塞 → 退出弹窗 → 每日弹窗 → 开屏跳过 → 简介继续阅读 →
-    奖励页确认 → 书架奖励入口 → 书城切书架 → 正文页返回。未知页不盲返。所有动作
+    奖励页确认 → 书架奖励入口 → 书城切书架 → 正文页返回。未知页等待重拍，不盲返。所有动作
     后都重新截图确认，达到 ``max_steps`` 仍未确认奖励页则返回 ``False``。
+
+    点过书架入口后 ``entry_retap_steps`` 轮内仍看到书架只等待、不重点：页面切换
+    慢时书架会多停留一会儿，过早重点会打开两层奖励页（2026-10-06 实机
+    mfa_20261006_205809_33602f6e）。
     """
+    steps_since_entry_tap: Optional[int] = None
     for _ in range(max_steps):
+        if steps_since_entry_tap is not None:
+            steps_since_entry_tap += 1
         boxes = _ocr(client)
         text = _joined(boxes)
         if _contains_any(text, _CAPTCHA_MARKERS):
             return False
+
+        # 旧领奖导航反复 BACK 会困在退出确认框；先取消，再重新确认背景页。
+        if "确定退出QQ阅读" in text:
+            cancel = next((item for item in boxes if item[0].strip() == "取消"), None)
+            if cancel is None:
+                return False
+            _tap(client, cancel)
+            _sleep(settle_seconds, sleep)
+            continue
 
         # 广告退出确认框会透出背景奖励页，必须先处理遮罩。
         give_up = _find(boxes, ("放弃奖励", "坚持退出"))
@@ -188,7 +207,9 @@ def goto_reward_page(
         # 本身在部分版本不可点击。优先点击按钮，找不到时才退回卡片文案。
         entry = _shelf_reward_button(boxes) or _find(boxes, _SHELF_ENTRY_MARKERS)
         if entry is not None:
-            _tap(client, entry)
+            if steps_since_entry_tap is None or steps_since_entry_tap >= entry_retap_steps:
+                _tap(client, entry)
+                steps_since_entry_tap = 0
             _sleep(settle_seconds, sleep)
             continue
 
@@ -204,7 +225,8 @@ def goto_reward_page(
             client.click_key(4)
             _sleep(settle_seconds, sleep)
             continue
-        return False
+        # H5 过渡帧可能只有时间、电量符号；在同一预算内等待，不能立刻失败或返回。
+        _sleep(settle_seconds, sleep)
     return False
 
 
