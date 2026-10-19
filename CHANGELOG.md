@@ -21,6 +21,32 @@
 
 ---
 
+## 2026-10-19 · 等级页广告：关闭「暂无可播视频」弹窗；「去浏览15秒」浏览弹层点「我要加速」领奖
+
+**触发**：用户要求修正等级页广告遇到的问题。最近 4 次 `DailyLevelAdFlow` 失败（`runtime/records/daily_flows/`，均 exit 2）：`mfa_20261013_070802_e2cb29f0`、`mfa_20261014_104335_dd9a271c`、`mfa_20261016_144806_d665eacf`、`mfa_20261019_160110_39ab3243`；用 `runtime/logs/maafw.bak.2026.10.14-02.21.09.164.log`、`…10.14-06.02.36.744.log`、`…10.17-14.51.00.124.log`、`…10.19-11.20.12.811.log` 的 OCR 逐帧还原。这些运行用的是主目录当时检出的 `codex/restore-slide-captcha-20261018`（`0422420`），本分支以它为基线，不是 `master`。
+
+| 任务/模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| 赠币广告（10-14 04:44、10-19 10:01） | 点「立即领取」后弹出「暂无可播视频，点击下方广告领取本次激励奖励」，里面是淘宝广告卡（「立即领取」(292,849)、底部 X (336,1009)）。10-19：`LevelCoinAdNotStarted` 空等，`LevelClickCoinAdAgain` 点中广告卡的「立即领取」，跳到淘宝「正在跳转 / 下载淘宝」页，`LevelAdUnknownWait` 空等 20 次失败；10-14：等待后落到 `AdReturnStable` 失败 | 弹窗背后仍能读到「用户等级」，被当成“广告没拉起”；入口节点 `^立即领取$` 没有 ROI，弹窗里的同名按钮也会命中 | `scripts/run_task.py::_apply_level_no_video_overrides`（新增）：`LevelAdNoVideoDialog`（OCR「暂无可播视频」，DoNothing）→ `LevelAdNoVideoClose`（OCR 整框 X，ROI `[260,940,200,140]`，Click）→ 按 `LevelAfterAd` 锚点回原广告的后续核对（赠币 → 继续积分广告；积分 → 核对「今日已完成」/ 换广告重试）。插在所有含 `Level*AdNotStarted` / `AdScrollDownRepeat` / `LevelAdUnknownWait` / `LevelAdAccelerateWait` 的 next 里、验证码和挽留弹窗之后。`LevelClick{Coin,Points}Ad[Again]` 加 ROI `[460,120,260,1100]`，只认等级页右侧按钮列。不点弹窗里的广告 |
+| 积分广告（10-13 01:09、10-16 08:49） | 「看小视频」后是「去浏览15秒 / 我要加速 / 免看此广告 / 可提前13秒领奖」浏览弹层；`LevelAdAccelerateWait` 自我循环 120 次（约 5.5 分钟）画面不变，然后 `LevelAdUnknownWait` 失败 | 10-11 的「只等待」方案依据的是「去体验9秒 … 9s后自动放弃继续播放视频内」版式；「去浏览15秒」版式没有自动放弃，弹层期间视频暂停（10-08 实机已证实）。等待节点自己的 next 里也没有任何出口 | `_apply_level_browse_accelerate_overrides`（新增，移植未合并的 `617359d` 做法，用户 2026-10-08 同意）：`LevelBrowseAccelerate`（OCR 整框「我要加速」，ROI `[150,650,420,160]`，点击后停 20 秒，max_hit 3）→ `LevelBrowseLandingBack`（返回键，max_hit 4）→ 已有的 `LevelAdRewardGrantedSkip` 点顶部「奖励已领取｜跳过」。插在每个含 `LevelAdAccelerateWait` 的 next（包括它自己的）中它的前面；次数用完回到原来的跳过 / 放弃 + 换广告路径。不认「我要加速领奖」（10-12 弹窗仍点「继续播放视频内容」），「Ns后自动放弃」版式仍只等待。落地页内不点任何内容 |
+
+**改动文件**：`scripts/run_task.py`；`tests/test_level_ad_no_video_browse.py`（新增 36 项）；`tests/fixtures/level_ad_no_video_20261019.json`（新增，5 帧真实 OCR：10-19 等级页、10-19 / 10-14 弹窗、淘宝跳转页、10-16 浏览弹层）；`tests/fixtures/level_browse_ad_20261008.json`（取自 `617359d`）；`tests/test_level_ad_runtime_overrides.py`、`tests/test_level_points_accelerate_wait.py`（见下）；本日志。
+**验证**：
+- 新测试先写：去掉两个新函数的调用时 27 项失败、9 项通过（9 项是“自动放弃版式仍等待”和幂等的对照）；加上后 36 项全部通过。
+- 改了 3 处写死旧行为的断言：`test_level_ad_overrides_recover_from_bottom_and_static_download_ads` 的精确 next 列表首位加上 `LevelAdNoVideoDialog`；`test_level_icon_click_swallowed_retries_without_global_ocr_x_close` 的“Level 节点不认 X”豁免加上 `LevelAdNoVideoClose`（与 `LevelPromoClose` 一样先确认弹窗文字、只看窄 ROI），并补断言 ROI；`test_level_points_accelerate_wait.py` 的只等待帧去掉 `offer_browse_15s`（该版式就是 10-13 / 10-16 失败的现场，现在改由新测试断言点加速）。
+- 全量 `py -3.10 -m pytest`（本 worktree，复制本机 `dev/resource` pipeline，并以目录联接接入 `_backup_old_project_20260909_200716`）：698 passed、9 failed、2 skipped。9 项失败在改动前的基线上完全相同：`test_ad_round_regressions` ×2、`test_qqr27_ad_flow` ×1（已知 40 / 35 秒不一致），`test_issue13_legacy_timeout` ×4、`test_legacy_resource_isolation` ×2（worktree 环境）。
+- 实机（命令行 `scripts/run_task.py --task DailyLevelAdFlow --timeout-minutes 30`，worktree 代码，覆盖写在独立副本 `runtime/legacy_resources/legacy-*`；MFA 空闲时运行，未点 GUI）：17:11:29–17:12:29，exit 0，`success: true`。17:11:53 积分广告是「我要加速 / 可提前13秒领奖 / 请勿中断浏览」弹层 → 点「我要加速」(406,737) → 停 20 秒 → 17:12:14 在落地页按返回 → 「恭喜提前获得奖励｜奖励已领取｜跳过」→ 点跳过 → 等级页「任务已完成，积分奖励发放中」，积分行同一行「今日已完成」(570,609)。
+**未覆盖 / 遗留**：
+- 「暂无可播视频」弹窗的关闭只由真实帧回放测试覆盖，**未实机触发**：本次等级页上没有赠币行（「赢10-99赠币」不在页面上，`LevelClickCoinAd` 未命中，直接做了积分广告）；赠币奖励今天是否已经到账未核实（10:02 那次误点进了淘宝页）。
+- 关闭弹窗后不再重试赠币广告，当天赠币那一项可能拿不到；整条流程的成功条件仍只认积分行「今日已完成」。
+- 已经误入第三方跳转页（「正在跳转 / 下载淘宝」）时仍只会等待，没有加返回键处理。
+- 主目录 `G:\project_X` 11:59 被切回 `master`（`dcac7bf`，reflog 可查），而 MFA 在用的代码在 `codex/restore-slide-captcha-20261018`；`mfa/agent/main.py` 在 master 上不存在，当前 MFA 的 Agent 进程是切换前启动的。重启 GUI 前需要用户决定主目录检出哪个分支。本次未改动主目录。
+- `617359d`（`claude/qqreadergui-startup-ad-recognition-61f65e`）的其余内容（阅读奖励导航合并）未移植。
+**分支**：`claude/level-ad-no-video-20261019`（基于 `0422420`）；未推送、未合并。
+**回滚**：`git log --oneline -S "关闭「暂无可播视频」弹窗" -- CHANGELOG.md` 定位后 `git revert <hash>`。
+
+---
+
 ## 2026-10-18 · 恢复滑块自动验证：启动 GUI 时清除继承的 manual 覆盖
 
 **触发**：用户要求恢复被切为人工验证的滑块模块；今天 `gui_DailyAdFlow_20261018_113522.log`、`gui_DailyAdFlow_20261018_121713.log` 均以「未配置自动求解器，等待人工处理验证码」结束。

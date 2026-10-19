@@ -28,6 +28,8 @@ def test_level_ad_overrides_recover_from_bottom_and_static_download_ads() -> Non
     assert data["LevelScrollToTop"]["end"] == [360, 1120]
     assert data["AdStaticDownloadWait"]["post_delay"] == 35000
     assert data["LevelClickCoinAd"]["next"] == [
+        # 2026-10-19：「暂无可播视频」弹窗先于“仍在等级页”的等待和重新点击。
+        "LevelAdNoVideoDialog",
         "AdCountdown",
         "AdStaticDownloadPage",
         "LevelCoinAdNotStarted",
@@ -94,8 +96,12 @@ def test_level_icon_click_swallowed_retries_without_global_ocr_x_close() -> None
     assert all(
         "X" not in str(node.get("expected", ""))
         for name, node in data.items()
-        if name.startswith("Level") and name != "LevelPromoClose" and isinstance(node, dict)
+        # 这两个 X 节点都要先确认弹窗文字（月票活动 / 暂无可播视频），且只看弹窗底部窄 ROI。
+        if name.startswith("Level") and name not in ("LevelPromoClose", "LevelAdNoVideoClose")
+        and isinstance(node, dict)
     )
+    assert data["LevelAdNoVideoClose"]["roi"] == [260, 940, 200, 140]
+    assert data["LevelAdNoVideoDialog"]["next"][len(run_task.LEVEL_CAPTCHA_NODES)] == "LevelAdNoVideoClose"
     assert data["LevelPromoClose"]["roi"] == [300, 870, 120, 170]
     assert data["LevelPromoVisible"]["next"] == [*run_task.LEVEL_CAPTCHA_NODES, "LevelPromoClose"]
     assert data["LevelClickLevelIconAgain"]["max_hit"] == 3

@@ -31,8 +31,10 @@ WAIT = run_task.LEVEL_ACCELERATE_WAIT_NODE
 
 Box = Tuple[int, int, int, int]
 
+#: 「去浏览15秒 / 我要加速」(offer_browse_15s) 不在此列：该版式没有「Ns后自动放弃」，
+#: 10-13、10-16 实机原地等 120 次画面不变；现在点「我要加速」，见
+#: ``tests/test_level_ad_no_video_browse.py::test_frozen_browse_offer_clicks_accelerate``。
 OFFER_FRAMES = (
-    "offer_browse_15s",
     "offer_experience_9s",
     "offer_auto_abandon_1s",
     "video_skip_27s",
