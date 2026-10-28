@@ -79,7 +79,7 @@ class MfaInterfaceTest(unittest.TestCase):
         self.assertEqual(data["title"], "QQ阅读每日任务")
         self.assertEqual(
             data["controller"],
-            [{"name": "MuMu安卓端", "type": "Adb", "display_short_side": 720}],
+            [{"name": "安卓模拟器（ADB）", "type": "Adb", "display_short_side": 720}],
         )
         self.assertEqual(data["resource"], [{"name": "QQ阅读", "path": ["./resource"]}])
         self.assertEqual(

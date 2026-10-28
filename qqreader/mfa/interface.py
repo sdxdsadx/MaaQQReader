@@ -198,7 +198,7 @@ def build_interface(
         "label": TITLE,
         "title": TITLE,
         "version": version,
-        "controller": [{"name": "MuMu安卓端", "type": "Adb", "display_short_side": 720}],
+        "controller": [{"name": "安卓模拟器（ADB）", "type": "Adb", "display_short_side": 720}],
         "resource": [{"name": "QQ阅读", "path": ["./resource"]}],
         "agent": {"child_exec": "python", "child_args": ["-X", "utf8", "./agent/main.py"]},
         "task": tasks,

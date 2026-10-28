@@ -135,6 +135,8 @@ DISMISS_TEXTS = ("取消", "暂不", "以后再说", "关闭", "×", "X", "x", "
 _client = None
 _adb_path = ""
 _adb_address = ""
+#: 设备短边 / 720。坐标都按 720×1280 写；1080×1920 设备上是 1.5。
+_device_scale = 1.0
 # 失败现场截图目录（来自配置 machine.screenshot_dir）。
 _evidence_dir: Path | None = None
 
@@ -168,8 +170,20 @@ def adb(*args: str, timeout: int = 20) -> str:
     return result.stdout.decode("utf-8", errors="replace")
 
 
+def to_device(x: int, y: int) -> tuple[int, int]:
+    """720×1280 坐标系（Maa 截图 / OCR 框）→ 设备像素；``input tap`` 不经过 Maa 的缩放。"""
+    return int(round(x * _device_scale)), int(round(y * _device_scale))
+
+
 def tap(x: int, y: int) -> None:
-    adb("shell", "input", "tap", str(x), str(y))
+    dx, dy = to_device(x, y)
+    adb("shell", "input", "tap", str(dx), str(dy))
+
+
+def swipe(x1: int, y1: int, x2: int, y2: int, duration_ms: int) -> None:
+    a, b = to_device(x1, y1)
+    c, d = to_device(x2, y2)
+    adb("shell", "input", "swipe", str(a), str(b), str(c), str(d), str(duration_ms))
 
 
 def press_back() -> None:
@@ -692,7 +706,7 @@ def dwell(minutes: int, segment: int, segments: int) -> None:
                     interrupted = True
                     break
                 # 用户已将阅读器设为上下滚动模式；纵向上滑避开正文评论热点。
-                adb("shell", "input", "swipe", "360", "1050", "360", "350", "500")
+                swipe(360, 1050, 360, 350, 500)
                 time.sleep(18)
                 if not reader_is_foreground():
                     interrupted = True
@@ -725,7 +739,7 @@ def segments_for(minutes: int, segment_minutes: int) -> list[int]:
 
 
 def main() -> int:
-    global _client, _adb_path, _adb_address, _evidence_dir, _allowed_keywords
+    global _client, _adb_path, _adb_address, _evidence_dir, _allowed_keywords, _device_scale
     parser = argparse.ArgumentParser(description="QQ 阅读自动阅读（dwell 计时）")
     parser.add_argument("--minutes", type=int, default=30, help="总阅读时长（分钟）")
     parser.add_argument("--config", type=Path, default=ROOT / "configs" / "qqreader.local.json",
@@ -755,6 +769,11 @@ def main() -> int:
     _client = build_maa_client(config)
     _client.connect()
     log("Maa 通道已连接（截图 + OCR 可用）")
+    from qqreader.maa.display import device_scale, query_display
+
+    _device_scale = device_scale(query_display(_adb_path, _adb_address))
+    if _device_scale != 1.0:
+        log(f"设备分辨率不是 720 宽：adb 点击 / 滑动坐标按 ×{_device_scale:g} 换算")
 
     plan = segments_for(args.minutes, args.segment_minutes)
     log(f"=== 自动阅读 {args.minutes} 分钟开始（{len(plan)} 段：{plan}）===")

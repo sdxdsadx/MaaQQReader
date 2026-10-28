@@ -1,7 +1,8 @@
 """听书封面：从模拟器截图中框选封面并保存为 Maa 模板（纯逻辑，不依赖 Tkinter）。
 
-模板匹配不做缩放，所以封面必须从 720×1280 的原始截图里按原尺寸裁出；
-GUI 只是把截图缩小显示，框选坐标在这里换算回原图。
+模板匹配不做缩放，所以封面必须从 720×1280 坐标系的截图里按原尺寸裁出；
+设备不是 720 宽时（例如 1080×1920），先按 MaaFramework 的规则把截图缩放到
+短边 720，再框选裁剪。GUI 只是把截图缩小显示，框选坐标在这里换算回原图。
 """
 
 from __future__ import annotations
@@ -17,6 +18,8 @@ Box = Tuple[int, int, int, int]
 MIN_COVER_SIDE = 24
 MAX_COVER_AREA_RATIO = 0.5
 COVER_DIR_NAME = "covers"
+#: 与 MaaFramework 截图缩放目标一致（machine.maa_short_side）。
+TARGET_SHORT_SIDE = 720
 
 
 def display_scale(width: int, height: int, max_width: int, max_height: int) -> int:
@@ -86,6 +89,29 @@ def crop_png(png: bytes, box: Box) -> bytes:
     return encoded.tobytes()
 
 
+def normalize_short_side(png: bytes, short_side: int = TARGET_SHORT_SIDE) -> bytes:
+    """把截图缩放到短边 ``short_side``（与 Maa 截图同一坐标系）；已是该尺寸时原样返回。
+
+    解不开的数据原样返回，由后续显示 / 裁剪环节报错。
+    """
+    try:
+        import cv2  # type: ignore[import-not-found]
+
+        image = _decode(png)
+    except (ImportError, ValueError):
+        return png
+    height, width = image.shape[:2]
+    if min(width, height) == short_side:
+        return png
+    scale = short_side / min(width, height)
+    size = (int(round(width * scale)), int(round(height * scale)))
+    resized = cv2.resize(image, size, interpolation=cv2.INTER_AREA)
+    ok, encoded = cv2.imencode(".png", resized)
+    if not ok:
+        raise ValueError("截图缩放后编码失败")
+    return encoded.tobytes()
+
+
 def save_cover(runtime_dir: Path, png: bytes, *, prefix: str = "audiobook_cover") -> Path:
     """保存到 ``runtime/covers/``（runtime 不进仓库）。"""
     directory = Path(runtime_dir) / COVER_DIR_NAME
@@ -139,4 +165,4 @@ def capture_screen_png(
     if result.returncode != 0 or not data.startswith(b"\x89PNG"):
         detail = (result.stderr or b"").decode("utf-8", "replace").strip()
         raise RuntimeError(f"截图失败（exit={result.returncode}）{detail}")
-    return data
+    return normalize_short_side(data)

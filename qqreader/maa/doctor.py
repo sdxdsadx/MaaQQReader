@@ -39,6 +39,36 @@ class DoctorReport:
         return "\n".join(lines)
 
 
+def _screenshot_size_check(width: int, height: int) -> DoctorCheck:
+    """坐标按 720×1280 标定：缩放后的截图必须正好是这个尺寸。"""
+    from .display import REFERENCE_SIZE
+
+    if (width, height) == REFERENCE_SIZE:
+        return DoctorCheck("截图坐标系", True, f"缩放后 {width}x{height}")
+    if (height, width) == REFERENCE_SIZE:
+        # 模拟器桌面或其他应用可能横屏显示；QQ 阅读在前台时是竖屏。
+        return DoctorCheck(
+            "截图坐标系", True, f"缩放后 {width}x{height}（当前画面横屏旋转，QQ 阅读前台时为竖屏）"
+        )
+    return DoctorCheck(
+        "截图坐标系",
+        False,
+        f"缩放后 {width}x{height}，应为 {REFERENCE_SIZE[0]}x{REFERENCE_SIZE[1]}"
+        "（检查 maa_short_side 与设备比例）",
+    )
+
+
+def _device_display_check(client: Any) -> Optional[DoctorCheck]:
+    """ADB 设备：读 wm size / density 判断能否套用标定坐标；离线截图返回 None。"""
+    config = getattr(client, "config", None)
+    if getattr(config, "controller", None) != "adb":
+        return None
+    from .display import check_device_display
+
+    assessment = check_device_display(str(config.adb_path), str(config.adb_address))
+    return DoctorCheck("设备分辨率", assessment.ok, assessment.render())
+
+
 def run_doctor(
     config: AppConfig,
     *,
@@ -79,6 +109,10 @@ def run_doctor(
                 f"{screenshot.width}x{screenshot.height}, {len(screenshot.data)} bytes",
             )
         )
+        checks.append(_screenshot_size_check(screenshot.width, screenshot.height))
+        display = _device_display_check(client)
+        if display is not None:
+            checks.append(display)
         ocr = client.recognize("OCR", {}, screenshot)
         texts = ocr.all_texts()
         checks.append(
