@@ -21,6 +21,45 @@
 
 ---
 
+## 2026-10-28 · 可移植适配：多模拟器自动发现、分辨率兼容检查，修复非 720 宽设备上阅读点错书
+
+**触发**：用户要求做可移植适配，重点验证不同分辨率、不同模拟器的通用性，并上传 GitHub、发布新 release。
+
+| 任务/模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| 启动器 `启动QQReaderGUI.cmd` | 写死 `D:\Program Files\Netease\MuMu Player 12\shell`、实例 0、默认端口 16384；别的盘符或别的模拟器找不到设备 | 第 2–5 步只认 MuMuManager | 新增 `qqreader/maa/emulator.py`：从配置、注册表和各盘符的默认安装目录找 MuMu 12（`shell\` / 4.x `nx_main\`）、雷电 9、BlueStacks 5、夜神、逍遥及 PATH 里的 adb；按「配置地址在线 → 管理工具（`MuMuManager info -v all` / `ldconsole list2` / `bluestacks.conf`）→ `adb devices` → 默认端口」找设备；没有偏好时按 MuMu → 雷电 → BlueStacks → 夜神 → 逍遥的顺序选；MuMu / 雷电 / 逍遥可自动拉起；只回写 `adb_path` / `adb_address` / `emulator_path`（路径只差斜杠时不改写）；没有本机配置时按示例生成。默认端口先做 0.3 秒 TCP 探测（无设备时探测从 43 秒降到 7 秒）。启动器第 2–5 步改为调用 `prepare --launch`，实例序号可用 `QQREADER_EMULATOR_INDEX` 指定 |
+| `调试QQReader.cmd` | 同样写死 MuMu 目录 | 同上 | MuMu 目录优先取本机配置 `emulator_path`（MuMuManager.exe 所在目录），实例序号读 `QQREADER_EMULATOR_INDEX`；保持 GBK |
+| 分辨率（新增 `qqreader/maa/display.py`） | 横屏、非 9:16、DPI 不匹配的设备上任务跑到一半才识别失败，看不出原因 | 坐标按 720×1280 / 240 DPI 标定（实测日常 MuMu：`wm size` 720x1280、`wm density` 240），之前没有任何检查 | 读 `wm size` / `wm density`（Override 优先）判定：一致 ok；9:16 且 DPI 等比 warn（提示滑块 sendevent 用设备像素）；横屏 / 非 9:16 / 逻辑宽度偏差 >5% fail。`CtypesMaaClient._create_controller` 连接 ADB 设备时调用 `enforce_display`：fail 拒绝连接并给出改法，`QQREADER_DISPLAY_CHECK=warn/off` 可降级。体检 `doctor` 新增「截图坐标系」「设备分辨率」两项 |
+| 自动阅读 `scripts/auto_read_30min.py` | 1080×1920 / 360 DPI 实机：点书名后进了「我的笔记」，exit 3 | 书名 OCR 框是 Maa 的 720 坐标，脚本却用 `adb shell input tap` 直接点设备像素（720 坐标 (294,462) 落在上一行「我的笔记」） | 新增 `to_device` / `swipe`：启动时读设备分辨率，`tap` 与正文上滑都按 `设备短边/720` 换算 |
+| 听书封面截取 `qqreader/gui/cover.py` | 1080 宽设备上截出的封面比 Maa 截图里的大 1.5 倍，模板匹配不到 | `capture_screen_png` 返回原始像素截图 | 新增 `normalize_short_side`，截图先缩放到短边 720 |
+| 离线自定义控制器 `CtypesMaaClient` | 离线喂图做 OCR 报 `Tasker not inited` | 自定义控制器创建后没有 `PostConnection`，也没设短边 | 补设短边与连接 |
+| MFA `interface.json` | 控制器名「MuMu安卓端」 | — | 改为「安卓模拟器（ADB）」，由 `qqreader/mfa/interface.py` 重新生成 |
+
+**改动文件**：`qqreader/maa/emulator.py`（新增）、`qqreader/maa/display.py`（新增）、`qqreader/maa/ctypes_client.py`、`qqreader/maa/doctor.py`、`qqreader/gui/cover.py`、`qqreader/mfa/interface.py`、`mfa/interface.json`、`scripts/auto_read_30min.py`、`启动QQReaderGUI.cmd`、`调试QQReader.cmd`、`tests/test_emulator_detect.py`（新增）、`tests/test_display_compat.py`（新增）、`tests/test_resolution_scaling.py`（新增）、`tests/fixtures/images/reward_home_720x1280_20261019.png`（新增，10-19 实机奖励页截图，无账号信息）、`tests/test_maa_adapter.py`、`tests/test_mfa_interface.py`、`docs/portability.md`（新增）、`README.md`、本日志。
+**验证**：
+- 单元测试：新增 3 个文件。`test_resolution_scaling.py` 用真实截图放大到 1080×1920、1440×2560 后交给真实 MaaFramework（自定义控制器、短边 720）：三种分辨率截图都缩放回 720×1280，OCR 读到同样的 4 处关键文字、中心偏差 ≤6px，点击 (360,640) 分别映射到 (540,960)、(720,1280)；没有 Maa 运行时自动跳过。`test_display_compat.py` 含阅读脚本换算回归（复现 1080 实机误点的坐标）。`test_maa_adapter.py` 的体检检查项清单加上「截图坐标系」。
+- 全量 `py -3.10 -m pytest`（worktree，`dev/` 与 `_backup_old_project_20260909_200716` 以目录联接接入）：773 passed、3 failed、2 skipped（18.0s）。3 项失败是已知的 40 / 35 秒不一致（`test_ad_round_regressions` ×2、`test_qqr27_ad_flow` ×1），与 10-19 条目的基线相同。
+- 实机（命令行 `scripts/run_task.py`，worktree 代码，MuMu 12 实例 0）：
+  - 720×1280 / 240：体检通过；`LaunchQQReader` exit 0；`DailyReadingFlow --minutes 1` 07:14–07:16 exit 0（正文停留 1 分钟，阅读奖励已领）。
+  - `wm size 1080x1920` + `wm density 360`：体检通过（warn）；`DailyReadingFlow` 修复前 07:16–07:17 exit 3（误入「我的笔记」），修复后 07:19–07:20 exit 0（日志「按 ×1.5 换算」，正文停留 1 分钟）。
+  - `DailyGameFlow --duration-minutes 1`：1080×1920 07:21–07:36 TIMEOUT，720×1280 基线 07:37–07:52 同样 TIMEOUT，两次都是滚到奖励页底仍找不到「玩游戏 / 在线时长」任务行（今天页面上没有这一行），与分辨率无关。
+  - `wm density 320`：体检与 `LaunchQQReader` 都在连接时被拒绝（exit 12），提示改 DPI 240。
+  - 测试后 `wm size reset`、`wm density reset`，已确认恢复 720x1280 / 240。
+  - 启动器：用截断副本（在启动 GUI 前退出、`ROOT` 指向本 worktree）实跑第 1–5 步。首次实跑暴露两处问题：① 新写的一行中文 `rem` 注释在 936 / 65001 代码页下都被 cmd 拆成命令执行（报「不是内部或外部命令」），改成英文后两种代码页都干净；② 全新配置时注册表里只有雷电（本机 MuMu 12 没有卸载注册项），拉起了雷电实例 0（横屏 1920×1080，分辨率检查正确判 fail）。已加默认安装目录扫描和 MuMu 优先，复查 `discover_installations` 依次返回 MuMu、雷电、platform-tools。被拉起的雷电实例已关闭。
+  - `调试QQReader.cmd`（GBK）：截取变量段实跑。没有配置时 `MUMU_DIR` 为默认目录；配置 `emulator_path` 为 `X:\Nowhere 测试\MuMu\shell\MuMuManager.exe` 时取到 `X:\Nowhere 测试\MuMu\shell`；`QQREADER_EMULATOR_INDEX=2` 时 `VMINDEX=2`。`status` 模式输出正常。
+  - 雷电 9 实例 2（720×1280 / 320，新建实例默认值）：`prepare --launch` 28 秒拉起并选中 127.0.0.1:5559；体检严格模式拒绝，`QQREADER_DISPLAY_CHECK=warn` 下连接、截图、OCR（21 条）、点击通过；临时 `wm density 240` 后判定 ok，随后复原并关闭实例。没有本机配置、没有路径提示时，从注册表找到雷电并按示例生成配置。实例名起初显示乱码（`PYTHONUTF8=1` 下按 UTF-8 解 GBK），改为按 `GetACP()` 解码后正常，补了回归测试。
+**未覆盖 / 遗留**：
+- 滑块验证码 `qqreader/captcha/slide.py` 的 sendevent 拖动直接写 720 坐标系的数值，非 720 宽设备上大概率拖错位置；该模块按 AGENTS.md 禁止修改，只在分辨率检查的 warn 提示里写明。需要用户同意后另开任务。
+- BlueStacks 5、夜神、逍遥、真机只由单元测试覆盖（本机未安装）。
+- 雷电 9 实例里没有 QQ 阅读（登录需用户本人完成），未在雷电上跑任务。
+- 广告、等级页广告、听书三类任务未在 1080×1920 下实机跑（都经 Maa 点击，由 OCR / 点击换算测试覆盖）。
+- `scripts/package_release.py` 仍写死 MuMu 路径与旧版本号；本次 release 与上一版一样只发源码，未用它打包。
+- 重新生成 interface.json 后控制器改名，MFAAvalonia 若记住了旧名称，首次打开可能需要重新选一次控制器。
+**分支**：`claude/portability-adaptation-testing-5beafe`（基于本地 `master` `9b51fce`）。
+**回滚**：`git log --oneline -S "可移植适配：多模拟器自动发现" -- CHANGELOG.md` 定位后 `git revert <hash>`（合并提交用 `git revert -m 1 <hash>`）。
+
+---
+
 ## 2026-10-19 · 等级页广告：关闭「暂无可播视频」弹窗；「去浏览15秒」浏览弹层点「我要加速」领奖
 
 **触发**：用户要求修正等级页广告遇到的问题。最近 4 次 `DailyLevelAdFlow` 失败（`runtime/records/daily_flows/`，均 exit 2）：`mfa_20261013_070802_e2cb29f0`、`mfa_20261014_104335_dd9a271c`、`mfa_20261016_144806_d665eacf`、`mfa_20261019_160110_39ab3243`；用 `runtime/logs/maafw.bak.2026.10.14-02.21.09.164.log`、`…10.14-06.02.36.744.log`、`…10.17-14.51.00.124.log`、`…10.19-11.20.12.811.log` 的 OCR 逐帧还原。这些运行用的是主目录当时检出的 `codex/restore-slide-captcha-20261018`（`0422420`），本分支以它为基线，不是 `master`。

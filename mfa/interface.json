@@ -6,7 +6,7 @@
     "version": "0.1.0",
     "controller": [
         {
-            "name": "MuMu安卓端",
+            "name": "安卓模拟器（ADB）",
             "type": "Adb",
             "display_short_side": 720
         }

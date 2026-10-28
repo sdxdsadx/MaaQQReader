@@ -485,6 +485,9 @@ class CtypesMaaClient:
                 package_name=self._config.package_name,
                 timeout=45.0,
             )
+            from .display import enforce_display
+
+            enforce_display(str(self._config.adb_path), str(self._config.adb_address))
             agent = self._config.agent_dir or (
                 self._config.runtime_dir / "MaaAgentBinary"
             )
@@ -526,6 +529,19 @@ class CtypesMaaClient:
         self._controller = self._create_custom_controller()
         if not self._controller.value:
             raise MaaClientError("MaaControllerCreate 失败")
+        if self._config.short_side:
+            short_side = ctypes.c_int32(int(self._config.short_side))
+            lib.MaaControllerSetOption(
+                self._controller,
+                OPTION_SCREENSHOT_SHORT_SIDE,
+                ctypes.byref(short_side),
+                ctypes.sizeof(short_side),
+            )
+        # 不连接时 Tasker 不会初始化，离线识别报「Tasker not inited」。
+        conn_id = lib.MaaControllerPostConnection(self._controller)
+        status = lib.MaaControllerWait(self._controller, conn_id)
+        if status != STATUS_SUCCEEDED:
+            raise MaaClientError(f"自定义控制器连接失败，状态码 {status}")
 
     def _create_custom_controller(self) -> Any:
         lib = self._lib

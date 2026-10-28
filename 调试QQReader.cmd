@@ -37,11 +37,16 @@ set "ROOT=%~dp0"
 cd /d "%ROOT%"
 
 set "CONFIG=%ROOT%configs\qqreader.local.json"
+set "PS=powershell -NoProfile -ExecutionPolicy Bypass -Command"
+rem MuMu 安装目录: 本机配置的 emulator_path 是 MuMuManager.exe 时以它为准
+rem (启动QQReaderGUI.cmd 会自动探测并回写), 否则用默认安装位置.
 set "MUMU_DIR=D:\Program Files\Netease\MuMu Player 12\shell"
+if exist "%CONFIG%" (
+  for /f "usebackq delims=" %%i in (`%PS% "try{ $e=[string](Get-Content -Raw -Encoding UTF8 -LiteralPath '%CONFIG%' | ConvertFrom-Json).machine.emulator_path; if($e -like '*MuMuManager.exe'){ Split-Path -Parent $e } }catch{}"`) do set "MUMU_DIR=%%i"
+)
 set "MUMUMGR=%MUMU_DIR%\MuMuManager.exe"
 set "ADB=%MUMU_DIR%\adb.exe"
-set "VMINDEX=0"
-set "PS=powershell -NoProfile -ExecutionPolicy Bypass -Command"
+if defined QQREADER_EMULATOR_INDEX (set "VMINDEX=%QQREADER_EMULATOR_INDEX%") else (set "VMINDEX=0")
 
 set "MODE=gui"
 set "COLD="

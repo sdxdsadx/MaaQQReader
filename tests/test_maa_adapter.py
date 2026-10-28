@@ -205,9 +205,19 @@ def test_doctor_with_fake_client_passes() -> None:
         "构建客户端",
         "连接控制器",
         "截图",
+        "截图坐标系",
         "OCR",
         "点击",
     ]
+
+
+def test_doctor_flags_wrong_scaled_screenshot_size() -> None:
+    from qqreader.maa.doctor import _screenshot_size_check
+
+    assert _screenshot_size_check(720, 1280).ok
+    assert _screenshot_size_check(1280, 720).ok  # 桌面横屏旋转
+    bad = _screenshot_size_check(720, 1600)
+    assert not bad.ok and "720x1280" in bad.detail
 
 
 def test_doctor_reports_connection_failure() -> None:
