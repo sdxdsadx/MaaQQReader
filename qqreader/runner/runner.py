@@ -53,6 +53,10 @@ class RunnerConfig:
     max_consecutive_stalls: int = 3
     #: 连续多少次状态未确认后升级恢复（绝不直接判失败）。
     max_unknown_rechecks: int = 3
+    #: 画面冻结安全网（QQR-FIX1；QQR-7 要求阈值可配置）：页面已确认，但 OCR 签名
+    #: 连续多少轮不变且没有点击/滑动/返回后升级恢复，默认轮询节奏下约 3 分钟。
+    #: 适配器声明有意静止（``StepResult.hold_until``）且未过截止时刻的轮次不计入。
+    frozen_screen_rounds: int = 18
     #: 恢复阶梯耗尽后每次重试之间的等待，避免空转。
     recovery_pause_seconds: float = 0.25
     #: 页面无法确认时每轮确认后的等待，避免在 UNKNOWN 上空转（也绝不允许盲点）。
@@ -74,6 +78,8 @@ class RunnerConfig:
             raise ValueError("max_consecutive_stalls 必须 >= 1")
         if self.max_unknown_rechecks < 1:
             raise ValueError("max_unknown_rechecks 必须 >= 1")
+        if self.frozen_screen_rounds < 1:
+            raise ValueError("frozen_screen_rounds 必须 >= 1")
         if self.recovery_pause_seconds < 0:
             raise ValueError("recovery_pause_seconds 必须 >= 0")
         if self.unknown_pause_seconds < 0:
@@ -473,10 +479,12 @@ class TaskRunner:
             interrupted = self._interrupted(context, diagnostics, "before_advance")
             if interrupted is not None:
                 return interrupted
+            advance_started_at = context.now
             step = self._adapter.advance(context)
             context.step += 1
             if step.data_updates:
                 context.data.update(step.data_updates)
+            hold = {} if step.hold_until is None else {"hold_until": step.hold_until}
             self._record(
                 diagnostics,
                 context,
@@ -484,34 +492,40 @@ class TaskRunner:
                 step.description,
                 actions=list(step.actions),
                 progress=step.progress,
+                **hold,
             )
 
             # 7) 节奏控制（QQR-35）：触控动作后用短间隔快速观察反馈；
             #    WAIT 自带等待时长不额外节流；其余无动作轮次按基础轮询间隔
             #    节流，避免每秒一次的截图+OCR 空转。
             actions = [str(a) for a in step.actions]
+            touched = any(a.startswith(("TAP", "PRESS_BACK", "SWIPE")) for a in actions)
             # QQR-FIX1 安全网：页面状态「已确认」但画面完全冻结（OCR 签名连续
-            # N 轮不变且无任何触控动作，例如公告弹窗被误归入挂机态）时，
+            # N 轮不变且无任何触控动作，例如卡住的加载页被误判成挂机态）时，
             # 强制走一次恢复链，防止无限空转直到超时。
+            # QQR-7：适配器声明有意静止（例如计时挂机）、且这一步开始时还没到截止
+            # 时刻的轮次不累计——挂机本来就不动。画面变化照常清零，声明过期照常累计。
             ocr_signature = tuple(context.observation.ocr_texts)
-            if any(a.startswith(("TAP", "PRESS_BACK", "SWIPE")) for a in actions):
+            unchanged = bool(ocr_signature) and ocr_signature == last_ocr_signature
+            holding = step.hold_until is not None and advance_started_at < step.hold_until
+            if touched or not unchanged:
                 frozen_screen_rounds = 0
-            elif ocr_signature and ocr_signature == last_ocr_signature:
+            elif not holding:
                 frozen_screen_rounds += 1
-            else:
-                frozen_screen_rounds = 0
             last_ocr_signature = ocr_signature
-            if frozen_screen_rounds >= 18:
+            limit = self._config.frozen_screen_rounds
+            if frozen_screen_rounds >= limit:
                 frozen_screen_rounds = 0
                 self._record(
                     diagnostics,
                     context,
                     "safety.frozen_screen",
-                    "页面 OCR 连续 18 轮无变化且无触控动作，触发恢复",
+                    f"页面 OCR 连续 {limit} 轮无变化且无触控动作，触发恢复",
+                    rounds=limit,
                 )
                 self._recover(context, diagnostics, "progress_stall")
                 continue
-            if any(a.startswith(("TAP", "PRESS_BACK", "SWIPE")) for a in actions):
+            if touched:
                 self._clock.sleep(self._config.action_feedback_seconds, self._token)
             elif not any(a.startswith("WAIT") for a in actions):
                 self._clock.sleep(self._config.poll_seconds, self._token)

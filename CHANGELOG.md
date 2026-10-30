@@ -21,6 +21,36 @@
 
 ---
 
+## 2026-10-30 · 游戏挂机：画面冻结安全网不再把静止挂机当卡死，冻结阈值改为可配置
+
+**触发**：用户审阅代码指出（本会话）：`qqreader/runner/runner.py` 主循环末尾的「画面冻结」安全网（注释 QQR-FIX1，2026-09-12 随 `8267012` 入库）会打断 `DailyGameFlow` 的静止挂机。离线模拟复现：`build_game_definition`，观测器恒返回同一帧，FakeClock，默认 `RunnerConfig`，挂机 22 分钟、超时 30 分钟。没有实机记录；实机是否触发取决于挂机期间 OCR 是否完全不变（例如全屏游戏没有状态栏时钟）。
+
+| 任务/模块 | 现象 | 根因 | 修改 |
+| --- | --- | --- | --- |
+| 调度核心 `qqreader/runner/runner.py::TaskRunner._run`（画面冻结安全网） | 每 18 轮（约 3 分钟）触发一次 `safety.frozen_screen` → `_recover(…, "progress_stall")`，沿恢复阶梯升级：3.2 分钟 RESCREENSHOT、6.2 REEVALUATE_STATE、9.2 DISMISS_POPUP（点 `popup_close`）、12.2 PRESS_BACK、15.2 REENTER_TASK_ENTRY（`launch_app com.qq.reader`）、18.2 RESTART_APP（stop + launch，会杀掉游戏），都在 22 分钟（命令行默认）/ 25 分钟（GUI 默认）挂机结束之前。游戏运行帧和 QQR-36 公告帧结果相同 | 安全网只看「OCR 签名不变、没有 TAP/SWIPE/PRESS_BACK」，挂机的 WAIT 轮也被累计；`recovery_attempt` 只在页面状态变化时清零，画面不变就一级级升级；阈值 18 写死在循环里 | `StepResult` 新增 `hold_until`（有意静止的截止时刻，`clock.now()` 口径）。这一步开始时还没到截止时刻的声明轮次不累计冻结轮数；画面变化、触控照常清零；声明过期照常累计，适配器不能无限压住安全网。阈值改为 `RunnerConfig.frozen_screen_rounds`（默认 18，必须 ≥ 1），诊断写出轮数；`step.advance` 诊断在有声明时带上 `hold_until`。没有任务名判断 |
+| 游戏任务 `qqreader/tasks/game.py::GameTaskAdapter.advance` | 同上 | GAME_RUNNING 的计划动作 `Action.wait(10.0)`、公告/登录落地页分支（QQR-36）每轮 WAIT 10 秒，都没有告诉调度核心这是计时挂机 | 新增 `_declare_hold`：两个分支的「开始挂机计时」步和挂机中的每轮 WAIT 声明 `hold_until = game_started_at + 挂机时长`。GAME_RUNNING 挂机中改为在分支内直接返回（等待动作仍取自计划，行为与原来落到 `super().advance` 相同）。加载/协议页、重连页（「游戏仍在加载/协议页，暂不计时」「游戏重新出现加载/协议页，保留已累计挂机时间」）不声明，冻结照常触发恢复 |
+
+**改动文件**：`qqreader/runtime/context.py`、`qqreader/runner/runner.py`、`qqreader/tasks/game.py`、`tests/test_qqr7_frozen_screen.py`（新增 12 项）、本日志。
+**验证**：
+- 新测试先写：未改代码时 10 failed、2 passed（通过的 2 项是「真冻结仍恢复」对照，原安全网本来就会触发）；修改后 12 passed。这些是调度逻辑测试，不是识别测试：公告帧取自 QQR-36 的真机 OCR，运行帧、重连帧是 `tests/helpers.py` 的合成观测。覆盖内容：
+  - 静止画面挂机满时长（运行帧 / 公告帧 × 命令行 22/30 分钟、GUI 25/35 分钟）：全程没有 `safety.frozen_screen`、没有恢复动作，不点 `popup_close`，不 launch / stop；第一次触控是到点后的退出动作，挂机中每轮都声明了同一个截止时刻。
+  - 挂机后正常退出并回到奖励页，结果 SUCCESS。修改前这两项以 TIMEOUT 结束：12.2 分钟的恢复返回键提前离开了游戏。
+  - 卡在「正在连接服务器」、被确认成 GAME_RUNNING 的加载页（原 QQR-FIX1 场景）：适配器不计时、不声明，默认 18 轮后照常 RESCREENSHOT → REEVALUATE_STATE → DISMISS_POPUP。计时开始后画面变成同样的重连冻结页，也在挂机期间照常触发。
+  - 调度核心通用层：未声明的 WAIT 按 `frozen_screen_rounds=5` 触发；声明在 300 秒过期后 5 轮触发（350 秒）；截止前不触发；默认值 18 与参数校验。
+- 变异检查（在临时副本里改代码，仓库未动）：调度核心忽略声明 → 8 项失败；适配器不声明 → 6 项失败；去掉截止时刻限制 → 1 项失败。
+- 全量 pytest：在云端 Linux 容器里跑（临时虚拟环境，Python 3.10.20 + pytest 9.2.0，另装 numpy / opencv-python-headless / pyyaml / pillow 供现有测试导入，没装 MaaFw；没有本机 `dev/` 和 `_backup_old_project_20260909_200716`）。改动前 609 passed、110 failed、59 skipped；改动后 621 passed、110 failed、59 skipped，失败项逐项相同：100 项缺本机 pipeline `dev/resource/pipeline/qq_reader_trial.json`；6 项缺旧工程目录（`test_issue13_legacy_timeout` ×4、`test_legacy_resource_isolation` ×2）；1 项 Windows 路径（`test_emulator_detect`）；3 项是已知的 40 / 35 秒不一致（`test_ad_round_regressions` ×2、`test_qqr27_ad_flow` ×1）。`git diff --check` 通过。
+- 实机：**未实机验证**（云端容器里没有模拟器和 ADB）。
+**未覆盖 / 遗留**：
+- 「静止画面挂机不触发恢复」「卡住的加载/重连页仍触发恢复」「声明过期照常累计」都只由单元测试覆盖。以往实机记录里是否出现过 `safety.frozen_screen` 未核查（可在本机 `runtime/records/` 里搜）。
+- AGENTS.md 要求推送前在本机跑一次「1 分钟试跑」，本次没跑。1 分钟挂机不到 18 轮，碰不到这个安全网；要验证本修复，需要跑一次默认 22 / 25 分钟的 `DailyGameFlow`，并确认挂机期间的记录里没有 `safety.frozen_screen` / `recovery.action`。
+- 阈值只是 `RunnerConfig` 参数：`scripts/run_task.py`、`scripts/run_game_flow.py`、MFA Agent 都用默认 18 轮，没有命令行参数或配置文件项。
+- 只有游戏挂机声明了有意静止；广告等任务的 WAIT 仍按原规则累计。
+- 本次未改：`recovery_attempt` 仍只在页面状态变化时清零；挂机到点后如果退出动作无效、画面不变，适配器每轮按返回键直到超时。
+**分支**：`claude/keen-noether-9mt47n`（本会话指定的分支，基于 `master` `4047cc6`）；未推送、未合并。
+**回滚**：`git log --oneline -S "画面冻结安全网不再把静止挂机当卡死" -- CHANGELOG.md` 定位后 `git revert <hash>`。
+
+---
+
 ## 2026-10-28 · 可移植适配：多模拟器自动发现、分辨率兼容检查，修复非 720 宽设备上阅读点错书
 
 **触发**：用户要求做可移植适配，重点验证不同分辨率、不同模拟器的通用性，并上传 GitHub、发布新 release。

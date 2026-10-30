@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from typing import TYPE_CHECKING, Optional, Tuple
 
 from ..captcha.factory import build_default_captcha_guard
@@ -372,6 +373,10 @@ class GameTaskAdapter(PlannedTaskAdapter):
             return Action.tap_feature(feature_key(keys, skip_text))
         return Action.press_back()
 
+    def _declare_hold(self, step: StepResult, started: float) -> StepResult:
+        """挂机计时中的一步：声明挂机截止时刻，截止前画面不变不算卡死（QQR-7）。"""
+        return replace(step, hold_until=started + self._game_duration)
+
     def advance(self, context: TaskContext) -> StepResult:
         keys = DEFAULT_FEATURE_KEYS
         state = context.decision.state if context.decision is not None else None
@@ -420,11 +425,13 @@ class GameTaskAdapter(PlannedTaskAdapter):
                 return self._execute(Action.press_back(), context)
             started = context.get("game_started_at")
             if started is None:
-                context.update_data(game_started_at=context.now)
+                started = context.now
+                context.update_data(game_started_at=started)
                 return StepResult(
                     "确认游戏公告/登录落地页，开始挂机计时",
                     actions=("GAME_TIMER_START",),
                     progress=True,
+                    hold_until=started + self._game_duration,
                 )
             if context.now - float(started) >= self._game_duration:
                 context.update_data(
@@ -432,7 +439,9 @@ class GameTaskAdapter(PlannedTaskAdapter):
                     game_claim_pending=self._navigation_client is not None,
                 )
                 return self._execute(Action.press_back(), context)
-            return self._execute(Action.wait(10.0), context)
+            return self._declare_hold(
+                self._execute(Action.wait(10.0), context), float(started)
+            )
 
         def _claim_or_scroll(ctx: TaskContext, missing_hint: str) -> StepResult:
             """issue #11：退出游戏后先读「今日已获赠币」计数器——数值较进游戏前
@@ -589,11 +598,13 @@ class GameTaskAdapter(PlannedTaskAdapter):
                     context, note="游戏重新出现加载/协议页，保留已累计挂机时间"
                 )
             if started is None:
-                context.update_data(game_started_at=context.now)
+                started = context.now
+                context.update_data(game_started_at=started)
                 return StepResult(
                     "确认游戏运行，开始挂机计时",
                     actions=("GAME_TIMER_START",),
                     progress=True,
+                    hold_until=started + self._game_duration,
                 )
             if context.now - float(started) >= self._game_duration:
                 if not context.get("game_exit_started"):
@@ -609,6 +620,8 @@ class GameTaskAdapter(PlannedTaskAdapter):
                     actions=(),
                     progress=False,
                 )
+            # 挂机中：按计划等待一轮（GAME_RUNNING → WAIT）。
+            return self._declare_hold(super().advance(context), float(started))
         # 2026-09-24 实测：App 停在「我的」等其他 tab 时没有奖励入口，原计划只会
         # 反复“未定位到特征 home_ocr_reward_entry”空转到超时。先切回「书架」。
         if state is PageState.HOME and not context.get("game_exit_done"):
