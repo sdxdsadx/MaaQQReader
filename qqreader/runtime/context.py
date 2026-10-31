@@ -26,6 +26,9 @@ class StepResult:
     actions: Tuple[str, ...] = ()
     progress: bool = True
     data_updates: Mapping[str, Any] = field(default_factory=dict)
+    #: 有意静止的截止时刻（``clock.now()`` 口径），例如计时挂机：截止之前画面不变
+    #: 是预期行为，调度核心不把这一步计入「画面冻结」；``None`` 表示没有声明。
+    hold_until: Optional[float] = None
 
     @classmethod
     def noop(cls, description: str = "无可执行动作") -> "StepResult":
